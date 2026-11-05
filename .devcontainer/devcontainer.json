@@ -1,0 +1,26 @@
+// For format details, see https://aka.ms/devcontainer.json.
+// For usage details, see https://code.visualstudio.com/docs/devcontainers/containers
+// README at: https://github.com/devcontainers/templates/tree/main/src/go
+{
+	"name": "Emissary",
+	"build": {
+		"dockerfile": "ubuntu.Dockerfile"
+	},
+	"runArgs": [
+		"--shm-size=1g",
+		"--init",
+		"--network=host"
+	],
+	"features": {
+		"ghcr.io/devcontainers/features/git:1": {}
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"sst-dev.opencode",
+				"golang.go",
+				"CJL.lsp-mcp"
+			]
+		}
+	}
+}
