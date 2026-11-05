@@ -6,7 +6,7 @@ import path from 'path'
 export default defineConfig({
   plugins: [react()],
   build: {
-    outDir: '../mailer/frontend/dist',
+    outDir: '../mailer/gui/frontend/dist',
     emptyOutDir: true,
   },
   resolve: {

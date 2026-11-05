@@ -1,4 +1,4 @@
-import { Email, SendEmailRequest } from './types';
+import type { Email, SendEmailRequest } from './types';
 
 const API_BASE = '/api';
 

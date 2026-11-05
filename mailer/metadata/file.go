@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,12 +13,6 @@ type FileMetadata struct {
 	path string
 	mu   sync.RWMutex
 	data map[string]EmailMetadata
-}
-
-type EmailMetadata struct {
-	ID     string `json:"id"`
-	Read   bool   `json:"read"`
-	Flagged bool  `json:"flagged"`
 }
 
 func NewFileMetadata(path string) (*FileMetadata, error) {
@@ -59,10 +54,9 @@ func (f *FileMetadata) load() error {
 	return nil
 }
 
-func (f *FileMetadata) save() error {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
+// saveLocked persists the current state to disk. The caller must hold
+// the lock (read or write).
+func (f *FileMetadata) saveLocked() error {
 	entries := make([]EmailMetadata, 0, len(f.data))
 	for _, v := range f.data {
 		entries = append(entries, v)
@@ -80,14 +74,20 @@ func (f *FileMetadata) save() error {
 	return os.WriteFile(f.path, data, 0644)
 }
 
-func (f *FileMetadata) Get(id string) (EmailMetadata, bool) {
+func (f *FileMetadata) Name() string { return "file" }
+
+func (f *FileMetadata) Get(ctx context.Context, id string) (EmailMetadata, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
+
 	m, ok := f.data[id]
-	return m, ok
+	if !ok {
+		return EmailMetadata{ID: id}, nil
+	}
+	return m, nil
 }
 
-func (f *FileMetadata) SetRead(id string, read bool) error {
+func (f *FileMetadata) SetRead(ctx context.Context, id string, read bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -97,10 +97,10 @@ func (f *FileMetadata) SetRead(id string, read bool) error {
 	}
 	m.Read = read
 	f.data[id] = m
-	return f.save()
+	return f.saveLocked()
 }
 
-func (f *FileMetadata) SetFlagged(id string, flagged bool) error {
+func (f *FileMetadata) SetFlagged(ctx context.Context, id string, flagged bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -110,10 +110,10 @@ func (f *FileMetadata) SetFlagged(id string, flagged bool) error {
 	}
 	m.Flagged = flagged
 	f.data[id] = m
-	return f.save()
+	return f.saveLocked()
 }
 
-func (f *FileMetadata) List() []EmailMetadata {
+func (f *FileMetadata) List(ctx context.Context) ([]EmailMetadata, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
@@ -121,5 +121,21 @@ func (f *FileMetadata) List() []EmailMetadata {
 	for _, v := range f.data {
 		result = append(result, v)
 	}
-	return result
+	return result, nil
+}
+
+func (f *FileMetadata) IsRead(ctx context.Context, id string) (bool, error) {
+	metadata, err := f.Get(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	return metadata.Read, nil
+}
+
+func (f *FileMetadata) MarkRead(ctx context.Context, id string) error {
+	return f.SetRead(ctx, id, true)
+}
+
+func (f *FileMetadata) MarkUnread(ctx context.Context, id string) error {
+	return f.SetRead(ctx, id, false)
 }

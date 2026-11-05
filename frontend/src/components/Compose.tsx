@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { sendEmail } from '../api';
-import { Email } from '../types';
 
 export default function Compose() {
   const { id } = useParams<{ id: string }>();

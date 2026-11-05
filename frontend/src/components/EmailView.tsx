@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { parseISO, format } from 'date-fns';
 import { getEmail, markRead, markFlagged } from '../api';
-import { Email } from '../types';
+import type { Email } from '../types';
 
 export default function EmailView() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
   const [email, setEmail] = useState<Email | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');

@@ -16,24 +16,37 @@ Commands:
 EOF
 }
 
-build() {
+# Build the frontend and place the output where the //go:embed
+# directives expect it. Vite builds to mailer/frontend/dist (see
+# frontend/vite.config.ts); go:embed does not follow symlinks, so the
+# output is copied into the package directories (gitignored)
+build_frontend() {
 	(
 		cd frontend
 		npm ci
 		npm run build
 	)
+}
 
+build_backend() {
 	(
 		mkdir -p .build
 		cd mailer
 
 		go build -o ../.build/frontend ./cmd/frontend
-
 		go build -o ../.build/sns-receiver ./cmd/sns-receiver
 	)
 }
 
+build() {
+	build_frontend
+	build_backend
+}
+
 test() {
+	# The //go:embed directives require the built frontend to be present
+	build_frontend
+
 	echo "=== Running Go tests ==="
 	(
 		cd mailer
@@ -44,7 +57,6 @@ test() {
 	echo "=== Running TypeScript tests ==="
 	(
 		cd frontend
-		npm ci >/dev/null 2>&1
 		npm run test
 	)
 }

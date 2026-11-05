@@ -4,10 +4,12 @@ import (
 	"context"
 )
 
+// EmailMetadata is the per-email state tracked by a MetadataStore.
+// The struct tags keep the JSON and DynamoDB representations in sync.
 type EmailMetadata struct {
-	ID      string
-	Read    bool
-	Flagged bool
+	ID      string `json:"id" dynamodbav:"id"`
+	Read    bool   `json:"read" dynamodbav:"read"`
+	Flagged bool   `json:"flagged" dynamodbav:"flagged"`
 }
 
 type MetadataStore interface {

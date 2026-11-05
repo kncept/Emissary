@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - 'v*'
+  # Allow running manually from the Actions tab (builds the selected branch)
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build binaries (linux/amd64)
+    runs-on: ubuntu-latest
+    env:
+      # Fully static binaries so they run anywhere (including AWS Lambda)
+      CGO_ENABLED: 0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: mailer/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build
+        run: ./run.sh build
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: emissary-binaries
+          path: |
+            .build/frontend
+            .build/sns-receiver

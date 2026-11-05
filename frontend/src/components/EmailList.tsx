@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { getEmails } from '../api';
-import { Email } from '../types';
+import type { Email } from '../types';
 
 export default function EmailList() {
   const [emails, setEmails] = useState<Email[]>([]);

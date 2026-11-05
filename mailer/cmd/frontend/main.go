@@ -1,15 +1,11 @@
 package main
 
 import (
-	"context"
 	"embed"
-	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/sessions"

@@ -16,12 +16,6 @@ type DdbMetadata struct {
 	tableName string
 }
 
-type EmailMetadata struct {
-	ID       string `json:"id" dynamodbav:"id"`
-	Read     bool   `json:"read" dynamodbav:"read"`
-	Flagged  bool   `json:"flagged" dynamodbav:"flagged"`
-}
-
 func NewDdbMetadata(tableName, region string) (*DdbMetadata, error) {
 	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(region))
 	if err != nil {
