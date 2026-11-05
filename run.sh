@@ -31,6 +31,7 @@ build_frontend() {
 	# directory, so sync the Vite output there. The gui package already
 	# receives it directly at its embed path.
 	rm -rf mailer/cmd/frontend/frontend/dist
+	mkdir -p mailer/cmd/frontend/frontend
 	cp -R mailer/gui/frontend/dist mailer/cmd/frontend/frontend/dist
 }
 
