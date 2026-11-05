@@ -35,11 +35,8 @@ func (c *ServerConfig) Validate() error {
 
 // StorageConfig holds email storage configuration.
 type StorageConfig struct {
-	Type       string // "s3" or "memory"
-	S3Bucket   string
-	S3Prefix   string
-	S3Endpoint string
-	S3Region   string
+	Type     string // "s3" or "memory"
+	S3Bucket string
 }
 
 // Validate checks that the storage configuration is complete and consistent.
@@ -130,11 +127,8 @@ func Load() (*Config, error) {
 			JWTSecret:  firstEnv("EMISSARY_JWT_SECRET", "JWT_SECRET"),
 		},
 		Storage: StorageConfig{
-			Type:       strings.ToLower(strings.TrimSpace(os.Getenv("EMISSARY_STORAGE"))),
-			S3Bucket:   firstEnv("EMISSARY_S3_BUCKET", "S3_BUCKET"),
-			S3Prefix:   firstEnv("EMISSARY_S3_PREFIX", "S3_PREFIX"),
-			S3Endpoint: firstEnv("EMISSARY_S3_ENDPOINT", "S3_ENDPOINT"),
-			S3Region:   firstEnv("EMISSARY_S3_REGION", "S3_REGION"),
+			Type:     strings.ToLower(strings.TrimSpace(os.Getenv("EMISSARY_STORAGE"))),
+			S3Bucket: firstEnv("EMISSARY_S3_BUCKET", "S3_BUCKET"),
 		},
 		Sender: SenderConfig{
 			Type:   strings.ToLower(strings.TrimSpace(os.Getenv("EMISSARY_SENDER"))),
@@ -172,9 +166,6 @@ func Load() (*Config, error) {
 		} else {
 			cfg.Storage.Type = "memory"
 		}
-	}
-	if cfg.Storage.S3Region == "" {
-		cfg.Storage.S3Region = cfg.AWSRegion
 	}
 
 	// Sender defaults

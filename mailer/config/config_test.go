@@ -69,9 +69,6 @@ func TestLoad_CustomValues(t *testing.T) {
 	os.Setenv("EMISSARY_JWT_TTL", "12h")
 	os.Setenv("EMISSARY_PORT", "9090")
 	os.Setenv("EMISSARY_S3_BUCKET", "my-bucket")
-	os.Setenv("EMISSARY_S3_PREFIX", "emails/")
-	os.Setenv("EMISSARY_S3_ENDPOINT", "http://localhost:9000")
-	os.Setenv("EMISSARY_S3_REGION", "us-west-2")
 	os.Setenv("EMISSARY_SES_FROM", "sender@example.com")
 	os.Setenv("EMISSARY_SES_REGION", "eu-west-1")
 	os.Setenv("EMISSARY_METADATA_FILE", "/tmp/meta.json")
@@ -110,15 +107,6 @@ func TestLoad_CustomValues(t *testing.T) {
 	}
 	if cfg.Storage.S3Bucket != "my-bucket" {
 		t.Errorf("Storage.S3Bucket = %q", cfg.Storage.S3Bucket)
-	}
-	if cfg.Storage.S3Prefix != "emails/" {
-		t.Errorf("Storage.S3Prefix = %q", cfg.Storage.S3Prefix)
-	}
-	if cfg.Storage.S3Endpoint != "http://localhost:9000" {
-		t.Errorf("Storage.S3Endpoint = %q", cfg.Storage.S3Endpoint)
-	}
-	if cfg.Storage.S3Region != "us-west-2" {
-		t.Errorf("Storage.S3Region = %q", cfg.Storage.S3Region)
 	}
 	if cfg.Sender.From != "sender@example.com" {
 		t.Errorf("Sender.From = %q", cfg.Sender.From)
@@ -288,24 +276,6 @@ func TestLoad_ListenAddrWithFullAddress(t *testing.T) {
 
 	if cfg.Server.ListenAddr != "127.0.0.1:4000" {
 		t.Errorf("Server.ListenAddr = %q, want %q", cfg.Server.ListenAddr, "127.0.0.1:4000")
-	}
-}
-
-func TestLoad_S3RegionDefaultsToAWSRegion(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "user")
-	os.Setenv("EMISSARY_PASSWORD", "pass")
-	os.Setenv("EMISSARY_STORAGE", "s3")
-	os.Setenv("EMISSARY_S3_BUCKET", "my-bucket")
-	os.Setenv("AWS_REGION", "us-east-1")
-	defer cleanupEnv()
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	if cfg.Storage.S3Region != "us-east-1" {
-		t.Errorf("Storage.S3Region = %q, want %q", cfg.Storage.S3Region, "us-east-1")
 	}
 }
 
@@ -502,9 +472,6 @@ func cleanupEnv() {
 	os.Unsetenv("EMISSARY_SES_FROM")
 	os.Unsetenv("EMISSARY_METADATA_FILE")
 	os.Unsetenv("EMISSARY_LISTEN_ADDR")
-	os.Unsetenv("EMISSARY_S3_PREFIX")
-	os.Unsetenv("EMISSARY_S3_ENDPOINT")
-	os.Unsetenv("EMISSARY_S3_REGION")
 	os.Unsetenv("EMISSARY_SES_REGION")
 	os.Unsetenv("EMISSARY_DDB_TABLE")
 	os.Unsetenv("EMISSARY_METADATA_REGION")
