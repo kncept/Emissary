@@ -1,83 +1,125 @@
 package metadata
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 )
 
-var _ Metadata = (*FileMetadata)(nil)
-
-// FileMetadata persists read state in a JSON file. It is useful for a single
-// long-running instance without a database.
 type FileMetadata struct {
-	mu   sync.RWMutex
 	path string
-	read map[string]bool
+	mu   sync.RWMutex
+	data map[string]EmailMetadata
+}
+
+type EmailMetadata struct {
+	ID     string `json:"id"`
+	Read   bool   `json:"read"`
+	Flagged bool  `json:"flagged"`
 }
 
 func NewFileMetadata(path string) (*FileMetadata, error) {
-	if path == "" {
-		return nil, errors.New("metadata file path is not configured (set EMISSARY_METADATA_FILE)")
+	fm := &FileMetadata{
+		path: path,
+		data: make(map[string]EmailMetadata),
+	}
+	if err := fm.load(); err != nil {
+		return nil, err
+	}
+	return fm, nil
+}
+
+func (f *FileMetadata) load() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if _, err := os.Stat(f.path); os.IsNotExist(err) {
+		return nil
 	}
 
-	m := &FileMetadata{path: path, read: make(map[string]bool)}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return m, nil
-	}
+	data, err := os.ReadFile(f.path)
 	if err != nil {
-		return nil, fmt.Errorf("read metadata file: %w", err)
+		return fmt.Errorf("failed to read metadata file: %w", err)
 	}
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &m.read); err != nil {
-			return nil, fmt.Errorf("parse metadata file: %w", err)
-		}
+
+	if len(data) == 0 {
+		return nil
 	}
-	return m, nil
+
+	var entries []EmailMetadata
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return fmt.Errorf("failed to unmarshal metadata: %w", err)
+	}
+
+	for _, entry := range entries {
+		f.data[entry.ID] = entry
+	}
+	return nil
 }
 
-func (*FileMetadata) Name() string {
-	return "FileMetadata"
-}
+func (f *FileMetadata) save() error {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 
-func (m *FileMetadata) IsRead(_ context.Context, emailID string) (bool, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.read[emailID], nil
-}
+	entries := make([]EmailMetadata, 0, len(f.data))
+	for _, v := range f.data {
+		entries = append(entries, v)
+	}
 
-func (m *FileMetadata) MarkRead(_ context.Context, emailID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.read[emailID] = true
-	return m.saveLocked()
-}
-
-func (m *FileMetadata) MarkUnread(_ context.Context, emailID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.read, emailID)
-	return m.saveLocked()
-}
-
-func (m *FileMetadata) saveLocked() error {
-	data, err := json.MarshalIndent(m.read, "", "  ")
+	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal metadata: %w", err)
 	}
-	if dir := filepath.Dir(m.path); dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
+
+	if err := os.MkdirAll(filepath.Dir(f.path), 0755); err != nil {
+		return fmt.Errorf("failed to create metadata dir: %w", err)
 	}
-	tempPath := m.path + ".tmp"
-	if err := os.WriteFile(tempPath, data, 0o600); err != nil {
-		return err
+
+	return os.WriteFile(f.path, data, 0644)
+}
+
+func (f *FileMetadata) Get(id string) (EmailMetadata, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	m, ok := f.data[id]
+	return m, ok
+}
+
+func (f *FileMetadata) SetRead(id string, read bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	m, ok := f.data[id]
+	if !ok {
+		m = EmailMetadata{ID: id}
 	}
-	return os.Rename(tempPath, m.path)
+	m.Read = read
+	f.data[id] = m
+	return f.save()
+}
+
+func (f *FileMetadata) SetFlagged(id string, flagged bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	m, ok := f.data[id]
+	if !ok {
+		m = EmailMetadata{ID: id}
+	}
+	m.Flagged = flagged
+	f.data[id] = m
+	return f.save()
+}
+
+func (f *FileMetadata) List() []EmailMetadata {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	result := make([]EmailMetadata, 0, len(f.data))
+	for _, v := range f.data {
+		result = append(result, v)
+	}
+	return result
 }

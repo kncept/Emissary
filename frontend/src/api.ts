@@ -1,111 +1,75 @@
-import type {
-  Email,
-  EmailListResponse,
-  LoginResponse,
-  SendEmailRequest,
-} from './types'
+import { Email, SendEmailRequest } from './types';
 
-const TOKEN_KEY = 'emissary.token'
+const API_BASE = '/api';
 
-export class ApiError extends Error {
-  status: number
-
-  constructor(message: string, status: number) {
-    super(message)
-    this.name = 'ApiError'
-    this.status = status
-  }
-}
-
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
-}
-
-export function setToken(token: string | null): void {
-  if (token) {
-    localStorage.setItem(TOKEN_KEY, token)
-  } else {
-    localStorage.removeItem(TOKEN_KEY)
-  }
-}
-
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers)
-  if (init.body && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json')
-  }
-  const token = getToken()
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`)
-  }
-
-  const response = await fetch(`/api${path}`, { ...init, headers })
+async function fetchWithAuth(url: string, options: RequestInit = {}) {
+  const response = await fetch(url, {
+    ...options,
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  });
 
   if (response.status === 401) {
-    setToken(null)
-    window.dispatchEvent(new Event('emissary:unauthorized'))
+    window.location.href = '/login';
+    throw new Error('Unauthorized');
   }
 
-  if (!response.ok) {
-    let message = `Request failed (${response.status})`
-    try {
-      const body = (await response.json()) as { error?: string }
-      if (body.error) {
-        message = body.error
-      }
-    } catch {
-      // The response did not contain JSON.
-    }
-    throw new ApiError(message, response.status)
-  }
-
-  if (response.status === 204) {
-    return undefined as T
-  }
-  return (await response.json()) as T
+  return response;
 }
 
-export async function login(
-  username: string,
-  password: string,
-): Promise<LoginResponse> {
-  const response = await request<LoginResponse>('/login', {
+export async function checkAuth(): Promise<{ authenticated: boolean; username?: string }> {
+  const response = await fetch(`${API_BASE}/auth/check`, { credentials: 'include' });
+  return response.json();
+}
+
+export async function login(username: string, password: string): Promise<{ success: boolean; error?: string }> {
+  const response = await fetch(`${API_BASE}/auth/login`, {
     method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
-  })
-  setToken(response.token)
-  return response
+  });
+  return response.json();
 }
 
-export async function listEmails(): Promise<Email[]> {
-  const response = await request<EmailListResponse>('/emails')
-  return response.emails
+export async function logout(): Promise<void> {
+  await fetch(`${API_BASE}/auth/logout`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+}
+
+export async function getEmails(): Promise<Email[]> {
+  const response = await fetchWithAuth(`${API_BASE}/emails`);
+  return response.json();
 }
 
 export async function getEmail(id: string): Promise<Email> {
-  return request<Email>(`/emails/${encodeURIComponent(id)}`)
+  const response = await fetchWithAuth(`${API_BASE}/emails/${id}`);
+  return response.json();
 }
 
-export async function markUnread(id: string): Promise<void> {
-  await request<{ ok: boolean }>(
-    `/emails/${encodeURIComponent(id)}/unread`,
-    { method: 'POST' },
-  )
-}
-
-export async function sendEmail(message: SendEmailRequest): Promise<void> {
-  await request<{ ok: boolean }>('/send', {
+export async function markRead(id: string, read: boolean): Promise<void> {
+  await fetchWithAuth(`${API_BASE}/emails/${id}/read`, {
     method: 'POST',
-    body: JSON.stringify(message),
-  })
+    body: JSON.stringify({ read }),
+  });
 }
 
-export function errorMessage(error: unknown): string {
-  if (error instanceof ApiError) {
-    return error.message
-  }
-  if (error instanceof Error) {
-    return error.message
-  }
-  return 'Something went wrong'
+export async function markFlagged(id: string, flagged: boolean): Promise<void> {
+  await fetchWithAuth(`${API_BASE}/emails/${id}/flag`, {
+    method: 'POST',
+    body: JSON.stringify({ flagged }),
+  });
+}
+
+export async function sendEmail(data: SendEmailRequest): Promise<{ success: boolean; message?: string }> {
+  const response = await fetchWithAuth(`${API_BASE}/emails/send`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+  return response.json();
 }

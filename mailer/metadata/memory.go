@@ -1,43 +1,64 @@
 package metadata
 
 import (
-	"context"
 	"sync"
 )
 
-var _ Metadata = (*MemoryMetadata)(nil)
-
-// MemoryMetadata is the default metadata provider. Read state is lost when the
-// process exits.
 type MemoryMetadata struct {
 	mu   sync.RWMutex
-	read map[string]bool
+	data map[string]EmailMetadata
+}
+
+type EmailMetadata struct {
+	ID      string
+	Read    bool
+	Flagged bool
 }
 
 func NewMemoryMetadata() *MemoryMetadata {
-	return &MemoryMetadata{read: make(map[string]bool)}
+	return &MemoryMetadata{
+		data: make(map[string]EmailMetadata),
+	}
 }
 
-func (*MemoryMetadata) Name() string {
-	return "MemoryMetadata"
-}
-
-func (m *MemoryMetadata) IsRead(_ context.Context, emailID string) (bool, error) {
+func (m *MemoryMetadata) Get(id string) (EmailMetadata, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.read[emailID], nil
+	metadata, ok := m.data[id]
+	return metadata, ok
 }
 
-func (m *MemoryMetadata) MarkRead(_ context.Context, emailID string) error {
+func (m *MemoryMetadata) SetRead(id string, read bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.read[emailID] = true
-	return nil
+
+	metadata, ok := m.data[id]
+	if !ok {
+		metadata = EmailMetadata{ID: id}
+	}
+	metadata.Read = read
+	m.data[id] = metadata
 }
 
-func (m *MemoryMetadata) MarkUnread(_ context.Context, emailID string) error {
+func (m *MemoryMetadata) SetFlagged(id string, flagged bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.read, emailID)
-	return nil
+
+	metadata, ok := m.data[id]
+	if !ok {
+		metadata = EmailMetadata{ID: id}
+	}
+	metadata.Flagged = flagged
+	m.data[id] = metadata
+}
+
+func (m *MemoryMetadata) List() []EmailMetadata {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]EmailMetadata, 0, len(m.data))
+	for _, v := range m.data {
+		result = append(result, v)
+	}
+	return result
 }

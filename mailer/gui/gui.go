@@ -4,5 +4,5 @@ import "embed"
 
 // Files contains the built frontend assets.
 //
-//go:embed all:*
+//go:embed all:frontend/dist
 var Files embed.FS

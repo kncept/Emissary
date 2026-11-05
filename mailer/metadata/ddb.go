@@ -2,85 +2,101 @@ package metadata
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
-var _ Metadata = (*DdbMetadata)(nil)
-
-// DdbMetadata stores read state in a DynamoDB table with a string partition
-// key named "id".
 type DdbMetadata struct {
-	client *dynamodb.Client
-	table  string
+	client    *dynamodb.Client
+	tableName string
 }
 
-func NewDdbMetadata(ctx context.Context, region, table string) (*DdbMetadata, error) {
-	if table == "" {
-		return nil, errors.New("DynamoDB table is not configured (set EMISSARY_DDB_TABLE)")
-	}
-	options := make([]func(*awsconfig.LoadOptions) error, 0, 1)
-	if region != "" {
-		options = append(options, awsconfig.WithRegion(region))
-	}
-	cfg, err := awsconfig.LoadDefaultConfig(ctx, options...)
+type EmailMetadata struct {
+	ID       string `json:"id" dynamodbav:"id"`
+	Read     bool   `json:"read" dynamodbav:"read"`
+	Flagged  bool   `json:"flagged" dynamodbav:"flagged"`
+}
+
+func NewDdbMetadata(tableName, region string) (*DdbMetadata, error) {
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(region))
 	if err != nil {
-		return nil, fmt.Errorf("load AWS config: %w", err)
+		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
-	return &DdbMetadata{client: dynamodb.NewFromConfig(cfg), table: table}, nil
+	return &DdbMetadata{
+		client:    dynamodb.NewFromConfig(cfg),
+		tableName: tableName,
+	}, nil
 }
 
-func (*DdbMetadata) Name() string {
-	return "DdbMetadata"
-}
-
-func (m *DdbMetadata) IsRead(ctx context.Context, emailID string) (bool, error) {
-	output, err := m.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(m.table),
-		Key:       key(emailID),
-	})
-	if err != nil {
-		return false, fmt.Errorf("get email metadata: %w", err)
-	}
-	if output.Item == nil {
-		return false, nil
-	}
-	value, ok := output.Item["read"].(*types.AttributeValueMemberBOOL)
-	return ok && value.Value, nil
-}
-
-func (m *DdbMetadata) MarkRead(ctx context.Context, emailID string) error {
-	_, err := m.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(m.table),
-		Item: map[string]types.AttributeValue{
-			"id":   &types.AttributeValueMemberS{Value: emailID},
-			"read": &types.AttributeValueMemberBOOL{Value: true},
+func (d *DdbMetadata) Get(ctx context.Context, id string) (EmailMetadata, error) {
+	output, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(d.tableName),
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: id},
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("mark email read: %w", err)
+		return EmailMetadata{}, fmt.Errorf("failed to get item: %w", err)
 	}
-	return nil
+
+	if output.Item == nil {
+		return EmailMetadata{ID: id}, nil
+	}
+
+	var metadata EmailMetadata
+	if err := attributevalue.UnmarshalMap(output.Item, &metadata); err != nil {
+		return EmailMetadata{}, fmt.Errorf("failed to unmarshal: %w", err)
+	}
+	return metadata, nil
 }
 
-func (m *DdbMetadata) MarkUnread(ctx context.Context, emailID string) error {
-	_, err := m.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(m.table),
-		Key:       key(emailID),
+func (d *DdbMetadata) SetRead(ctx context.Context, id string, read bool) error {
+	metadata, err := d.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	metadata.Read = read
+	return d.put(ctx, metadata)
+}
+
+func (d *DdbMetadata) SetFlagged(ctx context.Context, id string, flagged bool) error {
+	metadata, err := d.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	metadata.Flagged = flagged
+	return d.put(ctx, metadata)
+}
+
+func (d *DdbMetadata) put(ctx context.Context, metadata EmailMetadata) error {
+	item, err := attributevalue.MarshalMap(metadata)
+	if err != nil {
+		return fmt.Errorf("failed to marshal: %w", err)
+	}
+
+	_, err = d.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(d.tableName),
+		Item:      item,
+	})
+	return err
+}
+
+func (d *DdbMetadata) List(ctx context.Context) ([]EmailMetadata, error) {
+	output, err := d.client.Scan(ctx, &dynamodb.ScanInput{
+		TableName: aws.String(d.tableName),
 	})
 	if err != nil {
-		return fmt.Errorf("mark email unread: %w", err)
+		return nil, fmt.Errorf("failed to scan: %w", err)
 	}
-	return nil
-}
 
-func key(emailID string) map[string]types.AttributeValue {
-	return map[string]types.AttributeValue{
-		"id": &types.AttributeValueMemberS{Value: emailID},
+	var result []EmailMetadata
+	if err := attributevalue.UnmarshalListOfMaps(output.Items, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal list: %w", err)
 	}
+	return result, nil
 }
