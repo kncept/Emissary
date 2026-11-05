@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -341,6 +342,150 @@ func TestLoad_MetadataRegionDefaultsToAWSRegion(t *testing.T) {
 
 	if cfg.Metadata.Region != "ap-northeast-1" {
 		t.Errorf("Metadata.Region = %q, want %q", cfg.Metadata.Region, "ap-northeast-1")
+	}
+}
+
+func TestServerConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     ServerConfig
+		wantErr bool
+	}{
+		{"valid", ServerConfig{Username: "u", Password: "p"}, false},
+		{"missing username", ServerConfig{Password: "p"}, true},
+		{"missing password", ServerConfig{Username: "u"}, true},
+		{"missing both", ServerConfig{}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestServerConfig_Validate_MultipleErrors(t *testing.T) {
+	cfg := ServerConfig{}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() should return error for missing username and password")
+	}
+	// Should contain both errors
+	if !strings.Contains(err.Error(), "username") {
+		t.Errorf("error should mention username, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "password") {
+		t.Errorf("error should mention password, got: %v", err)
+	}
+}
+
+func TestStorageConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     StorageConfig
+		wantErr bool
+	}{
+		{"memory", StorageConfig{Type: "memory"}, false},
+		{"s3 with bucket", StorageConfig{Type: "s3", S3Bucket: "b"}, false},
+		{"s3 without bucket", StorageConfig{Type: "s3"}, true},
+		{"unknown type", StorageConfig{Type: "foo"}, true},
+		{"s3 unknown bucket", StorageConfig{Type: "s3", S3Bucket: "b"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSenderConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     SenderConfig
+		wantErr bool
+	}{
+		{"log", SenderConfig{Type: "log"}, false},
+		{"aws-ses", SenderConfig{Type: "aws-ses"}, false},
+		{"ses alias", SenderConfig{Type: "ses"}, false},
+		{"unknown", SenderConfig{Type: "smtp"}, true},
+		{"empty", SenderConfig{}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestMetadataConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     MetadataConfig
+		wantErr bool
+	}{
+		{"memory", MetadataConfig{Type: "memory"}, false},
+		{"file", MetadataConfig{Type: "file"}, false},
+		{"ddb with table", MetadataConfig{Type: "ddb", DdbTable: "t"}, false},
+		{"ddb without table", MetadataConfig{Type: "ddb"}, true},
+		{"dynamodb with table", MetadataConfig{Type: "dynamodb", DdbTable: "t"}, false},
+		{"dynamodb without table", MetadataConfig{Type: "dynamodb"}, true},
+		{"unknown", MetadataConfig{Type: "redis"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestConfig_Validate_CompositeError(t *testing.T) {
+	cfg := &Config{
+		Server:   ServerConfig{}, // missing username and password
+		Storage:  StorageConfig{Type: "bad"},
+		Sender:   SenderConfig{Type: "bad"},
+		Metadata: MetadataConfig{Type: "ddb"}, // missing table
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() should return composite error")
+	}
+
+	// Verify all sub-config errors are present
+	msg := err.Error()
+	if !strings.Contains(msg, "username") {
+		t.Errorf("composite error should mention username, got: %v", msg)
+	}
+	if !strings.Contains(msg, "storage type") {
+		t.Errorf("composite error should mention storage type, got: %v", msg)
+	}
+	if !strings.Contains(msg, "sender type") {
+		t.Errorf("composite error should mention sender type, got: %v", msg)
+	}
+	if !strings.Contains(msg, "metadata=ddb") {
+		t.Errorf("composite error should mention ddb table requirement, got: %v", msg)
+	}
+}
+
+func TestConfig_Validate_AllValid(t *testing.T) {
+	cfg := &Config{
+		Server:   ServerConfig{Username: "u", Password: "p"},
+		Storage:  StorageConfig{Type: "memory"},
+		Sender:   SenderConfig{Type: "log"},
+		Metadata: MetadataConfig{Type: "memory"},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() error = %v, want nil", err)
 	}
 }
 

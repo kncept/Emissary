@@ -21,6 +21,18 @@ type ServerConfig struct {
 	JWTExpiry    time.Duration
 }
 
+// Validate checks that the server configuration is complete and consistent.
+func (c *ServerConfig) Validate() error {
+	var errs []error
+	if c.Username == "" {
+		errs = append(errs, errors.New("username is not configured (set EMISSARY_USERNAME)"))
+	}
+	if c.Password == "" {
+		errs = append(errs, errors.New("password is not configured (set EMISSARY_PASSWORD)"))
+	}
+	return errors.Join(errs...)
+}
+
 // StorageConfig holds email storage configuration.
 type StorageConfig struct {
 	Type       string // "s3" or "memory"
@@ -30,11 +42,34 @@ type StorageConfig struct {
 	S3Region   string
 }
 
+// Validate checks that the storage configuration is complete and consistent.
+func (c *StorageConfig) Validate() error {
+	var errs []error
+	switch c.Type {
+	case "s3", "memory":
+	default:
+		errs = append(errs, fmt.Errorf("unknown storage type %q (want s3 or memory)", c.Type))
+	}
+	if c.Type == "s3" && c.S3Bucket == "" {
+		errs = append(errs, errors.New("storage=s3 requires a bucket (set EMISSARY_S3_BUCKET)"))
+	}
+	return errors.Join(errs...)
+}
+
 // SenderConfig holds outbound email sender configuration.
 type SenderConfig struct {
 	Type   string // "aws-ses" or "log"
 	From   string // SES from address
 	Region string // AWS region for SES
+}
+
+// Validate checks that the sender configuration is complete and consistent.
+func (c *SenderConfig) Validate() error {
+	switch c.Type {
+	case "aws-ses", "ses", "log":
+		return nil
+	}
+	return fmt.Errorf("unknown sender type %q (want aws-ses or log)", c.Type)
 }
 
 // MetadataConfig holds email metadata storage configuration.
@@ -43,6 +78,20 @@ type MetadataConfig struct {
 	DdbTable string
 	FilePath string
 	Region   string // AWS region for DDB
+}
+
+// Validate checks that the metadata configuration is complete and consistent.
+func (c *MetadataConfig) Validate() error {
+	var errs []error
+	switch c.Type {
+	case "memory", "file", "ddb", "dynamodb":
+	default:
+		errs = append(errs, fmt.Errorf("unknown metadata type %q (want memory, file or ddb)", c.Type))
+	}
+	if (c.Type == "ddb" || c.Type == "dynamodb") && c.DdbTable == "" {
+		errs = append(errs, errors.New("metadata=ddb requires a table (set EMISSARY_DDB_TABLE)"))
+	}
+	return errors.Join(errs...)
 }
 
 // Config is the complete runtime configuration for cmd/frontend.
@@ -55,6 +104,17 @@ type Config struct {
 	// AWSRegion is the default AWS region used when a specific service
 	// region is not configured.
 	AWSRegion string
+}
+
+// Validate checks the entire configuration for consistency. It returns a
+// composite error containing all validation failures from the sub-configs.
+func (c *Config) Validate() error {
+	return errors.Join(
+		c.Server.Validate(),
+		c.Storage.Validate(),
+		c.Sender.Validate(),
+		c.Metadata.Validate(),
+	)
 }
 
 // Load reads configuration from the environment. The account credentials are
@@ -88,13 +148,6 @@ func Load() (*Config, error) {
 			Region:   firstEnv("EMISSARY_METADATA_REGION", "METADATA_REGION"),
 		},
 		AWSRegion: awsRegion,
-	}
-
-	if cfg.Server.Username == "" {
-		return nil, errors.New("username is not configured (set EMISSARY_USERNAME)")
-	}
-	if cfg.Server.Password == "" {
-		return nil, errors.New("password is not configured (set EMISSARY_PASSWORD)")
 	}
 
 	ttl, err := time.ParseDuration(firstEnvDefault("24h", "EMISSARY_JWT_TTL", "JWT_TTL"))
@@ -147,29 +200,8 @@ func Load() (*Config, error) {
 		cfg.Metadata.Region = cfg.AWSRegion
 	}
 
-	// Validation
-	switch cfg.Storage.Type {
-	case "s3", "memory":
-	default:
-		return nil, fmt.Errorf("unknown EMISSARY_STORAGE %q (want s3 or memory)", cfg.Storage.Type)
-	}
-	switch cfg.Sender.Type {
-	case "aws-ses", "ses", "log":
-	default:
-		return nil, fmt.Errorf("unknown EMISSARY_SENDER %q (want aws-ses or log)", cfg.Sender.Type)
-	}
-	switch cfg.Metadata.Type {
-	case "memory", "file", "ddb", "dynamodb":
-	default:
-		return nil, fmt.Errorf("unknown EMISSARY_METADATA %q (want memory, file or ddb)", cfg.Metadata.Type)
-	}
-	if cfg.Storage.Type == "s3" && cfg.Storage.S3Bucket == "" {
-		return nil, errors.New("EMISSARY_STORAGE=s3 requires EMISSARY_S3_BUCKET")
-	}
-	if cfg.Metadata.Type == "ddb" || cfg.Metadata.Type == "dynamodb" {
-		if cfg.Metadata.DdbTable == "" {
-			return nil, errors.New("EMISSARY_METADATA=ddb requires EMISSARY_DDB_TABLE")
-		}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil
