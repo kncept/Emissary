@@ -14,6 +14,13 @@ export interface AuthState {
   username?: string;
 }
 
+export interface LoginResponse {
+  token?: string;
+  tokenType?: string;
+  expiresAt?: string;
+  error?: string;
+}
+
 export interface SendEmailRequest {
   to: string;
   subject: string;

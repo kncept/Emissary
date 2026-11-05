@@ -17,7 +17,7 @@ EOF
 }
 
 # Build the frontend and place the output where the //go:embed
-# directives expect it. Vite builds to mailer/frontend/dist (see
+# directives expect it. Vite builds to mailer/gui/frontend/dist (see
 # frontend/vite.config.ts); go:embed does not follow symlinks, so the
 # output is copied into the package directories (gitignored)
 build_frontend() {
@@ -26,6 +26,12 @@ build_frontend() {
 		npm ci
 		npm run build
 	)
+
+	# The running server (cmd/frontend) embeds the assets from its own package
+	# directory, so sync the Vite output there. The gui package already
+	# receives it directly at its embed path.
+	rm -rf mailer/cmd/frontend/frontend/dist
+	cp -R mailer/gui/frontend/dist mailer/cmd/frontend/frontend/dist
 }
 
 build_backend() {
@@ -80,11 +86,11 @@ run() {
 	# Generate credentials
 	USERNAME="Emissary"
 	PASSWORD=$(generate_guid)
-	SESSION_SECRET=$(generate_guid)
+	JWT_SECRET=$(generate_guid)
 
 	export AUTH_USERNAME="$USERNAME"
 	export AUTH_PASSWORD="$PASSWORD"
-	export SESSION_SECRET="$SESSION_SECRET"
+	export JWT_SECRET="$JWT_SECRET"
 	export S3_BUCKET="${S3_BUCKET:-emissary-emails}"
 	export S3_PREFIX="${S3_PREFIX:-emails}"
 	export S3_REGION="${S3_REGION:-us-east-1}"
@@ -94,7 +100,7 @@ run() {
 	echo "Starting Emissary frontend..."
 	echo "  Username: $USERNAME"
 	echo "  Password: $PASSWORD"
-	echo "  Session Secret: $SESSION_SECRET"
+	echo "  JWT Secret: $JWT_SECRET"
 	echo "  S3 Bucket: $S3_BUCKET"
 	echo "  S3 Prefix: $S3_PREFIX"
 	echo "  S3 Region: $S3_REGION"

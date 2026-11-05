@@ -1,22 +1,79 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { checkAuth } from './api';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { checkAuth, login } from './api';
 
-describe('checkAuth', () => {
+const TOKEN_KEY = 'emissary_token';
+
+describe('auth api', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('returns the authentication state reported by the server', async () => {
-    const fetchMock = vi.fn(async () => ({
-      status: 200,
-      json: async () => ({ authenticated: true, username: 'Emissary' }),
-    }));
-    vi.stubGlobal('fetch', fetchMock);
+  describe('checkAuth', () => {
+    it('sends no Authorization header when no token is stored', async () => {
+      const fetchMock = vi.fn(async () => ({
+        status: 200,
+        ok: true,
+        json: async () => ({ authenticated: false }),
+      }));
+      vi.stubGlobal('fetch', fetchMock);
 
-    const result = await checkAuth();
+      const result = await checkAuth();
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith('/api/auth/check', { credentials: 'include' });
-    expect(result).toEqual({ authenticated: true, username: 'Emissary' });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith('/api/auth/check', { headers: {} });
+      expect(result).toEqual({ authenticated: false });
+    });
+
+    it('sends the stored token as a Bearer header', async () => {
+      window.localStorage.setItem(TOKEN_KEY, 'abc123');
+      const fetchMock = vi.fn(async () => ({
+        status: 200,
+        ok: true,
+        json: async () => ({ authenticated: true, username: 'Emissary' }),
+      }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await checkAuth();
+
+      expect(fetchMock).toHaveBeenCalledWith('/api/auth/check', {
+        headers: { Authorization: 'Bearer abc123' },
+      });
+      expect(result).toEqual({ authenticated: true, username: 'Emissary' });
+    });
+  });
+
+  describe('login', () => {
+    it('stores the returned token and reports it to the caller', async () => {
+      const fetchMock = vi.fn(async () => ({
+        status: 200,
+        ok: true,
+        json: async () => ({ token: 'jwt-token', tokenType: 'Bearer', expiresAt: '2026-01-01T00:00:00Z' }),
+      }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await login('user', 'pass');
+
+      expect(result.token).toBe('jwt-token');
+      expect(window.localStorage.getItem(TOKEN_KEY)).toBe('jwt-token');
+    });
+
+    it('does not store a token and surfaces the error on failure', async () => {
+      const fetchMock = vi.fn(async () => ({
+        status: 401,
+        ok: false,
+        json: async () => ({ error: 'invalid credentials' }),
+      }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await login('user', 'wrong');
+
+      expect(result.token).toBeUndefined();
+      expect(result.error).toBe('invalid credentials');
+      expect(window.localStorage.getItem(TOKEN_KEY)).toBeNull();
+    });
   });
 });

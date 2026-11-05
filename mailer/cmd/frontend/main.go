@@ -1,14 +1,17 @@
 package main
 
 import (
+	"crypto/rand"
 	"embed"
+	"encoding/base64"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/gorilla/sessions"
+	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/storage"
 )
@@ -17,15 +20,15 @@ import (
 var frontendFS embed.FS
 
 var (
-	store       *sessions.CookieStore
-	authUser    string
-	authPass    string
-	s3Bucket    string
-	s3Prefix    string
-	s3Region    string
-	metadataType string
-	metadataPath string
-	metadataTable string
+	authenticator  *auth.Authenticator
+	authUser       string
+	authPass       string
+	s3Bucket       string
+	s3Prefix       string
+	s3Region       string
+	metadataType   string
+	metadataPath   string
+	metadataTable  string
 	metadataRegion string
 )
 
@@ -77,19 +80,32 @@ func main() {
 		log.Fatal("S3_BUCKET must be set")
 	}
 
-	// Initialize session store
-	secretKey := os.Getenv("SESSION_SECRET")
-	if secretKey == "" {
-		secretKey = "default-secret-change-in-production"
+	// Initialize the JWT authenticator. Authentication is stateless: the
+	// client stores the issued token and sends it back as a Bearer token.
+	// No HTTP cookies are used.
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = os.Getenv("SESSION_SECRET") // backward compatibility
 	}
-	store = sessions.NewCookieStore([]byte(secretKey))
-	store.Options = &sessions.Options{
-		Path:     "/",
-		MaxAge:   86400 * 7,
-		HttpOnly: true,
-		Secure:   false, // Set to true in production with HTTPS
-		SameSite: http.SameSiteLaxMode,
+	if jwtSecret == "" {
+		secret := make([]byte, 32)
+		if _, err := rand.Read(secret); err != nil {
+			log.Fatalf("generate JWT secret: %v", err)
+		}
+		jwtSecret = base64.RawURLEncoding.EncodeToString(secret)
+		log.Println("WARNING: JWT_SECRET not set; using an ephemeral secret. Tokens are invalidated on restart.")
 	}
+
+	jwtTTL := 24 * time.Hour
+	if ttl := os.Getenv("JWT_TTL"); ttl != "" {
+		parsed, err := time.ParseDuration(ttl)
+		if err != nil {
+			log.Fatalf("invalid JWT_TTL %q: %v", ttl, err)
+		}
+		jwtTTL = parsed
+	}
+
+	authenticator = auth.New(authUser, authPass, jwtSecret, jwtTTL)
 
 	// Initialize storage
 	s3Storage, err := storage.NewS3Storage(s3Bucket, s3Prefix, s3Region)
@@ -161,11 +177,27 @@ func main() {
 	}
 }
 
+// bearerSubject extracts the "Authorization: Bearer <token>" header and, when
+// the token is present and valid, returns the authenticated subject.
+func bearerSubject(c *gin.Context) (string, bool) {
+	const prefix = "Bearer "
+	header := c.GetHeader("Authorization")
+	if !strings.HasPrefix(header, prefix) {
+		return "", false
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(header, prefix))
+	subject, err := authenticator.Validate(token)
+	if err != nil {
+		return "", false
+	}
+	return subject, true
+}
+
 func authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		session, _ := store.Get(c.Request, "session")
-		if auth, ok := session.Values["authenticated"].(bool); !ok || !auth {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		if _, ok := bearerSubject(c); !ok {
+			c.Header("WWW-Authenticate", `Bearer realm="emissary"`)
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
 			c.Abort()
 			return
 		}
@@ -183,32 +215,36 @@ func handleLogin(c *gin.Context) {
 		return
 	}
 
-	if req.Username == authUser && req.Password == authPass {
-		session, _ := store.Get(c.Request, "session")
-		session.Values["authenticated"] = true
-		session.Values["username"] = req.Username
-		if err := session.Save(c.Request, c.Writer); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save session"})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"success": true})
+	if !authenticator.Authenticate(req.Username, req.Password) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
 
-	c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+	token, expiresAt, err := authenticator.Issue(req.Username)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to issue token"})
+		return
+	}
+
+	// The client stores this token and presents it as a Bearer token on
+	// subsequent requests. No refresh token is issued yet.
+	c.JSON(http.StatusOK, gin.H{
+		"token":     token,
+		"tokenType": "Bearer",
+		"expiresAt": expiresAt,
+	})
 }
 
+// JWTs are stateless, so there is nothing to invalidate server-side; the
+// client discards the token. The endpoint is kept as a stable hook in case
+// token revocation is added later.
 func handleLogout(c *gin.Context) {
-	session, _ := store.Get(c.Request, "session")
-	session.Values["authenticated"] = false
-	session.Save(c.Request, c.Writer)
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 func handleAuthCheck(c *gin.Context) {
-	session, _ := store.Get(c.Request, "session")
-	if auth, ok := session.Values["authenticated"].(bool); ok && auth {
-		c.JSON(http.StatusOK, gin.H{"authenticated": true, "username": session.Values["username"]})
+	if subject, ok := bearerSubject(c); ok {
+		c.JSON(http.StatusOK, gin.H{"authenticated": true, "username": subject})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"authenticated": false})
@@ -332,7 +368,7 @@ func handleSendEmail(c *gin.Context) {
 
 	// For now, we'll just log the email (in production, use AWS SES)
 	log.Printf("Sending email to: %s, Subject: %s", req.To, req.Subject)
-	
+
 	// TODO: Implement actual SES sending
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Email queued for sending"})
 }
@@ -346,6 +382,7 @@ func serveFrontend(c *gin.Context) {
 	file, err := frontendFS.Open("frontend/dist" + path)
 	if err != nil {
 		// Try index.html for SPA routing
+		path = "/index.html"
 		file, err = frontendFS.Open("frontend/dist/index.html")
 		if err != nil {
 			c.String(http.StatusNotFound, "Frontend not built. Run 'npm run build' in frontend directory.")
@@ -354,7 +391,15 @@ func serveFrontend(c *gin.Context) {
 	}
 	defer file.Close()
 
-	stat, _ := file.Stat()
+	stat, err := file.Stat()
+	if err != nil {
+		c.String(http.StatusNotFound, "file not found")
+		return
+	}
+	if stat.IsDir() {
+		c.String(http.StatusNotFound, "not found")
+		return
+	}
 	contentType := getContentType(path)
 	c.DataFromReader(http.StatusOK, stat.Size(), contentType, file, nil)
 }

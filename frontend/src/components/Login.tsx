@@ -15,7 +15,7 @@ export default function Login() {
     setLoading(true);
 
     const result = await login(username, password);
-    if (result.success) {
+    if (result.token) {
       navigate('/');
     } else {
       setError(result.error || 'Login failed');
