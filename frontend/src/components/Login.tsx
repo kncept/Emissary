@@ -2,7 +2,11 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { login } from '../api';
 
-export default function Login() {
+interface LoginProps {
+  onAuthenticated: () => void;
+}
+
+export default function Login({ onAuthenticated }: LoginProps) {
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -16,6 +20,10 @@ export default function Login() {
 
     const result = await login(username, password);
     if (result.token) {
+      // Tell the app we're now authenticated, then go home. The auth state
+      // update and navigation are batched, so the home route renders the
+      // logged-in view instead of bouncing back to /login.
+      onAuthenticated();
       navigate('/');
     } else {
       setError(result.error || 'Login failed');

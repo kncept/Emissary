@@ -22,6 +22,10 @@ function App() {
     });
   }, []);
 
+  const handleAuthenticated = () => {
+    setAuthenticated(true);
+  };
+
   const handleLogout = async () => {
     await apiLogout();
     setAuthenticated(false);
@@ -39,7 +43,12 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/login" element={authenticated ? <Navigate to="/" replace /> : <Login />} />
+        <Route
+          path="/login"
+          element={
+            authenticated ? <Navigate to="/" replace /> : <Login onAuthenticated={handleAuthenticated} />
+          }
+        />
         <Route
           path="/*"
           element={
