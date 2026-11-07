@@ -4,15 +4,17 @@ import (
 	"crypto/rand"
 	"embed"
 	"encoding/base64"
+	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
-	"github.com/gin-gonic/gin"
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/awsutil"
 	"github.com/kncept/Emissary/mailer/metadata"
@@ -21,6 +23,8 @@ import (
 
 //go:embed all:frontend/dist
 var frontendFS embed.FS
+
+const maxRequestBody = 1 << 20 // 1 MiB
 
 var (
 	authenticator  *auth.Authenticator
@@ -47,9 +51,9 @@ type EmailResponse struct {
 }
 
 type SendEmailRequest struct {
-	To      string `json:"to" binding:"required"`
-	Subject string `json:"subject" binding:"required"`
-	Body    string `json:"body" binding:"required"`
+	To      string `json:"to"`
+	Subject string `json:"subject"`
+	Body    string `json:"body"`
 }
 
 func main() {
@@ -130,52 +134,14 @@ func main() {
 		log.Fatalf("Failed to initialize metadata store: %v", err)
 	}
 
-	// Setup Gin
-	gin.SetMode(gin.ReleaseMode)
-	r := gin.Default()
+	handler := newHandler(s3Storage, metaStore)
 
-	// API routes
-	api := r.Group("/api")
-	api.Use(authMiddleware())
-	{
-		api.GET("/emails", func(c *gin.Context) {
-			handleListEmails(c, s3Storage, metaStore)
-		})
-		api.GET("/emails/:id", func(c *gin.Context) {
-			handleGetEmail(c, s3Storage, metaStore)
-		})
-		api.POST("/emails/:id/read", func(c *gin.Context) {
-			handleMarkRead(c, metaStore)
-		})
-		api.POST("/emails/:id/flag", func(c *gin.Context) {
-			handleMarkFlagged(c, metaStore)
-		})
-		api.POST("/emails/send", func(c *gin.Context) {
-			handleSendEmail(c)
-		})
-		api.POST("/auth/logout", handleLogout)
-	}
-
-	// Auth routes (no middleware)
-	r.POST("/api/auth/login", handleLogin)
-	r.GET("/api/auth/check", handleAuthCheck)
-
-	// Serve frontend
-	r.NoRoute(func(c *gin.Context) {
-		path := c.Request.URL.Path
-		if strings.HasPrefix(path, "/api") {
-			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-			return
-		}
-		serveFrontend(c)
-	})
-
-	// The application http.Handler (the Gin engine) is fully built at this
-	// point. In Lambda, hand it to the runtime instead of starting a listener
-	// of our own; the adapter translates API Gateway events into requests.
+	// The application http.Handler is fully built at this point. In Lambda,
+	// hand it to the runtime instead of starting a listener of our own; the
+	// adapter translates API Gateway events into requests.
 	if awsutil.IsAwsLambda() {
 		log.Printf("Lambda listener loaded")
-		lambda.Start(httpadapter.New(r).ProxyWithContext)
+		lambda.Start(httpadapter.New(handler).ProxyWithContext)
 		return
 	}
 
@@ -184,16 +150,60 @@ func main() {
 		port = "8080"
 	}
 	log.Printf("Server starting on port %s", port)
-	if err := r.Run(":" + port); err != nil {
+	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		log.Fatal(err)
 	}
 }
 
+// newHandler wires the API routes, the auth middleware and the embedded
+// frontend into a single http.Handler.
+func newHandler(s3Storage *storage.S3Storage, metaStore metadata.MetadataStore) http.Handler {
+	mux := http.NewServeMux()
+
+	// API routes (authenticated)
+	mux.Handle("GET /api/emails", requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleListEmails(w, r, s3Storage, metaStore)
+	})))
+	mux.Handle("GET /api/emails/{id}", requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleGetEmail(w, r, s3Storage, metaStore)
+	})))
+	mux.Handle("POST /api/emails/{id}/read", requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleMarkRead(w, r, metaStore)
+	})))
+	mux.Handle("POST /api/emails/{id}/flag", requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleMarkFlagged(w, r, metaStore)
+	})))
+	mux.Handle("POST /api/emails/send", requireAuth(http.HandlerFunc(handleSendEmail)))
+	mux.Handle("POST /api/auth/logout", requireAuth(http.HandlerFunc(handleLogout)))
+
+	// Auth routes (no middleware)
+	mux.HandleFunc("POST /api/auth/login", handleLogin)
+	mux.HandleFunc("GET /api/auth/check", handleAuthCheck)
+
+	// Unknown API routes and everything else falls through to the frontend.
+	notFound := func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotFound, "not found")
+	}
+	mux.HandleFunc("/api", notFound)
+	mux.HandleFunc("/api/", notFound)
+	mux.HandleFunc("/", serveFrontend)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.Printf("panic serving %s %s: %v", r.Method, r.URL.Path, recovered)
+				writeError(w, http.StatusInternalServerError, "internal server error")
+			}
+		}()
+		mux.ServeHTTP(w, r)
+	})
+}
+
 // bearerSubject extracts the "Authorization: Bearer <token>" header and, when
 // the token is present and valid, returns the authenticated subject.
-func bearerSubject(c *gin.Context) (string, bool) {
+func bearerSubject(r *http.Request) (string, bool) {
 	const prefix = "Bearer "
-	header := c.GetHeader("Authorization")
+	header := r.Header.Get("Authorization")
 	if !strings.HasPrefix(header, prefix) {
 		return "", false
 	}
@@ -205,42 +215,41 @@ func bearerSubject(c *gin.Context) (string, bool) {
 	return subject, true
 }
 
-func authMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if _, ok := bearerSubject(c); !ok {
-			c.Header("WWW-Authenticate", `Bearer realm="emissary"`)
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
-			c.Abort()
+func requireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := bearerSubject(r); !ok {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="emissary"`)
+			writeError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
-		c.Next()
-	}
+		next.ServeHTTP(w, r)
+	})
 }
 
-func handleLogin(c *gin.Context) {
+func handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Username string `json:"username" binding:"required"`
-		Password string `json:"password" binding:"required"`
+		Username string `json:"username"`
+		Password string `json:"password"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+	if err := decodeJSON(w, r, &req); err != nil || req.Username == "" || req.Password == "" {
+		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 
 	if !authenticator.Authenticate(req.Username, req.Password) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
 	token, expiresAt, err := authenticator.Issue(req.Username)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to issue token"})
+		writeError(w, http.StatusInternalServerError, "failed to issue token")
 		return
 	}
 
 	// The client stores this token and presents it as a Bearer token on
 	// subsequent requests. No refresh token is issued yet.
-	c.JSON(http.StatusOK, gin.H{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"token":     token,
 		"tokenType": "Bearer",
 		"expiresAt": expiresAt,
@@ -250,23 +259,23 @@ func handleLogin(c *gin.Context) {
 // JWTs are stateless, so there is nothing to invalidate server-side; the
 // client discards the token. The endpoint is kept as a stable hook in case
 // token revocation is added later.
-func handleLogout(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"success": true})
+func handleLogout(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
 
-func handleAuthCheck(c *gin.Context) {
-	if subject, ok := bearerSubject(c); ok {
-		c.JSON(http.StatusOK, gin.H{"authenticated": true, "username": subject})
+func handleAuthCheck(w http.ResponseWriter, r *http.Request) {
+	if subject, ok := bearerSubject(r); ok {
+		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": subject})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"authenticated": false})
+	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 }
 
-func handleListEmails(c *gin.Context, s3Storage *storage.S3Storage, metaStore metadata.MetadataStore) {
-	ctx := c.Request.Context()
+func handleListEmails(w http.ResponseWriter, r *http.Request, s3Storage *storage.S3Storage, metaStore metadata.MetadataStore) {
+	ctx := r.Context()
 	emails, err := s3Storage.ListEmails(ctx)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list emails"})
+		writeError(w, http.StatusInternalServerError, "failed to list emails")
 		return
 	}
 
@@ -293,17 +302,17 @@ func handleListEmails(c *gin.Context, s3Storage *storage.S3Storage, metaStore me
 
 	// Sort by timestamp descending (newest first)
 	// For simplicity, we'll just return as-is
-	c.JSON(http.StatusOK, response)
+	writeJSON(w, http.StatusOK, response)
 }
 
-func handleGetEmail(c *gin.Context, s3Storage *storage.S3Storage, metaStore metadata.MetadataStore) {
-	ctx := c.Request.Context()
-	id := c.Param("id")
+func handleGetEmail(w http.ResponseWriter, r *http.Request, s3Storage *storage.S3Storage, metaStore metadata.MetadataStore) {
+	ctx := r.Context()
+	id := r.PathValue("id")
 
 	// Find the email by ID
 	emails, err := s3Storage.ListEmails(ctx)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list emails"})
+		writeError(w, http.StatusInternalServerError, "failed to list emails")
 		return
 	}
 
@@ -316,12 +325,12 @@ func handleGetEmail(c *gin.Context, s3Storage *storage.S3Storage, metaStore meta
 	}
 
 	if foundEmail == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "email not found"})
+		writeError(w, http.StatusNotFound, "email not found")
 		return
 	}
 
 	meta, _ := metaStore.Get(ctx, id)
-	c.JSON(http.StatusOK, EmailResponse{
+	writeJSON(w, http.StatusOK, EmailResponse{
 		ID:        foundEmail.ID,
 		From:      foundEmail.From,
 		To:        foundEmail.To,
@@ -333,48 +342,48 @@ func handleGetEmail(c *gin.Context, s3Storage *storage.S3Storage, metaStore meta
 	})
 }
 
-func handleMarkRead(c *gin.Context, metaStore metadata.MetadataStore) {
-	ctx := c.Request.Context()
-	id := c.Param("id")
+func handleMarkRead(w http.ResponseWriter, r *http.Request, metaStore metadata.MetadataStore) {
+	ctx := r.Context()
+	id := r.PathValue("id")
 
 	var req struct {
 		Read bool `json:"read"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 
 	if err := metaStore.SetRead(ctx, id, req.Read); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update read status"})
+		writeError(w, http.StatusInternalServerError, "failed to update read status")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true})
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
 
-func handleMarkFlagged(c *gin.Context, metaStore metadata.MetadataStore) {
-	ctx := c.Request.Context()
-	id := c.Param("id")
+func handleMarkFlagged(w http.ResponseWriter, r *http.Request, metaStore metadata.MetadataStore) {
+	ctx := r.Context()
+	id := r.PathValue("id")
 
 	var req struct {
 		Flagged bool `json:"flagged"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 
 	if err := metaStore.SetFlagged(ctx, id, req.Flagged); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update flag status"})
+		writeError(w, http.StatusInternalServerError, "failed to update flag status")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true})
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
 
-func handleSendEmail(c *gin.Context) {
+func handleSendEmail(w http.ResponseWriter, r *http.Request) {
 	var req SendEmailRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+	if err := decodeJSON(w, r, &req); err != nil || req.To == "" || req.Subject == "" || req.Body == "" {
+		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 
@@ -382,11 +391,11 @@ func handleSendEmail(c *gin.Context) {
 	log.Printf("Sending email to: %s, Subject: %s", req.To, req.Subject)
 
 	// TODO: Implement actual SES sending
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Email queued for sending"})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Email queued for sending"})
 }
 
-func serveFrontend(c *gin.Context) {
-	path := c.Request.URL.Path
+func serveFrontend(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
 	if path == "/" || path == "" {
 		path = "/index.html"
 	}
@@ -397,7 +406,7 @@ func serveFrontend(c *gin.Context) {
 		path = "/index.html"
 		file, err = frontendFS.Open("frontend/dist/index.html")
 		if err != nil {
-			c.String(http.StatusNotFound, "Frontend not built. Run 'npm run build' in frontend directory.")
+			http.Error(w, "Frontend not built. Run 'npm run build' in frontend directory.", http.StatusNotFound)
 			return
 		}
 	}
@@ -405,15 +414,37 @@ func serveFrontend(c *gin.Context) {
 
 	stat, err := file.Stat()
 	if err != nil {
-		c.String(http.StatusNotFound, "file not found")
+		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
 	if stat.IsDir() {
-		c.String(http.StatusNotFound, "not found")
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	contentType := getContentType(path)
-	c.DataFromReader(http.StatusOK, stat.Size(), contentType, file, nil)
+
+	w.Header().Set("Content-Type", getContentType(path))
+	w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		_, _ = io.Copy(w, file)
+	}
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+	return json.NewDecoder(r.Body).Decode(destination)
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		log.Printf("write JSON response: %v", err)
+	}
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
 }
 
 func getContentType(path string) string {
