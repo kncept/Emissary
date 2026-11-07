@@ -10,9 +10,10 @@ usage() {
 Usage: $0 <command>
 
 Commands:
-  build    Build the frontend and compile the Go packages
-  test     Run the test suite (Go and TypeScript)
-  run      Build and run the frontend server
+  build         Build the frontend, compile the Go packages and build the Lambda binary
+  build:lambda  Build only the Lambda binary (bootstrap), for linux/amd64
+  test          Run the test suite (Go and TypeScript)
+  run           Build and run the frontend server
 EOF
 }
 
@@ -45,9 +46,20 @@ build_backend() {
 	)
 }
 
+# Build the frontend application as the Lambda custom-runtime binary. The CDK
+# app deploys mailer/cmd/frontend/bootstrap (see emailClientStack in
+# deploy/emissary.ts), so the binary must live next to the command package.
+build_lambda() {
+	(
+		cd mailer/cmd/frontend
+		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bootstrap .
+	)
+}
+
 build() {
 	build_frontend
 	build_backend
+	build_lambda
 }
 
 test() {
@@ -119,6 +131,9 @@ main() {
 	case "$command" in
 	build)
 		build
+		;;
+	build:lambda)
+		build_lambda
 		;;
 	test)
 		test
