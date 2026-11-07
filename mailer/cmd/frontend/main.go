@@ -10,8 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 	"github.com/gin-gonic/gin"
 	"github.com/kncept/Emissary/mailer/auth"
+	"github.com/kncept/Emissary/mailer/awsutil"
 	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/storage"
 )
@@ -166,6 +169,15 @@ func main() {
 		}
 		serveFrontend(c)
 	})
+
+	// The application http.Handler (the Gin engine) is fully built at this
+	// point. In Lambda, hand it to the runtime instead of starting a listener
+	// of our own; the adapter translates API Gateway events into requests.
+	if awsutil.IsAwsLambda() {
+		log.Printf("Lambda listener loaded")
+		lambda.Start(httpadapter.New(r).ProxyWithContext)
+		return
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {

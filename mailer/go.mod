@@ -3,12 +3,14 @@ module github.com/kncept/Emissary/mailer
 go 1.27.1
 
 require (
+	github.com/aws/aws-lambda-go v1.55.1
 	github.com/aws/aws-sdk-go-v2 v1.25.0
 	github.com/aws/aws-sdk-go-v2/config v1.27.1
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.4.0
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.19.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.38.0
 	github.com/aws/aws-sdk-go-v2/service/ses v1.18.0
+	github.com/awslabs/aws-lambda-go-api-proxy v0.16.2
 	github.com/gin-gonic/gin v1.10.0
 )
 
