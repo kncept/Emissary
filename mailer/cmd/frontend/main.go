@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/rand"
-	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -17,12 +16,10 @@ import (
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/awsutil"
+	"github.com/kncept/Emissary/mailer/gui"
 	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/storage"
 )
-
-//go:embed all:frontend/dist
-var frontendFS embed.FS
 
 const maxRequestBody = 1 << 20 // 1 MiB
 
@@ -400,11 +397,11 @@ func serveFrontend(w http.ResponseWriter, r *http.Request) {
 		path = "/index.html"
 	}
 
-	file, err := frontendFS.Open("frontend/dist" + path)
+	file, err := gui.Files.Open("frontend/dist" + path)
 	if err != nil {
 		// Try index.html for SPA routing
 		path = "/index.html"
-		file, err = frontendFS.Open("frontend/dist/index.html")
+		file, err = gui.Files.Open("frontend/dist/index.html")
 		if err != nil {
 			http.Error(w, "Frontend not built. Run 'npm run build' in frontend directory.", http.StatusNotFound)
 			return

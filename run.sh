@@ -18,22 +18,14 @@ EOF
 }
 
 # Build the frontend and place the output where the //go:embed
-# directives expect it. Vite builds to mailer/gui/frontend/dist (see
-# frontend/vite.config.ts); go:embed does not follow symlinks, so the
-# output is copied into the package directories (gitignored)
+# directive expects it. Vite builds to mailer/gui/frontend/dist (see
+# frontend/vite.config.ts); the mailer/gui package embeds it from there.
 build_frontend() {
 	(
 		cd frontend
 		npm ci
 		npm run build
 	)
-
-	# The running server (cmd/frontend) embeds the assets from its own package
-	# directory, so sync the Vite output there. The gui package already
-	# receives it directly at its embed path.
-	rm -rf mailer/cmd/frontend/frontend/dist
-	mkdir -p mailer/cmd/frontend/frontend
-	cp -R mailer/gui/frontend/dist mailer/cmd/frontend/frontend/dist
 }
 
 build_backend() {
