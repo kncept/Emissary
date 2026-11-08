@@ -15,6 +15,6 @@ var ErrNotFound = errors.New("email not found")
 type Storage interface {
 	Name() string
 
-	ListAllEmails(ctx context.Context) ([]*email.Email, error)
-	GetEmail(ctx context.Context, id string) (*email.Email, error)
+	ListAllEmails(ctx context.Context) ([]*email.UserEmail, error)
+	GetEmail(ctx context.Context, id string) (*email.UserEmail, error)
 }

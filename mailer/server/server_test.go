@@ -19,18 +19,18 @@ import (
 )
 
 type mockStorage struct {
-	emails []*email.Email
+	emails []*email.UserEmail
 	err    error
 	debug  bool
 }
 
 func (m *mockStorage) Name() string { return "MockStorage" }
 
-func (m *mockStorage) ListAllEmails(ctx context.Context) ([]*email.Email, error) {
+func (m *mockStorage) ListAllEmails(ctx context.Context) ([]*email.UserEmail, error) {
 	return m.emails, m.err
 }
 
-func (m *mockStorage) GetEmail(ctx context.Context, id string) (*email.Email, error) {
+func (m *mockStorage) GetEmail(ctx context.Context, id string) (*email.UserEmail, error) {
 	if m.debug {
 		fmt.Fprintf(os.Stderr, "mockStorage.GetEmail called with id=%q, emails=%v\n", id, m.emails)
 	}
@@ -49,7 +49,7 @@ type mockSender struct {
 
 func (m *mockSender) Name() string { return "MockSender" }
 func (m *mockSender) From() string { return m.from }
-func (m *mockSender) Send(ctx context.Context, msg *email.Email) error { return m.err }
+func (m *mockSender) Send(ctx context.Context, msg *email.UserEmail) error { return m.err }
 
 type mockMetadata struct {
 	readMap map[string]bool
@@ -73,7 +73,7 @@ func newTestHandler() *handler {
 	authenticator := auth.New("user", "pass", "secret", 24*time.Hour, "", "")
 	return &handler{
 		auth:     authenticator,
-		storage:  &mockStorage{emails: []*email.Email{}},
+		storage:  &mockStorage{emails: []*email.UserEmail{}},
 		sender:   &mockSender{from: "sender@example.com"},
 		metadata: &mockMetadata{readMap: make(map[string]bool)},
 		logger:   log.New(io.Discard, "", 0),
@@ -223,7 +223,7 @@ func TestRequireAuth_MissingToken(t *testing.T) {
 func TestListEmails(t *testing.T) {
 	h := newTestHandler()
 	h.storage = &mockStorage{
-		emails: []*email.Email{
+		emails: []*email.UserEmail{
 			{ID: "1", From: email.Address{Address: "a@b.com"}, Subject: "Test", Date: time.Now(), Text: "Body"},
 		},
 	}
@@ -252,7 +252,7 @@ func TestListEmails(t *testing.T) {
 func TestGetEmail(t *testing.T) {
 	h := newTestHandler()
 	mockStore := &mockStorage{
-		emails: []*email.Email{
+		emails: []*email.UserEmail{
 			{ID: "1", From: email.Address{Address: "a@b.com"}, Subject: "Test", Date: time.Now(), Text: "Body"},
 		},
 		debug: true,
@@ -278,7 +278,7 @@ func TestGetEmail(t *testing.T) {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var resp email.Email
+	var resp email.UserEmail
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error = %v", err)
 	}
@@ -289,7 +289,7 @@ func TestGetEmail(t *testing.T) {
 
 func TestGetEmail_NotFound(t *testing.T) {
 	h := newTestHandler()
-	h.storage = &mockStorage{emails: []*email.Email{}}
+	h.storage = &mockStorage{emails: []*email.UserEmail{}}
 
 	token, _, _ := h.auth.Issue("user")
 	req := httptest.NewRequest(http.MethodGet, "/api/emails/999", nil)

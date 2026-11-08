@@ -19,7 +19,7 @@ func TestLogSender(t *testing.T) {
 	}
 
 	// Should not error, just log
-	err := s.Send(context.Background(), &email.Email{
+	err := s.Send(context.Background(), &email.UserEmail{
 		From:    email.Address{Address: "from@example.com"},
 		To:      []email.Address{{Address: "to@example.com"}},
 		Subject: "Test",

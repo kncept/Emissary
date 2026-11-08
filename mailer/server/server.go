@@ -219,7 +219,7 @@ func (h *handler) sendEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	message := &email.Email{
+	message := &email.UserEmail{
 		From:    email.Address{Address: h.sender.From()},
 		To:      to,
 		Cc:      cc,

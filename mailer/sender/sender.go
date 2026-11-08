@@ -11,5 +11,5 @@ import (
 type Sender interface {
 	Name() string
 	From() string
-	Send(ctx context.Context, message *email.Email) error
+	Send(ctx context.Context, message *email.UserEmail) error
 }

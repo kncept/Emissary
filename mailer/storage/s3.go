@@ -32,8 +32,8 @@ func NewS3Storage(bucket, prefix, region string) (*S3Storage, error) {
 }
 
 // ListAllEmails implements the Storage interface.
-func (s *S3Storage) ListAllEmails(ctx context.Context) ([]*email.Email, error) {
-	var emails []*email.Email
+func (s *S3Storage) ListAllEmails(ctx context.Context) ([]*email.UserEmail, error) {
+	var emails []*email.UserEmail
 	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(s.bucket),
 		Prefix: aws.String(s.prefix),
@@ -60,7 +60,7 @@ func (s *S3Storage) ListAllEmails(ctx context.Context) ([]*email.Email, error) {
 }
 
 // GetEmail implements the Storage interface.
-func (s *S3Storage) GetEmail(ctx context.Context, id string) (*email.Email, error) {
+func (s *S3Storage) GetEmail(ctx context.Context, id string) (*email.UserEmail, error) {
 	// The id could be a full key or just the ID
 	key := id
 	if !strings.HasPrefix(key, s.prefix) {

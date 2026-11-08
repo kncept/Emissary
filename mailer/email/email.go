@@ -3,11 +3,7 @@ package email
 import (
 	"encoding/base64"
 	"io"
-	"mime"
-	"mime/multipart"
-	"mime/quotedprintable"
 	"net/mail"
-	"net/textproto"
 	"strings"
 	"time"
 )
@@ -20,10 +16,13 @@ type Address struct {
 	Address string `json:"address"`
 }
 
-// Email is the representation shared by the storage, sender, metadata and HTTP
-// layers. Incoming messages are parsed from their raw MIME form; outgoing
-// messages are built from the compose form in the web client.
-type Email struct {
+// UserEmail is the simplified email representation used by the storage, sender,
+// metadata and HTTP layers. It contains only the fields needed for display
+// and search, extracted from the full wire format.
+//
+// To parse a raw RFC 5322 message into a UserEmail, use ParseWireFormat()
+// followed by WireFormatEmail.ToUserEmail(), or use the convenience function Parse().
+type UserEmail struct {
 	ID      string    `json:"id"`
 	From    Address   `json:"from"`
 	To      []Address `json:"to"`
@@ -51,157 +50,33 @@ func DecodeID(id string) (string, error) {
 	return string(decoded), nil
 }
 
-// Parse reads a raw RFC 5322 message and returns the parts the web client can
-// display. Attachments and other non-text parts are intentionally ignored.
-func Parse(id string, r io.Reader) (*Email, error) {
-	msg, err := mail.ReadMessage(r)
+// Parse reads a raw RFC 5322 message and returns a UserEmail.
+// This is a convenience function that combines ParseWireFormat and ToUserEmail.
+// Attachments and other non-text parts are intentionally ignored.
+func Parse(id string, r io.Reader) (*UserEmail, error) {
+	wfe := ParseWireFormat(id, r)
+	return wfe.ToUserEmail(id), nil
+}
+
+// ParseWireFormat parses a raw RFC 5322 message into a WireFormatEmail,
+// preserving the complete message structure. All parse errors are collected
+// in the returned WireFormatEmail.Errs slice; the function never returns an error.
+//
+// This is the primary parsing function for applications that need full access
+// to the wire format (all headers, MIME structure, encodings, etc.).
+func ParseWireFormat(id string, r io.Reader) *WireFormatEmail {
+	return parseWireFormatBytes(id, readAllOrEmpty(r))
+}
+
+func readAllOrEmpty(r io.Reader) []byte {
+	data, err := io.ReadAll(r)
 	if err != nil {
-		return nil, err
+		return nil
 	}
-
-	text, html := parsePart(textproto.MIMEHeader(msg.Header), msg.Body, 0)
-
-	return &Email{
-		ID:      id,
-		From:    parseAddress(msg.Header.Get("From")),
-		To:      parseAddressList(msg.Header.Get("To")),
-		Cc:      parseAddressList(msg.Header.Get("Cc")),
-		Bcc:     parseAddressList(msg.Header.Get("Bcc")),
-		Subject: decodeHeader(msg.Header.Get("Subject")),
-		Date:    parseDate(msg.Header.Get("Date")),
-		Text:    strings.TrimSpace(text),
-		HTML:    strings.TrimSpace(html),
-	}, nil
+	return data
 }
 
-func parsePart(header textproto.MIMEHeader, body io.Reader, depth int) (text, html string) {
-	if depth > 10 {
-		return "", ""
-	}
-
-	mediaType, params, err := mime.ParseMediaType(header.Get("Content-Type"))
-	if err != nil || mediaType == "" {
-		mediaType = "text/plain"
-	}
-
-	reader, err := decodeTransferEncoding(header.Get("Content-Transfer-Encoding"), body)
-	if err != nil {
-		return "", ""
-	}
-
-	if strings.HasPrefix(mediaType, "multipart/") {
-		boundary := params["boundary"]
-		if boundary == "" {
-			return "", ""
-		}
-
-		mr := multipart.NewReader(reader, boundary)
-		var textParts, htmlParts []string
-		for {
-			part, err := mr.NextPart()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				break
-			}
-			partText, partHTML := parsePart(part.Header, part, depth+1)
-			part.Close()
-			if partText != "" {
-				textParts = append(textParts, partText)
-			}
-			if partHTML != "" {
-				htmlParts = append(htmlParts, partHTML)
-			}
-		}
-		return strings.Join(textParts, "\n\n"), strings.Join(htmlParts, "\n")
-	}
-
-	if mediaType != "text/plain" && mediaType != "text/html" {
-		return "", ""
-	}
-
-	data, err := io.ReadAll(io.LimitReader(reader, maxPartSize))
-	if err != nil {
-		return "", ""
-	}
-	content := decodeCharset(data, params["charset"])
-
-	if mediaType == "text/html" {
-		return "", content
-	}
-	return content, ""
-}
-
-func decodeTransferEncoding(encoding string, body io.Reader) (io.Reader, error) {
-	switch strings.ToLower(strings.TrimSpace(encoding)) {
-	case "base64":
-		return base64.NewDecoder(base64.StdEncoding, body), nil
-	case "quoted-printable":
-		return quotedprintable.NewReader(body), nil
-	default:
-		return body, nil
-	}
-}
-
-func decodeHeader(value string) string {
-	if value == "" {
-		return ""
-	}
-	decoder := &mime.WordDecoder{CharsetReader: charsetReader}
-	decoded, err := decoder.DecodeHeader(value)
-	if err != nil {
-		return value
-	}
-	return decoded
-}
-
-func charsetReader(charset string, input io.Reader) (io.Reader, error) {
-	switch strings.ToLower(strings.TrimSpace(charset)) {
-	case "iso-8859-1", "latin1", "latin-1":
-		data, err := io.ReadAll(input)
-		if err != nil {
-			return nil, err
-		}
-		return strings.NewReader(latin1String(data)), nil
-	default:
-		return input, nil
-	}
-}
-
-func decodeCharset(data []byte, charset string) string {
-	switch strings.ToLower(strings.TrimSpace(charset)) {
-	case "iso-8859-1", "latin1", "latin-1":
-		return latin1String(data)
-	default:
-		return string(data)
-	}
-}
-
-func latin1String(data []byte) string {
-	var builder strings.Builder
-	builder.Grow(len(data))
-	for _, b := range data {
-		builder.WriteRune(rune(b))
-	}
-	return builder.String()
-}
-
-func parseDate(value string) time.Time {
-	if value == "" {
-		return time.Time{}
-	}
-	if parsed, err := mail.ParseDate(value); err == nil {
-		return parsed
-	}
-	for _, layout := range []string{time.RFC1123Z, time.RFC1123, time.RFC822Z, time.RFC822, time.RFC3339} {
-		if parsed, err := time.Parse(layout, value); err == nil {
-			return parsed
-		}
-	}
-	return time.Time{}
-}
-
+// parseAddress parses a single address from a header value.
 func parseAddress(value string) Address {
 	value = decodeHeader(value)
 	if value == "" {
@@ -214,6 +89,7 @@ func parseAddress(value string) Address {
 	return Address{Name: parsed.Name, Address: parsed.Address}
 }
 
+// parseAddressList parses a comma-separated list of addresses.
 func parseAddressList(value string) []Address {
 	value = decodeHeader(value)
 	if value == "" {
@@ -224,8 +100,8 @@ func parseAddressList(value string) []Address {
 		return []Address{{Address: strings.TrimSpace(value)}}
 	}
 	addresses := make([]Address, 0, len(parsed))
-	for _, address := range parsed {
-		addresses = append(addresses, Address{Name: address.Name, Address: address.Address})
+	for _, addr := range parsed {
+		addresses = append(addresses, Address{Name: addr.Name, Address: addr.Address})
 	}
 	return addresses
 }

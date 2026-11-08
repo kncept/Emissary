@@ -30,7 +30,7 @@ func (s *LogSender) From() string {
 	return s.from
 }
 
-func (s *LogSender) Send(_ context.Context, message *email.Email) error {
+func (s *LogSender) Send(_ context.Context, message *email.UserEmail) error {
 	from := s.from
 	if message.From.Address != "" {
 		from = message.From.Address

@@ -348,7 +348,7 @@ func addressMatches(address email.Address, user string) bool {
 
 // emailMatchesUser reports whether msg was sent by user or addressed to user
 // (directly, by cc, or by bcc).
-func emailMatchesUser(msg *email.Email, user string) bool {
+func emailMatchesUser(msg *email.UserEmail, user string) bool {
 	if msg == nil || user == "" {
 		return false
 	}
@@ -366,7 +366,7 @@ func emailMatchesUser(msg *email.Email, user string) bool {
 }
 
 // canAccessEmail applies the admin/user visibility rules to a single message.
-func canAccessEmail(claims *auth.Claims, msg *email.Email, requested string) bool {
+func canAccessEmail(claims *auth.Claims, msg *email.UserEmail, requested string) bool {
 	if claims == nil {
 		return false
 	}
@@ -469,7 +469,7 @@ func handleGetEmail(w http.ResponseWriter, r *http.Request, emailStore storage.S
 }
 
 // requireVisibleEmail loads an email and confirms the caller may access it.
-func requireVisibleEmail(w http.ResponseWriter, r *http.Request, emailStore storage.Storage) (*email.Email, bool) {
+func requireVisibleEmail(w http.ResponseWriter, r *http.Request, emailStore storage.Storage) (*email.UserEmail, bool) {
 	message, err := emailStore.GetEmail(r.Context(), r.PathValue("id"))
 	if err != nil {
 		if err == storage.ErrNotFound {
@@ -577,7 +577,7 @@ func handleSendEmail(w http.ResponseWriter, r *http.Request, emailStore storage.
 		return
 	}
 
-	message := &email.Email{
+	message := &email.UserEmail{
 		From:    email.Address{Address: from},
 		To:      []email.Address{{Address: to.Address}},
 		Subject: strings.TrimSpace(req.Subject),

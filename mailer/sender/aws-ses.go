@@ -40,7 +40,7 @@ func (s *AwsSesSender) From() string {
 	return s.from
 }
 
-func (s *AwsSesSender) Send(ctx context.Context, message *email.Email) error {
+func (s *AwsSesSender) Send(ctx context.Context, message *email.UserEmail) error {
 	source := s.from
 	if message.From.Address != "" {
 		source = message.From.Address

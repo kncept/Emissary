@@ -16,12 +16,12 @@ import (
 
 type captureSender struct {
 	from     string
-	messages []*email.Email
+	messages []*email.UserEmail
 }
 
 func (s *captureSender) Name() string { return "capture" }
 func (s *captureSender) From() string { return s.from }
-func (s *captureSender) Send(_ context.Context, message *email.Email) error {
+func (s *captureSender) Send(_ context.Context, message *email.UserEmail) error {
 	s.messages = append(s.messages, message)
 	return nil
 }
@@ -87,7 +87,7 @@ func addEmail(store *storage.MemoryStorage, id, from string, to ...string) {
 	for _, address := range to {
 		recipients = append(recipients, email.Address{Address: address})
 	}
-	store.Add(&email.Email{
+	store.Add(&email.UserEmail{
 		ID:      id,
 		From:    email.Address{Address: from},
 		To:      recipients,

@@ -11,7 +11,7 @@ import (
 func TestMemoryStorage_AddAndGet(t *testing.T) {
 	s := NewMemoryStorage()
 
-	e := &email.Email{
+	e := &email.UserEmail{
 		ID:      "test-1",
 		From:    email.Address{Address: "from@example.com"},
 		To:      []email.Address{{Address: "to@example.com"}},
@@ -50,21 +50,21 @@ func TestMemoryStorage_ListAllEmails(t *testing.T) {
 	s := NewMemoryStorage()
 
 	now := time.Now()
-	s.Add(&email.Email{
+	s.Add(&email.UserEmail{
 		ID:      "1",
 		From:    email.Address{Address: "a@example.com"},
 		Subject: "First",
 		Date:    now.Add(-time.Hour),
 		Text:    "Body 1",
 	})
-	s.Add(&email.Email{
+	s.Add(&email.UserEmail{
 		ID:      "2",
 		From:    email.Address{Address: "b@example.com"},
 		Subject: "Second",
 		Date:    now,
 		Text:    "Body 2",
 	})
-	s.Add(&email.Email{
+	s.Add(&email.UserEmail{
 		ID:      "3",
 		From:    email.Address{Address: "c@example.com"},
 		Subject: "Third",
@@ -97,9 +97,9 @@ func TestMemoryStorage_ListAllEmails_SameDateSortByID(t *testing.T) {
 	s := NewMemoryStorage()
 
 	now := time.Now()
-	s.Add(&email.Email{ID: "a", From: email.Address{Address: "a@example.com"}, Subject: "A", Date: now, Text: "A"})
-	s.Add(&email.Email{ID: "b", From: email.Address{Address: "b@example.com"}, Subject: "B", Date: now, Text: "B"})
-	s.Add(&email.Email{ID: "c", From: email.Address{Address: "c@example.com"}, Subject: "C", Date: now, Text: "C"})
+	s.Add(&email.UserEmail{ID: "a", From: email.Address{Address: "a@example.com"}, Subject: "A", Date: now, Text: "A"})
+	s.Add(&email.UserEmail{ID: "b", From: email.Address{Address: "b@example.com"}, Subject: "B", Date: now, Text: "B"})
+	s.Add(&email.UserEmail{ID: "c", From: email.Address{Address: "c@example.com"}, Subject: "C", Date: now, Text: "C"})
 
 	emails, err := s.ListAllEmails(context.Background())
 	if err != nil {
@@ -119,7 +119,7 @@ func TestMemoryStorage_ConcurrentAccess(t *testing.T) {
 	// Add emails concurrently
 	for i := 0; i < 50; i++ {
 		go func(id string) {
-			s.Add(&email.Email{
+			s.Add(&email.UserEmail{
 				ID:      id,
 				From:    email.Address{Address: "from@example.com"},
 				Subject: "Test " + id,
@@ -148,7 +148,7 @@ func TestMemoryStorage_AddNilOrEmptyID(t *testing.T) {
 	s := NewMemoryStorage()
 
 	s.Add(nil)
-	s.Add(&email.Email{ID: "", Subject: "Empty ID"})
+	s.Add(&email.UserEmail{ID: "", Subject: "Empty ID"})
 
 	emails, _ := s.ListAllEmails(context.Background())
 	if len(emails) != 0 {
@@ -159,7 +159,7 @@ func TestMemoryStorage_AddNilOrEmptyID(t *testing.T) {
 func TestMemoryStorage_CloneIsolation(t *testing.T) {
 	s := NewMemoryStorage()
 
-	e := &email.Email{
+	e := &email.UserEmail{
 		ID:      "test-1",
 		From:    email.Address{Address: "from@example.com"},
 		To:      []email.Address{{Address: "to@example.com"}},
