@@ -14,6 +14,10 @@ Commands:
   build:lambda  Build only the Lambda binary (bootstrap), for linux/amd64
   test          Run the test suite (Go and TypeScript)
   run           Build and run the frontend server
+  deploy        Deploy all stacks (id, in, client)
+  deploy:id     Deploy the email identity stack (SES verification, DKIM, MX, SPF, DMARC)
+  deploy:in     Deploy the email identity and inbound stacks (id + in)
+  deploy:client Deploy the application stack (Lambda, API Gateway, DynamoDB)
   deploy:init   Initialize the deploy directory (run npm ci)
   deploy:list   List CDK stacks (runs deploy:init then cdk ls)
 EOF
@@ -102,6 +106,42 @@ deploy_list() {
 	)
 }
 
+# Deploy all stacks
+deploy_all() {
+	deploy_init
+	(
+		cd deploy
+		npm run cdk -- deploy --all
+	)
+}
+
+# Deploy the email identity stack
+deploy_id() {
+	deploy_init
+	(
+		cd deploy
+		npm run cdk -- deploy emissary-email-id-*
+	)
+}
+
+# Deploy the email identity and inbound stacks
+deploy_in() {
+	deploy_init
+	(
+		cd deploy
+		npm run cdk -- deploy emissary-email-id-* emissary-email-in-*
+	)
+}
+
+# Deploy the application stack
+deploy_client() {
+	deploy_init
+	(
+		cd deploy
+		npm run cdk -- deploy emissary-email-client-*
+	)
+}
+
 run() {
 	# Build first
 	build
@@ -161,6 +201,18 @@ main() {
 		;;
 	run)
 		run "${@:2}"
+		;;
+	deploy)
+		deploy_all
+		;;
+	deploy:id)
+		deploy_id
+		;;
+	deploy:in)
+		deploy_in
+		;;
+	deploy:client)
+		deploy_client
 		;;
 	deploy:init)
 		deploy_init
