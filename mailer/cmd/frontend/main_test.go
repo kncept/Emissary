@@ -15,7 +15,7 @@ import (
 )
 
 func newTestHandler() (http.Handler, *auth.Authenticator) {
-	authenticator := auth.New("user", "pass", "secret", 24*time.Hour)
+	authenticator := auth.New("user", "pass", "secret", 24*time.Hour, "", "")
 
 	cfg := handler.HandlerConfig{
 		AuthUser:     "user",
@@ -24,6 +24,8 @@ func newTestHandler() (http.Handler, *auth.Authenticator) {
 		JWTSecretTTL: 24 * time.Hour,
 		MetadataType: "memory",
 		Storage:      storage.NewMemoryStorage(),
+		JWTAudience:  "",
+		JWTIssuer:    "",
 	}
 
 	h, err := handler.New(cfg)

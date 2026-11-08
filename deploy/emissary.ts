@@ -19,7 +19,8 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
 import * as customResources from 'aws-cdk-lib/custom-resources'
 import * as ssm from 'aws-cdk-lib/aws-ssm'
 import * as ses from 'aws-cdk-lib/aws-ses'
-import * as sesActions from 'aws-cdk-lib/aws-ses-actions';
+import * as sesActions from 'aws-cdk-lib/aws-ses-actions'
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager'
 import { lookupAccountId } from './lib/account-tools'
 
 const accountIdPromise = lookupAccountId()
@@ -52,8 +53,8 @@ async function init() {
   const hostedZoneInfo = await matchingHostedZone(emissaryDomain, awsRegion, true)
 
   emailIdStack(hostedZoneInfo)
-  const inboundEmailBucket = emailInStack(hostedZoneInfo)
-  await emailClientStack(hostedZoneInfo, inboundEmailBucket)
+  const emailInStackDetails = emailInStack(hostedZoneInfo)
+  await emailClientStack(hostedZoneInfo, emailInStackDetails)
 
   console.log(`Configured email for account id ${await accountIdPromise}`)
 }
@@ -111,9 +112,15 @@ function emailIdStack(
   })
 }
 
+interface emailInStackDetails {
+  stack: cdk.Stack
+  bucket: s3.Bucket
+  bucketName: string
+  bucketNameParam: string
+}
 function emailInStack(
   hostedZoneInfo: HostedZoneInfo,
-): s3.Bucket {
+): emailInStackDetails {
   const stack = new cdk.Stack(app, `emissary-email-in-${emissaryDomain.replaceAll(".", "-")}`, {})
   const inboundEndpoint = `inbound-smtp.${awsRegion}.amazonaws.com`
   // MX record for the receiving domain.
@@ -129,7 +136,7 @@ function emailInStack(
   // Raw inbound messages (EML, as received) are written to this bucket. The
   // receipt rule's S3 action grants SES PutObject through a bucket policy, so
   // no intermediate topic or consumer Lambda is needed.
-  const inboundEmailBucket = new s3.Bucket(stack, `emissary-inbound-email-bucket`, {
+  const bucket = new s3.Bucket(stack, `emissary-inbound-email-bucket`, {
     blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
     encryption: s3.BucketEncryption.S3_MANAGED,
     enforceSSL: true,
@@ -140,10 +147,10 @@ function emailInStack(
   // Publish the bucket name so it can be read if required
   // N.B. Need to support multiple emissary instances to this
   // is qualified
-  const inboundEmailBucketParameter = `/emissary/${emissaryDomain.replaceAll(".", "-")}/bucketname`
+  const bucketNameParam = `/emissary/${emissaryDomain.replaceAll(".", "-")}/bucketname`
   new ssm.StringParameter(stack, 'emissary-inbound-email-bucket-parameter', {
-    parameterName: inboundEmailBucketParameter,
-    stringValue: inboundEmailBucket.bucketName,
+    parameterName: bucketNameParam,
+    stringValue: bucket.bucketName,
     description: 'S3 bucket that stores raw EML messages received by SES',
   })
 
@@ -159,7 +166,7 @@ function emailInStack(
         recipients: [emissaryDomain],
         actions: [
           new sesActions.S3({
-            bucket: inboundEmailBucket,
+            bucket: bucket,
           }),
         ],
       },
@@ -203,12 +210,17 @@ function emailInStack(
   activateRuleSet.node.addDependency(ruleSet)
 
   new cdk.CfnOutput(stack, 'output-EmissaryInboundEmailBucket', {
-    value: inboundEmailBucket.bucketName,
-    description: `S3 bucket for raw EML messages (also at Parameter ${inboundEmailBucketParameter}`,
+    value: bucket.bucketName,
+    description: `S3 bucket for raw EML messages (also at Parameter ${bucketNameParam}`,
     exportName: 'EmissaryInboundEmailBucket',
   })
 
-  return inboundEmailBucket
+  return {
+    stack,
+    bucket,
+    bucketName: bucket.bucketName,
+    bucketNameParam,
+  }
 }
 
 // The application stack serves the Emissary frontend and API from the MAIL
@@ -217,7 +229,7 @@ function emailInStack(
 // that `cdk synth`/`cdk deploy --all` still works for the email-only stacks.
 async function emailClientStack(
   hostedZoneInfo: HostedZoneInfo,
-  inboundEmailBucket: s3.Bucket,
+  emailInStackDetails: emailInStackDetails,
 ) {
   if (!fs.existsSync(appBootstrap)) {
     console.warn(
@@ -226,6 +238,7 @@ async function emailClientStack(
     )
     return
   }
+  const inboundEmailBucket = emailInStackDetails.bucket
 
   const accountId = await accountIdPromise
   const stack = new cdk.Stack(app, `emissary-email-client-${emissaryDomain.replaceAll(".", "-")}`, {})
@@ -283,16 +296,58 @@ async function emailClientStack(
   })
   metadataTable.grantReadWriteData(role)
 
-  const authUsername = env.EMISSARY_USERNAME || env.AUTH_USERNAME || 'emissary'
+  const authUsername = env.EMISSARY_USERNAME || env.AUTH_USERNAME || ''
   const authPassword = env.EMISSARY_PASSWORD || env.AUTH_PASSWORD || ''
   if (authPassword === '') {
-    console.warn('EMISSARY_PASSWORD (or AUTH_PASSWORD) is not set; the deployed Lambda will fail to start until it is configured.')
+    console.warn('EMISSARY_PASSWORD (or AUTH_PASSWORD) is not set; the deployed Lambda will not have a default admin user.')
   }
 
-  const jwtSecret = env.EMISSARY_JWT_SECRET || env.JWT_SECRET || ''
-  if (jwtSecret === '') {
-    console.warn('JWT_SECRET is not set; the Lambda will generate an ephemeral secret and invalidate tokens on every cold start.')
+  // Create a secret in Secrets Manager for the JWT secret.
+  // If EMISSARY_JWT_SECRET is provided, use it; otherwise generate a new one.
+  const jwtSecretValue = env.EMISSARY_JWT_SECRET || env.JWT_SECRET || ''
+  const jwtSecret = new secretsmanager.Secret(stack, 'emissary-jwt-secret', {
+    secretName: `emissary/${emissaryDomain.replaceAll(".", "-")}/jwt-secret`,
+    description: 'JWT signing secret for Emissary email application',
+    generateSecretString: jwtSecretValue ? undefined : {
+      secretStringTemplate: '{}',
+      generateStringKey: 'secret',
+      passwordLength: 64,
+      excludeCharacters: '/@"\'\\',
+    },
+    removalPolicy: cdk.RemovalPolicy.DESTROY,
+  })
+  // If a secret value was provided, put it into the secret
+  if (jwtSecretValue) {
+    new customResources.AwsCustomResource(stack, 'emissary-jwt-secret-value', {
+      onCreate: {
+        service: 'SecretsManager',
+        action: 'putSecretValue',
+        parameters: {
+          SecretId: jwtSecret.secretArn,
+          SecretString: jwtSecretValue,
+        },
+        physicalResourceId: customResources.PhysicalResourceId.of('emissary-jwt-secret-value'),
+      },
+      onUpdate: {
+        service: 'SecretsManager',
+        action: 'putSecretValue',
+        parameters: {
+          SecretId: jwtSecret.secretArn,
+          SecretString: jwtSecretValue,
+        },
+        physicalResourceId: customResources.PhysicalResourceId.of('emissary-jwt-secret-value'),
+      },
+      policy: customResources.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ['secretsmanager:PutSecretValue'],
+          resources: [jwtSecret.secretArn],
+        }),
+      ]),
+    })
   }
+
+  // Grant the Lambda role permission to read the JWT secret
+  jwtSecret.grantRead(role)
 
   const fn = new lambda.Function(stack, 'emissary-fn', {
     runtime: lambda.Runtime.PROVIDED_AL2023,
@@ -323,7 +378,11 @@ async function emailClientStack(
       EMISSARY_METADATA_REGION: awsRegion,
       METADATA_REGION: awsRegion,
       ...(authPassword ? { EMISSARY_PASSWORD: authPassword, AUTH_PASSWORD: authPassword } : {}),
-      ...(jwtSecret ? { EMISSARY_JWT_SECRET: jwtSecret, JWT_SECRET: jwtSecret } : {}),
+      // Pass the JWT secret ARN - the application will resolve it at runtime
+      EMISSARY_JWT_SECRET: jwtSecret.secretArn,
+      JWT_SECRET: jwtSecret.secretArn,
+      EMISSARY_JWT_AUDIENCE: mailFromDomain,
+      EMISSARY_JWT_ISSUER: `emissary-${emissaryDomain}`,
     },
   })
 

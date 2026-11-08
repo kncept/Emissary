@@ -70,7 +70,7 @@ func (m *mockMetadata) MarkUnread(ctx context.Context, id string) error {
 }
 
 func newTestHandler() *handler {
-	authenticator := auth.New("user", "pass", "secret", 24*time.Hour)
+	authenticator := auth.New("user", "pass", "secret", 24*time.Hour, "", "")
 	return &handler{
 		auth:     authenticator,
 		storage:  &mockStorage{emails: []*email.Email{}},

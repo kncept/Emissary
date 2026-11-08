@@ -28,6 +28,8 @@ type jwtClaims struct {
 	Subject   string `json:"sub"`
 	IssuedAt  int64  `json:"iat"`
 	ExpiresAt int64  `json:"exp"`
+	Audience  string `json:"aud,omitempty"`
+	Issuer    string `json:"iss,omitempty"`
 }
 
 // Authenticator validates the single configured account and issues HS256 JWTs.
@@ -37,9 +39,11 @@ type Authenticator struct {
 	secret   []byte
 	ttl      time.Duration
 	now      func() time.Time
+	audience string
+	issuer   string
 }
 
-func New(username, password, secret string, ttl time.Duration) *Authenticator {
+func New(username, password, secret string, ttl time.Duration, audience, issuer string) *Authenticator {
 	if ttl <= 0 {
 		ttl = defaultTokenTTL
 	}
@@ -49,6 +53,8 @@ func New(username, password, secret string, ttl time.Duration) *Authenticator {
 		secret:   []byte(secret),
 		ttl:      ttl,
 		now:      time.Now,
+		audience: audience,
+		issuer:   issuer,
 	}
 }
 
@@ -66,17 +72,24 @@ func (a *Authenticator) Issue(username string) (string, time.Time, error) {
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	claims, err := json.Marshal(jwtClaims{
+	claims := jwtClaims{
 		Subject:   username,
 		IssuedAt:  now.Unix(),
 		ExpiresAt: expiresAt.Unix(),
-	})
+	}
+	if a.audience != "" {
+		claims.Audience = a.audience
+	}
+	if a.issuer != "" {
+		claims.Issuer = a.issuer
+	}
+	claimsData, err := json.Marshal(claims)
 	if err != nil {
 		return "", time.Time{}, err
 	}
 
 	encoding := base64.RawURLEncoding
-	signingInput := encoding.EncodeToString(header) + "." + encoding.EncodeToString(claims)
+	signingInput := encoding.EncodeToString(header) + "." + encoding.EncodeToString(claimsData)
 	signature := a.sign(signingInput)
 	return signingInput + "." + encoding.EncodeToString(signature), expiresAt, nil
 }
@@ -117,9 +130,29 @@ func (a *Authenticator) Validate(token string) (string, error) {
 	if claims.Subject == "" || claims.ExpiresAt == 0 {
 		return "", ErrInvalidToken
 	}
-	if a.now().UTC().Unix() >= claims.ExpiresAt {
+
+	now := a.now().UTC().Unix()
+
+	// Validate expiration
+	if now >= claims.ExpiresAt {
 		return "", ErrExpiredToken
 	}
+
+	// Validate issued at (iat) - reject tokens from the future (with small skew tolerance)
+	if claims.IssuedAt > now+60 { // Allow 60 seconds clock skew
+		return "", ErrInvalidToken
+	}
+
+	// Validate audience if configured
+	if a.audience != "" && claims.Audience != a.audience {
+		return "", ErrInvalidToken
+	}
+
+	// Validate issuer if configured
+	if a.issuer != "" && claims.Issuer != a.issuer {
+		return "", ErrInvalidToken
+	}
+
 	return claims.Subject, nil
 }
 

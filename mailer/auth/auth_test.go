@@ -1,12 +1,14 @@
 package auth
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"testing"
 	"time"
 )
 
 func TestAuthenticator_Authenticate(t *testing.T) {
-	a := New("user", "pass", "secret", time.Hour)
+	a := New("user", "pass", "secret", time.Hour, "", "")
 
 	tests := []struct {
 		name     string
@@ -33,7 +35,7 @@ func TestAuthenticator_Authenticate(t *testing.T) {
 }
 
 func TestAuthenticator_IssueAndValidate(t *testing.T) {
-	a := New("user", "pass", "secret", time.Hour)
+	a := New("user", "pass", "secret", time.Hour, "", "")
 
 	token, expiresAt, err := a.Issue("user")
 	if err != nil {
@@ -60,7 +62,7 @@ func TestAuthenticator_IssueAndValidate(t *testing.T) {
 
 func TestAuthenticator_Validate_ExpiredToken(t *testing.T) {
 	// Create an authenticator with a short TTL, then manipulate time to make token expired
-	a := New("user", "pass", "secret", time.Hour)
+	a := New("user", "pass", "secret", time.Hour, "", "")
 
 	// Create token with custom time in the past
 	past := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -84,7 +86,7 @@ func TestAuthenticator_Validate_ExpiredToken(t *testing.T) {
 }
 
 func TestAuthenticator_Validate_InvalidToken(t *testing.T) {
-	a := New("user", "pass", "secret", time.Hour)
+	a := New("user", "pass", "secret", time.Hour, "", "")
 
 	tests := []struct {
 		name  string
@@ -94,7 +96,7 @@ func TestAuthenticator_Validate_InvalidToken(t *testing.T) {
 		{"malformed", "not.a.jwt"},
 		{"wrong signature", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjE3MDAwMDAwMDB9.wrongsig"},
 		{"wrong secret", func() string {
-			a2 := New("user", "pass", "different-secret", time.Hour)
+			a2 := New("user", "pass", "different-secret", time.Hour, "", "")
 			tkn, _, _ := a2.Issue("user")
 			return tkn
 		}()},
@@ -111,7 +113,7 @@ func TestAuthenticator_Validate_InvalidToken(t *testing.T) {
 }
 
 func TestAuthenticator_ConstantTimeCompare(t *testing.T) {
-	a := New("user", "pass", "secret", time.Hour)
+	a := New("user", "pass", "secret", time.Hour, "", "")
 
 	// Test that timing attacks are mitigated by using constant-time comparison
 	// We can't easily test timing, but we can verify the function works correctly
@@ -125,7 +127,7 @@ func TestAuthenticator_ConstantTimeCompare(t *testing.T) {
 
 func TestAuthenticator_CustomTimeSource(t *testing.T) {
 	now := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
-	a := New("user", "pass", "secret", time.Hour)
+	a := New("user", "pass", "secret", time.Hour, "", "")
 	a.now = func() time.Time { return now }
 
 	token, expiresAt, err := a.Issue("user")
@@ -145,4 +147,87 @@ func TestAuthenticator_CustomTimeSource(t *testing.T) {
 	if subject != "user" {
 		t.Errorf("subject = %q, want %q", subject, "user")
 	}
+}
+
+func TestAuthenticator_Validate_FutureToken(t *testing.T) {
+	// Token issued in the future should be rejected
+	now := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	a := New("user", "pass", "secret", time.Hour, "", "")
+	a.now = func() time.Time { return now }
+
+	// Create a token with iat in the future (2 minutes ahead)
+	future := now.Add(2 * time.Minute)
+	token := createTokenWithCustomIat(a, "user", future.Unix(), now.Add(time.Hour).Unix())
+
+	_, err := a.Validate(token)
+	if err == nil {
+		t.Error("Validate() should return error for future token")
+	}
+	if err != ErrInvalidToken {
+		t.Errorf("Validate() error = %v, want %v", err, ErrInvalidToken)
+	}
+}
+
+func TestAuthenticator_Validate_AudienceMismatch(t *testing.T) {
+	a := New("user", "pass", "secret", time.Hour, "expected-audience", "")
+
+	token, _, err := a.Issue("user")
+	if err != nil {
+		t.Fatalf("Issue() error = %v", err)
+	}
+
+	// Validate with different audience
+	a2 := New("user", "pass", "secret", time.Hour, "different-audience", "")
+	_, err = a2.Validate(token)
+	if err == nil {
+		t.Error("Validate() should return error for audience mismatch")
+	}
+}
+
+func TestAuthenticator_Validate_IssuerMismatch(t *testing.T) {
+	a := New("user", "pass", "secret", time.Hour, "", "expected-issuer")
+
+	token, _, err := a.Issue("user")
+	if err != nil {
+		t.Fatalf("Issue() error = %v", err)
+	}
+
+	// Validate with different issuer
+	a2 := New("user", "pass", "secret", time.Hour, "", "different-issuer")
+	_, err = a2.Validate(token)
+	if err == nil {
+		t.Error("Validate() should return error for issuer mismatch")
+	}
+}
+
+func TestAuthenticator_Validate_AudienceAndIssuerMatch(t *testing.T) {
+	a := New("user", "pass", "secret", time.Hour, "my-audience", "my-issuer")
+
+	token, _, err := a.Issue("user")
+	if err != nil {
+		t.Fatalf("Issue() error = %v", err)
+	}
+
+	subject, err := a.Validate(token)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if subject != "user" {
+		t.Errorf("subject = %q, want %q", subject, "user")
+	}
+}
+
+// createTokenWithCustomIat creates a token with a custom iat claim for testing
+func createTokenWithCustomIat(a *Authenticator, subject string, iat, exp int64) string {
+	header, _ := json.Marshal(jwtHeader{Algorithm: "HS256", Type: "JWT"})
+	claimsData, _ := json.Marshal(jwtClaims{
+		Subject:   subject,
+		IssuedAt:  iat,
+		ExpiresAt: exp,
+	})
+
+	encoding := base64.RawURLEncoding
+	signingInput := encoding.EncodeToString(header) + "." + encoding.EncodeToString(claimsData)
+	signature := a.sign(signingInput)
+	return signingInput + "." + encoding.EncodeToString(signature)
 }

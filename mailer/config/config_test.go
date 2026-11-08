@@ -1,10 +1,13 @@
 package config
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kncept/Emissary/mailer/envutil"
 )
 
 func TestLoad_Defaults(t *testing.T) {
@@ -23,9 +26,10 @@ func TestLoad_Defaults(t *testing.T) {
 		os.Unsetenv("EMISSARY_SES_REGION")
 		os.Unsetenv("EMISSARY_METADATA_REGION")
 		os.Unsetenv("AWS_REGION")
+		envutil.ClearCache()
 	}()
 
-	cfg, err := Load()
+	cfg, err := Load(context.Background())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -76,7 +80,7 @@ func TestLoad_CustomValues(t *testing.T) {
 	os.Setenv("AWS_REGION", "us-east-1")
 	defer cleanupEnv()
 
-	cfg, err := Load()
+	cfg, err := Load(context.Background())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -130,7 +134,7 @@ func TestLoad_MissingUsername(t *testing.T) {
 	os.Setenv("EMISSARY_PASSWORD", "pass")
 	defer cleanupEnv()
 
-	_, err := Load()
+	_, err := Load(context.Background())
 	if err == nil {
 		t.Error("Load() should error when username is missing")
 	}
@@ -141,7 +145,7 @@ func TestLoad_MissingPassword(t *testing.T) {
 	os.Unsetenv("EMISSARY_PASSWORD")
 	defer cleanupEnv()
 
-	_, err := Load()
+	_, err := Load(context.Background())
 	if err == nil {
 		t.Error("Load() should error when password is missing")
 	}
@@ -153,7 +157,7 @@ func TestLoad_InvalidJWT_TTL(t *testing.T) {
 	os.Setenv("EMISSARY_JWT_TTL", "invalid")
 	defer cleanupEnv()
 
-	_, err := Load()
+	_, err := Load(context.Background())
 	if err == nil {
 		t.Error("Load() should error on invalid JWT TTL")
 	}
@@ -165,7 +169,7 @@ func TestLoad_UnknownStorage(t *testing.T) {
 	os.Setenv("EMISSARY_STORAGE", "unknown")
 	defer cleanupEnv()
 
-	_, err := Load()
+	_, err := Load(context.Background())
 	if err == nil {
 		t.Error("Load() should error on unknown storage")
 	}
@@ -177,7 +181,7 @@ func TestLoad_UnknownSender(t *testing.T) {
 	os.Setenv("EMISSARY_SENDER", "unknown")
 	defer cleanupEnv()
 
-	_, err := Load()
+	_, err := Load(context.Background())
 	if err == nil {
 		t.Error("Load() should error on unknown sender")
 	}
@@ -189,7 +193,7 @@ func TestLoad_UnknownMetadata(t *testing.T) {
 	os.Setenv("EMISSARY_METADATA", "unknown")
 	defer cleanupEnv()
 
-	_, err := Load()
+	_, err := Load(context.Background())
 	if err == nil {
 		t.Error("Load() should error on unknown metadata")
 	}
@@ -201,7 +205,7 @@ func TestLoad_S3StorageRequiresBucket(t *testing.T) {
 	os.Setenv("EMISSARY_STORAGE", "s3")
 	defer cleanupEnv()
 
-	_, err := Load()
+	_, err := Load(context.Background())
 	if err == nil {
 		t.Error("Load() should error when s3 storage is selected without bucket")
 	}
@@ -213,7 +217,7 @@ func TestLoad_DDBMetadataRequiresTable(t *testing.T) {
 	os.Setenv("EMISSARY_METADATA", "ddb")
 	defer cleanupEnv()
 
-	_, err := Load()
+	_, err := Load(context.Background())
 	if err == nil {
 		t.Error("Load() should error when ddb metadata is selected without table")
 	}
@@ -225,7 +229,7 @@ func TestLoad_DynamoDBAlias(t *testing.T) {
 	os.Setenv("EMISSARY_METADATA", "dynamodb")
 	defer cleanupEnv()
 
-	_, err := Load()
+	_, err := Load(context.Background())
 	if err == nil {
 		t.Error("Load() should error when dynamodb metadata is selected without table")
 	}
@@ -237,7 +241,7 @@ func TestLoad_FileMetadataDefaultPath(t *testing.T) {
 	os.Setenv("EMISSARY_METADATA", "file")
 	defer cleanupEnv()
 
-	cfg, err := Load()
+	cfg, err := Load(context.Background())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -253,7 +257,7 @@ func TestLoad_ListenAddrWithPort(t *testing.T) {
 	os.Setenv("EMISSARY_PORT", "3000")
 	defer cleanupEnv()
 
-	cfg, err := Load()
+	cfg, err := Load(context.Background())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -269,7 +273,7 @@ func TestLoad_ListenAddrWithFullAddress(t *testing.T) {
 	os.Setenv("EMISSARY_LISTEN_ADDR", "127.0.0.1:4000")
 	defer cleanupEnv()
 
-	cfg, err := Load()
+	cfg, err := Load(context.Background())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -287,7 +291,7 @@ func TestLoad_SESRegionDefaultsToAWSRegion(t *testing.T) {
 	os.Setenv("AWS_REGION", "eu-central-1")
 	defer cleanupEnv()
 
-	cfg, err := Load()
+	cfg, err := Load(context.Background())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -305,7 +309,7 @@ func TestLoad_MetadataRegionDefaultsToAWSRegion(t *testing.T) {
 	os.Setenv("AWS_REGION", "ap-northeast-1")
 	defer cleanupEnv()
 
-	cfg, err := Load()
+	cfg, err := Load(context.Background())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -476,4 +480,5 @@ func cleanupEnv() {
 	os.Unsetenv("EMISSARY_DDB_TABLE")
 	os.Unsetenv("EMISSARY_METADATA_REGION")
 	os.Unsetenv("AWS_REGION")
+	envutil.ClearCache()
 }

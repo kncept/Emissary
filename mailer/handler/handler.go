@@ -52,6 +52,9 @@ type HandlerConfig struct {
 	MetadataTable string
 	MetadataRegion string
 	Storage       storage.Storage // Optional: for testing with custom storage
+	// JWT audience and issuer for token validation
+	JWTAudience string
+	JWTIssuer   string
 }
 
 // New creates a new HTTP handler with all routes configured.
@@ -74,7 +77,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 		jwtTTL = 24 * time.Hour
 	}
 
-	authenticator := auth.New(cfg.AuthUser, cfg.AuthPass, jwtSecret, jwtTTL)
+	authenticator := auth.New(cfg.AuthUser, cfg.AuthPass, jwtSecret, jwtTTL, cfg.JWTAudience, cfg.JWTIssuer)
 
 	// Initialize storage
 	var emailStore storage.Storage

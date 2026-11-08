@@ -1,13 +1,15 @@
 package config
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
+
+	"github.com/kncept/Emissary/mailer/envutil"
 )
 
 // ServerConfig holds HTTP server and authentication configuration.
@@ -19,6 +21,8 @@ type ServerConfig struct {
 	JWTSecret    string
 	JWTGenerated bool
 	JWTExpiry    time.Duration
+	JWTAudience  string
+	JWTIssuer    string
 }
 
 // Validate checks that the server configuration is complete and consistent.
@@ -116,35 +120,38 @@ func (c *Config) Validate() error {
 
 // Load reads configuration from the environment. The account credentials are
 // required; every other value has a local-development friendly default.
-func Load() (*Config, error) {
-	awsRegion := firstEnv("AWS_REGION", "AWS_DEFAULT_REGION")
+// Pass a context for secret resolution (e.g., from AWS Secrets Manager).
+func Load(ctx context.Context) (*Config, error) {
+	awsRegion := firstEnv(ctx, "AWS_REGION", "AWS_DEFAULT_REGION")
 
 	cfg := &Config{
 		Server: ServerConfig{
-			ListenAddr: listenAddr(),
-			Username:   firstEnv("EMISSARY_USERNAME", "AUTH_USERNAME", "USERNAME"),
-			Password:   firstEnv("EMISSARY_PASSWORD", "AUTH_PASSWORD", "PASSWORD"),
-			JWTSecret:  firstEnv("EMISSARY_JWT_SECRET", "JWT_SECRET"),
+			ListenAddr: listenAddr(ctx),
+			Username:   firstEnv(ctx, "EMISSARY_USERNAME", "AUTH_USERNAME", "USERNAME"),
+			Password:   firstEnv(ctx, "EMISSARY_PASSWORD", "AUTH_PASSWORD", "PASSWORD"),
+			JWTSecret:  firstEnv(ctx, "EMISSARY_JWT_SECRET", "JWT_SECRET"),
+			JWTAudience: firstEnv(ctx, "EMISSARY_JWT_AUDIENCE", "JWT_AUDIENCE"),
+			JWTIssuer:   firstEnv(ctx, "EMISSARY_JWT_ISSUER", "JWT_ISSUER"),
 		},
 		Storage: StorageConfig{
-			Type:     strings.ToLower(strings.TrimSpace(os.Getenv("EMISSARY_STORAGE"))),
-			S3Bucket: firstEnv("EMISSARY_S3_BUCKET", "S3_BUCKET"),
+			Type:     strings.ToLower(strings.TrimSpace(firstEnv(ctx, "EMISSARY_STORAGE"))),
+			S3Bucket: firstEnv(ctx, "EMISSARY_S3_BUCKET", "S3_BUCKET"),
 		},
 		Sender: SenderConfig{
-			Type:   strings.ToLower(strings.TrimSpace(os.Getenv("EMISSARY_SENDER"))),
-			From:   firstEnv("EMISSARY_SES_FROM", "SES_FROM", "SES_FROM_ADDRESS"),
-			Region: firstEnv("EMISSARY_SES_REGION", "SES_REGION"),
+			Type:   strings.ToLower(strings.TrimSpace(firstEnv(ctx, "EMISSARY_SENDER"))),
+			From:   firstEnv(ctx, "EMISSARY_SES_FROM", "SES_FROM", "SES_FROM_ADDRESS"),
+			Region: firstEnv(ctx, "EMISSARY_SES_REGION", "SES_REGION"),
 		},
 		Metadata: MetadataConfig{
-			Type:     strings.ToLower(strings.TrimSpace(os.Getenv("EMISSARY_METADATA"))),
-			DdbTable: firstEnv("EMISSARY_DDB_TABLE", "DDB_TABLE"),
-			FilePath: firstEnv("EMISSARY_METADATA_FILE", "METADATA_FILE"),
-			Region:   firstEnv("EMISSARY_METADATA_REGION", "METADATA_REGION"),
+			Type:     strings.ToLower(strings.TrimSpace(firstEnv(ctx, "EMISSARY_METADATA"))),
+			DdbTable: firstEnv(ctx, "EMISSARY_DDB_TABLE", "DDB_TABLE"),
+			FilePath: firstEnv(ctx, "EMISSARY_METADATA_FILE", "METADATA_FILE"),
+			Region:   firstEnv(ctx, "EMISSARY_METADATA_REGION", "METADATA_REGION"),
 		},
 		AWSRegion: awsRegion,
 	}
 
-	ttl, err := time.ParseDuration(firstEnvDefault("24h", "EMISSARY_JWT_TTL", "JWT_TTL"))
+	ttl, err := time.ParseDuration(firstEnvDefault(ctx, "24h", "EMISSARY_JWT_TTL", "JWT_TTL"))
 	if err != nil {
 		return nil, fmt.Errorf("invalid EMISSARY_JWT_TTL: %w", err)
 	}
@@ -198,28 +205,28 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-func listenAddr() string {
-	if addr := firstEnv("EMISSARY_LISTEN_ADDR", "LISTEN_ADDR"); addr != "" {
+func listenAddr(ctx context.Context) string {
+	if addr := firstEnv(ctx, "EMISSARY_LISTEN_ADDR", "LISTEN_ADDR"); addr != "" {
 		return addr
 	}
-	port := firstEnvDefault("8080", "EMISSARY_PORT", "PORT")
+	port := firstEnvDefault(ctx, "8080", "EMISSARY_PORT", "PORT")
 	if strings.HasPrefix(port, ":") {
 		return port
 	}
 	return ":" + port
 }
 
-func firstEnv(names ...string) string {
+func firstEnv(ctx context.Context, names ...string) string {
 	for _, name := range names {
-		if value, ok := os.LookupEnv(name); ok && strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
+		if value := envutil.GetCachedEnv(ctx, name); value != "" {
+			return value
 		}
 	}
 	return ""
 }
 
-func firstEnvDefault(fallback string, names ...string) string {
-	if value := firstEnv(names...); value != "" {
+func firstEnvDefault(ctx context.Context, fallback string, names ...string) string {
+	if value := firstEnv(ctx, names...); value != "" {
 		return value
 	}
 	return fallback

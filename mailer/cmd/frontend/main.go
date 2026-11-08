@@ -1,70 +1,44 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
-	"os"
-	"time"
+	"strings"
 
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/kncept/Emissary/mailer/awsutil"
+	"github.com/kncept/Emissary/mailer/config"
 	"github.com/kncept/Emissary/mailer/handler"
 )
 
 func main() {
-	// Load configuration from environment
-	authUser := os.Getenv("AUTH_USERNAME")
-	authPass := os.Getenv("AUTH_PASSWORD")
-	s3Bucket := os.Getenv("S3_BUCKET")
-	s3Prefix := os.Getenv("S3_PREFIX")
-	metadataPath := os.Getenv("METADATA_PATH")
-	metadataTable := os.Getenv("METADATA_TABLE")
+	ctx := context.Background()
 
-	// Single region from AWS config (Emissary is not multi-region)
-	awsRegion := os.Getenv("AWS_REGION")
-	if awsRegion == "" {
-		awsRegion = os.Getenv("AWS_DEFAULT_REGION")
+	// Load configuration using the config package
+	cfg, err := config.Load(ctx)
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// Validate required config
-	if authUser == "" || authPass == "" {
-		log.Fatal("AUTH_USERNAME and AUTH_PASSWORD must be set")
-	}
-	if s3Bucket == "" {
-		log.Fatal("S3_BUCKET must be set")
-	}
-
-	// Initialize the JWT authenticator
-	jwtSecret := os.Getenv("JWT_SECRET")
-	if jwtSecret == "" {
-		jwtSecret = os.Getenv("SESSION_SECRET") // backward compatibility
-	}
-
-	jwtTTL := 24 * time.Hour
-	if ttl := os.Getenv("JWT_TTL"); ttl != "" {
-		parsed, err := time.ParseDuration(ttl)
-		if err != nil {
-			log.Fatalf("invalid JWT_TTL %q: %v", ttl, err)
-		}
-		jwtTTL = parsed
+	// Build handler config from loaded config
+	handlerCfg := handler.HandlerConfig{
+		AuthUser:       cfg.Server.Username,
+		AuthPass:       cfg.Server.Password,
+		JWTSecret:      cfg.Server.JWTSecret,
+		JWTSecretTTL:   cfg.Server.JWTExpiry,
+		S3Bucket:       cfg.Storage.S3Bucket,
+		S3Region:       cfg.AWSRegion,
+		MetadataType:   cfg.Metadata.Type,
+		MetadataPath:   cfg.Metadata.FilePath,
+		MetadataTable:  cfg.Metadata.DdbTable,
+		MetadataRegion: cfg.Metadata.Region,
+		JWTAudience:    cfg.Server.JWTAudience,
+		JWTIssuer:      cfg.Server.JWTIssuer,
 	}
 
-	cfg := handler.HandlerConfig{
-		AuthUser:       authUser,
-		AuthPass:       authPass,
-		JWTSecret:      jwtSecret,
-		JWTSecretTTL:   jwtTTL,
-		S3Bucket:       s3Bucket,
-		S3Prefix:       s3Prefix,
-		S3Region:       awsRegion,
-		MetadataType:   "ddb",
-		MetadataPath:   metadataPath,
-		MetadataTable:  metadataTable,
-		MetadataRegion: awsRegion,
-	}
-
-	h, err := handler.New(cfg)
+	h, err := handler.New(handlerCfg)
 	if err != nil {
 		log.Fatalf("Failed to create handler: %v", err)
 	}
@@ -78,12 +52,12 @@ func main() {
 		return
 	}
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
+	port := cfg.Server.ListenAddr
+	if !strings.HasPrefix(port, ":") {
+		port = ":" + port
 	}
-	log.Printf("Server starting on port %s", port)
-	if err := http.ListenAndServe(":"+port, h); err != nil {
+	log.Printf("Server starting on %s", port)
+	if err := http.ListenAndServe(port, h); err != nil {
 		log.Fatal(err)
 	}
 }
