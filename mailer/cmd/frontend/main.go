@@ -18,21 +18,13 @@ func main() {
 	authPass := os.Getenv("AUTH_PASSWORD")
 	s3Bucket := os.Getenv("S3_BUCKET")
 	s3Prefix := os.Getenv("S3_PREFIX")
-	s3Region := os.Getenv("S3_REGION")
-	metadataType := os.Getenv("METADATA_TYPE")
 	metadataPath := os.Getenv("METADATA_PATH")
 	metadataTable := os.Getenv("METADATA_TABLE")
-	metadataRegion := os.Getenv("METADATA_REGION")
 
-	// Defaults
-	if s3Region == "" {
-		s3Region = "us-east-1"
-	}
-	if metadataRegion == "" {
-		metadataRegion = "us-east-1"
-	}
-	if metadataType == "" {
-		metadataType = "memory"
+	// Single region from AWS config (Emissary is not multi-region)
+	awsRegion := os.Getenv("AWS_REGION")
+	if awsRegion == "" {
+		awsRegion = os.Getenv("AWS_DEFAULT_REGION")
 	}
 
 	// Validate required config
@@ -59,17 +51,17 @@ func main() {
 	}
 
 	cfg := handler.HandlerConfig{
-		AuthUser:      authUser,
-		AuthPass:      authPass,
-		JWTSecret:     jwtSecret,
-		JWTSecretTTL:  jwtTTL,
-		S3Bucket:      s3Bucket,
-		S3Prefix:      s3Prefix,
-		S3Region:      s3Region,
-		MetadataType:  metadataType,
-		MetadataPath:  metadataPath,
-		MetadataTable: metadataTable,
-		MetadataRegion: metadataRegion,
+		AuthUser:       authUser,
+		AuthPass:       authPass,
+		JWTSecret:      jwtSecret,
+		JWTSecretTTL:   jwtTTL,
+		S3Bucket:       s3Bucket,
+		S3Prefix:       s3Prefix,
+		S3Region:       awsRegion,
+		MetadataType:   "ddb",
+		MetadataPath:   metadataPath,
+		MetadataTable:  metadataTable,
+		MetadataRegion: awsRegion,
 	}
 
 	h, err := handler.New(cfg)
