@@ -1,20 +1,25 @@
 package handler
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
+	"net/mail"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kncept/Emissary/mailer/auth"
+	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/gui"
 	"github.com/kncept/Emissary/mailer/metadata"
+	"github.com/kncept/Emissary/mailer/sender"
 	"github.com/kncept/Emissary/mailer/storage"
+	"github.com/kncept/Emissary/mailer/usermanager"
 )
 
 const maxRequestBody = 1 << 20 // 1 MiB
@@ -33,28 +38,53 @@ type EmailResponse struct {
 
 // SendEmailRequest represents a request to send an email.
 type SendEmailRequest struct {
-	To      string `json:"to"`
-	Subject string `json:"subject"`
-	Body    string `json:"body"`
+	// From may only be set by an administrator. Ordinary users always send as
+	// their own address.
+	From      string `json:"from,omitempty"`
+	To        string `json:"to"`
+	Subject   string `json:"subject"`
+	Body      string `json:"body"`
+	ReplyToID string `json:"replyToId,omitempty"`
 }
 
 // HandlerConfig holds configuration for creating the handler.
 type HandlerConfig struct {
-	AuthUser      string
-	AuthPass      string
-	JWTSecret     string
-	JWTSecretTTL  time.Duration
-	S3Bucket      string
-	S3Prefix      string
-	S3Region      string
-	MetadataType  string
-	MetadataPath  string
-	MetadataTable string
+	AuthUser       string
+	AuthPass       string
+	JWTSecret      string
+	JWTSecretTTL   time.Duration
+	S3Bucket       string
+	S3Prefix       string
+	S3Region       string
+	MetadataType   string
+	MetadataPath   string
+	MetadataTable  string
 	MetadataRegion string
-	Storage       storage.Storage // Optional: for testing with custom storage
+	Storage        storage.Storage // Optional: for testing with custom storage
 	// JWT audience and issuer for token validation
 	JWTAudience string
 	JWTIssuer   string
+
+	// User manager configuration. UserManager may be supplied directly for
+	// tests; otherwise it is built from the fields below.
+	UserManager      usermanager.Manager
+	UserManagerType  string
+	UserDomain       string
+	UserTable        string
+	UserRegion       string
+	LDAPURL          string
+	LDAPBindDN       string
+	LDAPBindPassword string
+	LDAPBaseDN       string
+	LDAPUserFilter   string
+	LDAPCacheTTL     string
+
+	// Outbound email sender. Sender may be supplied directly for tests;
+	// otherwise it is built from the fields below.
+	Sender       sender.Sender
+	SenderType   string
+	SenderFrom   string
+	SenderRegion string
 }
 
 // New creates a new HTTP handler with all routes configured.
@@ -77,11 +107,35 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 		jwtTTL = 24 * time.Hour
 	}
 
-	authenticator := auth.New(cfg.AuthUser, cfg.AuthPass, jwtSecret, jwtTTL, cfg.JWTAudience, cfg.JWTIssuer)
+	// Initialize the pluggable user manager. The built-in administrator is
+	// configured inside the manager so that every backend has the same admin
+	// semantics.
+	users := cfg.UserManager
+	var err error
+	if users == nil {
+		users, err = usermanager.New(usermanager.Config{
+			Type:             cfg.UserManagerType,
+			AdminUsername:    cfg.AuthUser,
+			AdminPassword:    cfg.AuthPass,
+			Domain:           cfg.UserDomain,
+			DdbTable:         cfg.UserTable,
+			Region:           cfg.UserRegion,
+			LDAPURL:          cfg.LDAPURL,
+			LDAPBindDN:       cfg.LDAPBindDN,
+			LDAPBindPassword: cfg.LDAPBindPassword,
+			LDAPBaseDN:       cfg.LDAPBaseDN,
+			LDAPUserFilter:   cfg.LDAPUserFilter,
+			LDAPCacheTTL:     cfg.LDAPCacheTTL,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	authenticator := auth.NewWithUserManager(users, jwtSecret, jwtTTL, cfg.JWTAudience, cfg.JWTIssuer)
 
 	// Initialize storage
 	var emailStore storage.Storage
-	var err error
 	if cfg.Storage != nil {
 		emailStore = cfg.Storage
 	} else {
@@ -96,7 +150,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 	switch cfg.MetadataType {
 	case "file":
 		metaStore, err = metadata.NewFileMetadata(cfg.MetadataPath)
-	case "ddb":
+	case "ddb", "dynamodb":
 		metaStore, err = metadata.NewDdbMetadata(cfg.MetadataTable, cfg.MetadataRegion)
 	default:
 		metaStore = metadata.NewMemoryMetadata()
@@ -105,12 +159,26 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 		return nil, err
 	}
 
-	return newHandler(authenticator, emailStore, metaStore), nil
+	// Initialize the outbound sender.
+	mailSender := cfg.Sender
+	if mailSender == nil {
+		switch strings.ToLower(strings.TrimSpace(cfg.SenderType)) {
+		case "aws-ses", "ses":
+			mailSender, err = sender.NewAwsSesSender(context.Background(), cfg.SenderRegion, cfg.SenderFrom)
+			if err != nil {
+				return nil, err
+			}
+		default:
+			mailSender = sender.NewLogSender(cfg.SenderFrom)
+		}
+	}
+
+	return newHandler(authenticator, emailStore, metaStore, mailSender), nil
 }
 
 // newHandler wires the API routes, the auth middleware and the embedded
 // frontend into a single http.Handler.
-func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, metaStore metadata.MetadataStore) http.Handler {
+func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, metaStore metadata.MetadataStore, mailSender sender.Sender) http.Handler {
 	mux := http.NewServeMux()
 
 	// API routes (authenticated)
@@ -121,12 +189,14 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 		handleGetEmail(w, r, emailStore, metaStore)
 	})))
 	mux.Handle("POST /api/emails/{id}/read", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleMarkRead(w, r, metaStore)
+		handleMarkRead(w, r, emailStore, metaStore)
 	})))
 	mux.Handle("POST /api/emails/{id}/flag", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleMarkFlagged(w, r, metaStore)
+		handleMarkFlagged(w, r, emailStore, metaStore)
 	})))
-	mux.Handle("POST /api/emails/send", requireAuth(authenticator, http.HandlerFunc(handleSendEmail)))
+	mux.Handle("POST /api/emails/send", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleSendEmail(w, r, emailStore, mailSender)
+	})))
 	mux.Handle("POST /api/auth/logout", requireAuth(authenticator, http.HandlerFunc(handleLogout)))
 
 	// Auth routes (no middleware)
@@ -156,31 +226,40 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 	})
 }
 
-// bearerSubject extracts the "Authorization: Bearer <token>" header and, when
-// the token is present and valid, returns the authenticated subject.
-func bearerSubject(authenticator *auth.Authenticator, r *http.Request) (string, bool) {
+type claimsContextKey struct{}
+
+// bearerClaims extracts the "Authorization: Bearer <token>" header and, when
+// the token is present and valid, returns its claims.
+func bearerClaims(authenticator *auth.Authenticator, r *http.Request) (*auth.Claims, bool) {
 	const prefix = "Bearer "
 	header := r.Header.Get("Authorization")
 	if !strings.HasPrefix(header, prefix) {
-		return "", false
+		return nil, false
 	}
 	token := strings.TrimSpace(strings.TrimPrefix(header, prefix))
-	subject, err := authenticator.Validate(token)
+	claims, err := authenticator.ValidateClaims(token)
 	if err != nil {
-		return "", false
+		return nil, false
 	}
-	return subject, true
+	return claims, true
 }
 
 func requireAuth(authenticator *auth.Authenticator, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := bearerSubject(authenticator, r); !ok {
+		claims, ok := bearerClaims(authenticator, r)
+		if !ok {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="emissary"`)
 			writeError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
-		next.ServeHTTP(w, r)
+		ctx := context.WithValue(r.Context(), claimsContextKey{}, claims)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func currentClaims(r *http.Request) *auth.Claims {
+	claims, _ := r.Context().Value(claimsContextKey{}).(*auth.Claims)
+	return claims
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request, authenticator *auth.Authenticator) {
@@ -188,17 +267,20 @@ func handleLogin(w http.ResponseWriter, r *http.Request, authenticator *auth.Aut
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := decodeJSON(w, r, &req); err != nil || req.Username == "" || req.Password == "" {
+	// A blank password is intentionally allowed: the "any" user manager
+	// accepts any password, while the administrator is rejected separately.
+	if err := decodeJSON(w, r, &req); err != nil || strings.TrimSpace(req.Username) == "" {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 
-	if !authenticator.Authenticate(req.Username, req.Password) {
+	user, err := authenticator.AuthenticateUser(r.Context(), req.Username, req.Password)
+	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
-	token, expiresAt, err := authenticator.Issue(req.Username)
+	token, expiresAt, err := authenticator.IssueUser(user)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to issue token")
 		return
@@ -210,6 +292,9 @@ func handleLogin(w http.ResponseWriter, r *http.Request, authenticator *auth.Aut
 		"token":     token,
 		"tokenType": "Bearer",
 		"expiresAt": expiresAt,
+		"username":  user.ID,
+		"email":     user.Email,
+		"admin":     user.Admin,
 	})
 }
 
@@ -221,15 +306,82 @@ func handleLogout(w http.ResponseWriter, _ *http.Request) {
 }
 
 func handleAuthCheck(w http.ResponseWriter, r *http.Request, authenticator *auth.Authenticator) {
-	if subject, ok := bearerSubject(authenticator, r); ok {
-		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": subject})
+	if claims, ok := bearerClaims(authenticator, r); ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"authenticated": true,
+			"username":      claims.Subject,
+			"admin":         claims.Admin,
+		})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 }
 
+// normalizeAddress returns a lower-case mailbox address. Invalid values are
+// returned trimmed and lower-cased so filtering remains deterministic.
+func normalizeAddress(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if parsed, err := mail.ParseAddress(value); err == nil {
+		return strings.ToLower(strings.TrimSpace(parsed.Address))
+	}
+	return strings.ToLower(value)
+}
+
+// filterForClaims returns the mailbox an authenticated request is restricted
+// to. An empty filter means "all emails" and is only possible for an admin.
+func filterForClaims(claims *auth.Claims, requested string) string {
+	if claims == nil {
+		return ""
+	}
+	if claims.Admin {
+		return normalizeAddress(requested)
+	}
+	return normalizeAddress(claims.Subject)
+}
+
+func addressMatches(address email.Address, user string) bool {
+	return user != "" && normalizeAddress(address.Address) == user
+}
+
+// emailMatchesUser reports whether msg was sent by user or addressed to user
+// (directly, by cc, or by bcc).
+func emailMatchesUser(msg *email.Email, user string) bool {
+	if msg == nil || user == "" {
+		return false
+	}
+	if addressMatches(msg.From, user) {
+		return true
+	}
+	for _, list := range [][]email.Address{msg.To, msg.Cc, msg.Bcc} {
+		for _, address := range list {
+			if addressMatches(address, user) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// canAccessEmail applies the admin/user visibility rules to a single message.
+func canAccessEmail(claims *auth.Claims, msg *email.Email, requested string) bool {
+	if claims == nil {
+		return false
+	}
+	filter := filterForClaims(claims, requested)
+	if claims.Admin && filter == "" {
+		return true
+	}
+	return emailMatchesUser(msg, filter)
+}
+
 func handleListEmails(w http.ResponseWriter, r *http.Request, emailStore storage.Storage, metaStore metadata.MetadataStore) {
 	ctx := r.Context()
+	claims := currentClaims(r)
+	requested := r.URL.Query().Get("user")
+
 	emails, err := emailStore.ListAllEmails(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list emails")
@@ -244,6 +396,9 @@ func handleListEmails(w http.ResponseWriter, r *http.Request, emailStore storage
 
 	var response []EmailResponse
 	for _, email := range emails {
+		if !canAccessEmail(claims, email, requested) {
+			continue
+		}
 		meta := metaMap[email.ID]
 		fromAddr := ""
 		if email.From.Address != "" {
@@ -273,9 +428,10 @@ func handleListEmails(w http.ResponseWriter, r *http.Request, emailStore storage
 func handleGetEmail(w http.ResponseWriter, r *http.Request, emailStore storage.Storage, metaStore metadata.MetadataStore) {
 	ctx := r.Context()
 	id := r.PathValue("id")
+	claims := currentClaims(r)
 
 	// Find the email by ID
-	email, err := emailStore.GetEmail(ctx, id)
+	message, err := emailStore.GetEmail(ctx, id)
 	if err != nil {
 		if err == storage.ErrNotFound {
 			writeError(w, http.StatusNotFound, "email not found")
@@ -285,30 +441,60 @@ func handleGetEmail(w http.ResponseWriter, r *http.Request, emailStore storage.S
 		return
 	}
 
+	// Do not reveal the existence of messages outside the caller's visibility.
+	if !canAccessEmail(claims, message, r.URL.Query().Get("user")) {
+		writeError(w, http.StatusNotFound, "email not found")
+		return
+	}
+
 	meta, _ := metaStore.Get(ctx, id)
 	fromAddr := ""
-	if email.From.Address != "" {
-		fromAddr = email.From.Address
+	if message.From.Address != "" {
+		fromAddr = message.From.Address
 	}
 	toAddr := ""
-	if len(email.To) > 0 {
-		toAddr = email.To[0].Address
+	if len(message.To) > 0 {
+		toAddr = message.To[0].Address
 	}
 	writeJSON(w, http.StatusOK, EmailResponse{
-		ID:        email.ID,
+		ID:        message.ID,
 		From:      fromAddr,
 		To:        toAddr,
-		Subject:   email.Subject,
-		Body:      email.Text,
-		Timestamp: email.Date.Format(time.RFC3339),
+		Subject:   message.Subject,
+		Body:      message.Text,
+		Timestamp: message.Date.Format(time.RFC3339),
 		Read:      meta.Read,
 		Flagged:   meta.Flagged,
 	})
 }
 
-func handleMarkRead(w http.ResponseWriter, r *http.Request, metaStore metadata.MetadataStore) {
+// requireVisibleEmail loads an email and confirms the caller may access it.
+func requireVisibleEmail(w http.ResponseWriter, r *http.Request, emailStore storage.Storage) (*email.Email, bool) {
+	message, err := emailStore.GetEmail(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if err == storage.ErrNotFound {
+			writeError(w, http.StatusNotFound, "email not found")
+			return nil, false
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get email")
+		return nil, false
+	}
+	if !canAccessEmail(currentClaims(r), message, r.URL.Query().Get("user")) {
+		writeError(w, http.StatusNotFound, "email not found")
+		return nil, false
+	}
+	return message, true
+}
+
+func handleMarkRead(w http.ResponseWriter, r *http.Request, emailStore storage.Storage, metaStore metadata.MetadataStore) {
 	ctx := r.Context()
 	id := r.PathValue("id")
+
+	message, ok := requireVisibleEmail(w, r, emailStore)
+	if !ok {
+		return
+	}
+	id = message.ID
 
 	var req struct {
 		Read bool `json:"read"`
@@ -325,9 +511,15 @@ func handleMarkRead(w http.ResponseWriter, r *http.Request, metaStore metadata.M
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
 
-func handleMarkFlagged(w http.ResponseWriter, r *http.Request, metaStore metadata.MetadataStore) {
+func handleMarkFlagged(w http.ResponseWriter, r *http.Request, emailStore storage.Storage, metaStore metadata.MetadataStore) {
 	ctx := r.Context()
 	id := r.PathValue("id")
+
+	message, ok := requireVisibleEmail(w, r, emailStore)
+	if !ok {
+		return
+	}
+	id = message.ID
 
 	var req struct {
 		Flagged bool `json:"flagged"`
@@ -344,18 +536,60 @@ func handleMarkFlagged(w http.ResponseWriter, r *http.Request, metaStore metadat
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
 
-func handleSendEmail(w http.ResponseWriter, r *http.Request) {
+func handleSendEmail(w http.ResponseWriter, r *http.Request, emailStore storage.Storage, mailSender sender.Sender) {
+	claims := currentClaims(r)
 	var req SendEmailRequest
-	if err := decodeJSON(w, r, &req); err != nil || req.To == "" || req.Subject == "" || req.Body == "" {
+	if err := decodeJSON(w, r, &req); err != nil || strings.TrimSpace(req.To) == "" || req.Subject == "" || req.Body == "" {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 
-	// For now, we'll just log the email (in production, use AWS SES)
-	log.Printf("Sending email to: %s, Subject: %s", req.To, req.Subject)
+	from := ""
+	if claims != nil && claims.Admin {
+		from = strings.TrimSpace(req.From)
+		// When replying, an admin defaults to the address the original
+		// message was addressed to (i.e. the user whose inbox it is in).
+		if from == "" && req.ReplyToID != "" {
+			if original, err := emailStore.GetEmail(r.Context(), req.ReplyToID); err == nil && len(original.To) > 0 {
+				from = original.To[0].Address
+			}
+		}
+	} else if claims != nil {
+		// Ordinary users can only send as themselves.
+		from = claims.Subject
+	}
 
-	// TODO: Implement actual SES sending
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Email queued for sending"})
+	if from != "" {
+		parsed, err := mail.ParseAddress(from)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid from address")
+			return
+		}
+		from = parsed.Address
+	}
+	if from == "" {
+		from = mailSender.From()
+	}
+
+	to, err := mail.ParseAddress(strings.TrimSpace(req.To))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid to address")
+		return
+	}
+
+	message := &email.Email{
+		From:    email.Address{Address: from},
+		To:      []email.Address{{Address: to.Address}},
+		Subject: strings.TrimSpace(req.Subject),
+		Date:    time.Now().UTC(),
+		Text:    req.Body,
+	}
+	if err := mailSender.Send(r.Context(), message); err != nil {
+		log.Printf("send email: %v", err)
+		writeError(w, http.StatusBadGateway, "could not send email")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Email sent"})
 }
 
 func serveFrontend(w http.ResponseWriter, r *http.Request) {

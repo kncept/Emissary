@@ -78,8 +78,9 @@ export async function logout(): Promise<void> {
   }
 }
 
-export async function getEmails(): Promise<Email[]> {
-  const response = await fetchWithAuth(`${API_BASE}/emails`);
+export async function getEmails(user?: string): Promise<Email[]> {
+  const query = user?.trim() ? `?user=${encodeURIComponent(user.trim())}` : '';
+  const response = await fetchWithAuth(`${API_BASE}/emails${query}`);
   return response.json();
 }
 

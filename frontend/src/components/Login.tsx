@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { login } from '../api';
+import type { AuthState } from '../types';
 
 interface LoginProps {
-  onAuthenticated: () => void;
+  onAuthenticated: (state: AuthState) => void;
 }
 
 export default function Login({ onAuthenticated }: LoginProps) {
@@ -23,7 +24,12 @@ export default function Login({ onAuthenticated }: LoginProps) {
       // Tell the app we're now authenticated, then go home. The auth state
       // update and navigation are batched, so the home route renders the
       // logged-in view instead of bouncing back to /login.
-      onAuthenticated();
+      onAuthenticated({
+        authenticated: true,
+        username: result.username,
+        email: result.email,
+        admin: result.admin,
+      });
       navigate('/');
     } else {
       setError(result.error || 'Login failed');

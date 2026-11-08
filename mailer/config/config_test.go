@@ -140,14 +140,17 @@ func TestLoad_MissingUsername(t *testing.T) {
 	}
 }
 
-func TestLoad_MissingPassword(t *testing.T) {
+func TestLoad_BlankPasswordAllowed(t *testing.T) {
 	os.Setenv("EMISSARY_USERNAME", "user")
 	os.Unsetenv("EMISSARY_PASSWORD")
 	defer cleanupEnv()
 
-	_, err := Load(context.Background())
-	if err == nil {
-		t.Error("Load() should error when password is missing")
+	cfg, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Server.Password != "" {
+		t.Errorf("Server.Password = %q, want empty", cfg.Server.Password)
 	}
 }
 
@@ -327,7 +330,7 @@ func TestServerConfig_Validate(t *testing.T) {
 	}{
 		{"valid", ServerConfig{Username: "u", Password: "p"}, false},
 		{"missing username", ServerConfig{Password: "p"}, true},
-		{"missing password", ServerConfig{Username: "u"}, true},
+		{"blank password", ServerConfig{Username: "u"}, false},
 		{"missing both", ServerConfig{}, true},
 	}
 	for _, tt := range tests {
@@ -344,14 +347,13 @@ func TestServerConfig_Validate_MultipleErrors(t *testing.T) {
 	cfg := ServerConfig{}
 	err := cfg.Validate()
 	if err == nil {
-		t.Fatal("Validate() should return error for missing username and password")
+		t.Fatal("Validate() should return error for missing username")
 	}
-	// Should contain both errors
 	if !strings.Contains(err.Error(), "username") {
 		t.Errorf("error should mention username, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "password") {
-		t.Errorf("error should mention password, got: %v", err)
+	if strings.Contains(err.Error(), "password") {
+		t.Errorf("blank passwords should be allowed, got: %v", err)
 	}
 }
 
@@ -479,6 +481,10 @@ func cleanupEnv() {
 	os.Unsetenv("EMISSARY_SES_REGION")
 	os.Unsetenv("EMISSARY_DDB_TABLE")
 	os.Unsetenv("EMISSARY_METADATA_REGION")
+	os.Unsetenv("EMISSARY_USER_MANAGER")
+	os.Unsetenv("EMISSARY_DOMAIN")
+	os.Unsetenv("EMISSARY_USER_TABLE")
+	os.Unsetenv("EMISSARY_USER_REGION")
 	os.Unsetenv("AWS_REGION")
 	envutil.ClearCache()
 }

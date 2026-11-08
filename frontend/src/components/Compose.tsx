@@ -1,10 +1,16 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { sendEmail } from '../api';
+import { getEmail, sendEmail } from '../api';
 
-export default function Compose() {
+interface ComposeProps {
+  admin?: boolean;
+  currentUser?: string;
+}
+
+export default function Compose({ admin = false, currentUser }: ComposeProps) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [from, setFrom] = useState(admin ? '' : currentUser || '');
   const [to, setTo] = useState('');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
@@ -13,16 +19,45 @@ export default function Compose() {
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
-    // If replying to an email, we could load the original email here
-    // For now, just handle the case where we might pre-fill from a reply
-  }, [id]);
+    if (!id) {
+      setFrom(admin ? '' : currentUser || '');
+      return;
+    }
+
+    let active = true;
+    getEmail(id)
+      .then((original) => {
+        if (!active) return;
+        setTo(original.from);
+        setSubject(original.subject ? `Re: ${original.subject}` : 'Re:');
+        if (admin) {
+          // Reply as the user whose inbox the original message is in.
+          setFrom(original.to);
+        } else {
+          setFrom(currentUser || '');
+        }
+      })
+      .catch(() => {
+        if (active) setError('Failed to load the email being replied to');
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [id, admin, currentUser]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSending(true);
 
-    const result = await sendEmail({ to, subject, body });
+    const result = await sendEmail({
+      from: from || undefined,
+      to,
+      subject,
+      body,
+      replyToId: id,
+    });
     if (result.success) {
       setSuccess(true);
       setTimeout(() => navigate('/'), 1500);
@@ -44,6 +79,19 @@ export default function Compose() {
         {error && <div className="error-message">{error}</div>}
         {success && <div className="success-message">Email sent successfully!</div>}
         <form onSubmit={handleSubmit} className="compose-form">
+          {admin && (
+            <div className="form-group">
+              <label htmlFor="from">From</label>
+              <input
+                id="from"
+                type="email"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+                placeholder="Send as any user"
+                disabled={sending}
+              />
+            </div>
+          )}
           <div className="form-group">
             <label htmlFor="to">To</label>
             <input

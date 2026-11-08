@@ -26,13 +26,12 @@ type ServerConfig struct {
 }
 
 // Validate checks that the server configuration is complete and consistent.
+// A blank password is valid: it disables the built-in administrator login
+// without preventing other user managers from working.
 func (c *ServerConfig) Validate() error {
 	var errs []error
 	if c.Username == "" {
 		errs = append(errs, errors.New("username is not configured (set EMISSARY_USERNAME)"))
-	}
-	if c.Password == "" {
-		errs = append(errs, errors.New("password is not configured (set EMISSARY_PASSWORD)"))
 	}
 	return errors.Join(errs...)
 }
@@ -95,12 +94,51 @@ func (c *MetadataConfig) Validate() error {
 	return errors.Join(errs...)
 }
 
+// UserManagerConfig selects the authentication backend for ordinary users.
+// The AUTH_USERNAME/AUTH_PASSWORD administrator is configured separately and
+// is available with every backend.
+type UserManagerConfig struct {
+	Type   string // "none", "any", "ddb" or "ldap"
+	Domain string // receiving domain for the "any" backend
+	Region string // AWS region for the "ddb" backend
+
+	DdbTable string
+
+	LDAPURL          string
+	LDAPBindDN       string
+	LDAPBindPassword string
+	LDAPBaseDN       string
+	LDAPUserFilter   string
+	LDAPCacheTTL     string
+}
+
+// Validate checks that the user manager configuration is complete.
+func (c *UserManagerConfig) Validate() error {
+	var errs []error
+	switch c.Type {
+	case "", "none", "any", "ddb", "dynamodb", "ldap":
+	default:
+		errs = append(errs, fmt.Errorf("unknown user manager type %q (want none, any, ddb or ldap)", c.Type))
+	}
+	if c.Type == "any" && c.Domain == "" {
+		errs = append(errs, errors.New("user manager any requires a domain (set EMISSARY_DOMAIN)"))
+	}
+	if (c.Type == "ddb" || c.Type == "dynamodb") && c.DdbTable == "" {
+		errs = append(errs, errors.New("user manager ddb requires a table (set EMISSARY_USER_TABLE)"))
+	}
+	if c.Type == "ldap" && c.LDAPURL == "" {
+		errs = append(errs, errors.New("user manager ldap requires a server URL (set EMISSARY_LDAP_URL)"))
+	}
+	return errors.Join(errs...)
+}
+
 // Config is the complete runtime configuration for cmd/frontend.
 type Config struct {
-	Server   ServerConfig
-	Storage  StorageConfig
-	Sender   SenderConfig
-	Metadata MetadataConfig
+	Server      ServerConfig
+	Storage     StorageConfig
+	Sender      SenderConfig
+	Metadata    MetadataConfig
+	UserManager UserManagerConfig
 
 	// AWSRegion is the default AWS region used when a specific service
 	// region is not configured.
@@ -115,6 +153,7 @@ func (c *Config) Validate() error {
 		c.Storage.Validate(),
 		c.Sender.Validate(),
 		c.Metadata.Validate(),
+		c.UserManager.Validate(),
 	)
 }
 
@@ -126,10 +165,10 @@ func Load(ctx context.Context) (*Config, error) {
 
 	cfg := &Config{
 		Server: ServerConfig{
-			ListenAddr: listenAddr(ctx),
-			Username:   firstEnv(ctx, "EMISSARY_USERNAME", "AUTH_USERNAME", "USERNAME"),
-			Password:   firstEnv(ctx, "EMISSARY_PASSWORD", "AUTH_PASSWORD", "PASSWORD"),
-			JWTSecret:  firstEnv(ctx, "EMISSARY_JWT_SECRET", "JWT_SECRET"),
+			ListenAddr:  listenAddr(ctx),
+			Username:    firstEnv(ctx, "EMISSARY_USERNAME", "AUTH_USERNAME", "USERNAME"),
+			Password:    firstEnv(ctx, "EMISSARY_PASSWORD", "AUTH_PASSWORD", "PASSWORD"),
+			JWTSecret:   firstEnv(ctx, "EMISSARY_JWT_SECRET", "JWT_SECRET"),
 			JWTAudience: firstEnv(ctx, "EMISSARY_JWT_AUDIENCE", "JWT_AUDIENCE"),
 			JWTIssuer:   firstEnv(ctx, "EMISSARY_JWT_ISSUER", "JWT_ISSUER"),
 		},
@@ -147,6 +186,18 @@ func Load(ctx context.Context) (*Config, error) {
 			DdbTable: firstEnv(ctx, "EMISSARY_DDB_TABLE", "DDB_TABLE"),
 			FilePath: firstEnv(ctx, "EMISSARY_METADATA_FILE", "METADATA_FILE"),
 			Region:   firstEnv(ctx, "EMISSARY_METADATA_REGION", "METADATA_REGION"),
+		},
+		UserManager: UserManagerConfig{
+			Type:             strings.ToLower(strings.TrimSpace(firstEnv(ctx, "EMISSARY_USER_MANAGER", "USER_MANAGER"))),
+			Domain:           strings.ToLower(strings.TrimSpace(firstEnv(ctx, "EMISSARY_DOMAIN", "EMAIL_DOMAIN"))),
+			DdbTable:         firstEnv(ctx, "EMISSARY_USER_TABLE", "USER_TABLE"),
+			Region:           firstEnv(ctx, "EMISSARY_USER_REGION", "USER_REGION"),
+			LDAPURL:          firstEnv(ctx, "EMISSARY_LDAP_URL", "LDAP_URL"),
+			LDAPBindDN:       firstEnv(ctx, "EMISSARY_LDAP_BIND_DN", "LDAP_BIND_DN"),
+			LDAPBindPassword: firstEnv(ctx, "EMISSARY_LDAP_BIND_PASSWORD", "LDAP_BIND_PASSWORD"),
+			LDAPBaseDN:       firstEnv(ctx, "EMISSARY_LDAP_BASE_DN", "LDAP_BASE_DN"),
+			LDAPUserFilter:   firstEnv(ctx, "EMISSARY_LDAP_USER_FILTER", "LDAP_USER_FILTER"),
+			LDAPCacheTTL:     firstEnv(ctx, "EMISSARY_LDAP_CACHE_TTL", "LDAP_CACHE_TTL"),
 		},
 		AWSRegion: awsRegion,
 	}
@@ -196,6 +247,14 @@ func Load(ctx context.Context) (*Config, error) {
 	}
 	if cfg.Metadata.Region == "" {
 		cfg.Metadata.Region = cfg.AWSRegion
+	}
+
+	// User manager defaults
+	if cfg.UserManager.Type == "" {
+		cfg.UserManager.Type = "none"
+	}
+	if cfg.UserManager.Region == "" {
+		cfg.UserManager.Region = cfg.AWSRegion
 	}
 
 	if err := cfg.Validate(); err != nil {

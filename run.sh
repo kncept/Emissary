@@ -106,9 +106,10 @@ run() {
 	# Build first
 	build
 
-	# Generate credentials (only if not already set)
+	# Generate credentials only when the variable is unset. An explicitly
+	# blank AUTH_PASSWORD disables the administrator login.
 	USERNAME="${AUTH_USERNAME:-Emissary}"
-	if [[ -z "${AUTH_PASSWORD:-}" ]]; then
+	if [[ -z "${AUTH_PASSWORD+x}" ]]; then
 		PASSWORD=$(generate_guid)
 	else
 		PASSWORD="$AUTH_PASSWORD"
@@ -128,7 +129,11 @@ run() {
 
 	echo "Starting Emissary frontend..."
 	echo "  Username: $USERNAME"
-	echo "  Password: $PASSWORD"
+	if [[ -z "$PASSWORD" ]]; then
+		echo "  Password: (admin login disabled)"
+	else
+		echo "  Password: $PASSWORD"
+	fi
 	echo "  JWT Secret: $JWT_SECRET"
 	echo "  S3 Bucket: $S3_BUCKET"
 	echo "  S3 Prefix: $S3_PREFIX"

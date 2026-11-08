@@ -41,7 +41,11 @@ func (s *AwsSesSender) From() string {
 }
 
 func (s *AwsSesSender) Send(ctx context.Context, message *email.Email) error {
-	if s.from == "" {
+	source := s.from
+	if message.From.Address != "" {
+		source = message.From.Address
+	}
+	if source == "" {
 		return errors.New("sender address is not configured (set EMISSARY_SES_FROM)")
 	}
 
@@ -57,7 +61,7 @@ func (s *AwsSesSender) Send(ctx context.Context, message *email.Email) error {
 	}
 
 	_, err := s.client.SendEmail(ctx, &ses.SendEmailInput{
-		Source: aws.String(s.from),
+		Source: aws.String(source),
 		Destination: &types.Destination{
 			ToAddresses:  addressStrings(message.To),
 			CcAddresses:  addressStrings(message.Cc),

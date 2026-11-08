@@ -364,6 +364,9 @@ async function emailClientStack(
       // Configuration consumed by mailer/config (and the current frontend).
       EMISSARY_USERNAME: authUsername,
       AUTH_USERNAME: authUsername,
+      EMISSARY_DOMAIN: emissaryDomain,
+      EMAIL_DOMAIN: emissaryDomain,
+      EMISSARY_USER_MANAGER: env.EMISSARY_USER_MANAGER || 'none',
       EMISSARY_STORAGE: 's3',
       EMISSARY_S3_BUCKET: inboundEmailBucket.bucketName,
       S3_BUCKET: inboundEmailBucket.bucketName,

@@ -105,7 +105,7 @@ export default function EmailView() {
           >
             {email.flagged ? 'Unflag' : 'Flag'}
           </button>
-          <Link to="/compose" className="btn btn-secondary">
+          <Link to={`/compose/${email.id}`} className="btn btn-secondary">
             Reply
           </Link>
           <Link to="/" className="btn btn-secondary">

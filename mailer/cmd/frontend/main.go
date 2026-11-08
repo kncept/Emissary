@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 	"github.com/kncept/Emissary/mailer/awsutil"
 	"github.com/kncept/Emissary/mailer/config"
 	"github.com/kncept/Emissary/mailer/handler"
@@ -36,6 +36,21 @@ func main() {
 		MetadataRegion: cfg.Metadata.Region,
 		JWTAudience:    cfg.Server.JWTAudience,
 		JWTIssuer:      cfg.Server.JWTIssuer,
+
+		UserManagerType:  cfg.UserManager.Type,
+		UserDomain:       cfg.UserManager.Domain,
+		UserTable:        cfg.UserManager.DdbTable,
+		UserRegion:       cfg.UserManager.Region,
+		LDAPURL:          cfg.UserManager.LDAPURL,
+		LDAPBindDN:       cfg.UserManager.LDAPBindDN,
+		LDAPBindPassword: cfg.UserManager.LDAPBindPassword,
+		LDAPBaseDN:       cfg.UserManager.LDAPBaseDN,
+		LDAPUserFilter:   cfg.UserManager.LDAPUserFilter,
+		LDAPCacheTTL:     cfg.UserManager.LDAPCacheTTL,
+
+		SenderType:   cfg.Sender.Type,
+		SenderFrom:   cfg.Sender.From,
+		SenderRegion: cfg.Sender.Region,
 	}
 
 	h, err := handler.New(handlerCfg)

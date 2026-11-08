@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
+import type { AuthState } from './types';
 import { checkAuth, logout as apiLogout } from './api';
 import Login from './components/Login';
 import EmailList from './components/EmailList';
@@ -9,27 +10,29 @@ import Layout from './components/Layout';
 import './App.css';
 
 function App() {
-  const [authenticated, setAuthenticated] = useState(false);
+  const [auth, setAuth] = useState<AuthState>({ authenticated: false });
   const [checkingAuth, setCheckingAuth] = useState(true);
 
   useEffect(() => {
-    checkAuth().then(({ authenticated }) => {
-      setAuthenticated(authenticated);
+    checkAuth().then((state) => {
+      setAuth(state);
       setCheckingAuth(false);
     }).catch(() => {
-      setAuthenticated(false);
+      setAuth({ authenticated: false });
       setCheckingAuth(false);
     });
   }, []);
 
-  const handleAuthenticated = () => {
-    setAuthenticated(true);
+  const handleAuthenticated = (state: AuthState) => {
+    setAuth({ ...state, authenticated: true });
   };
 
   const handleLogout = async () => {
     await apiLogout();
-    setAuthenticated(false);
+    setAuth({ authenticated: false });
   };
+
+  const authenticated = auth.authenticated;
 
   if (checkingAuth) {
     return (
@@ -55,10 +58,10 @@ function App() {
             authenticated ? (
               <Layout onLogout={handleLogout}>
                 <Routes>
-                  <Route path="/" element={<EmailList />} />
+                  <Route path="/" element={<EmailList admin={auth.admin} />} />
                   <Route path="/email/:id" element={<EmailView />} />
-                  <Route path="/compose" element={<Compose />} />
-                  <Route path="/compose/:id" element={<Compose />} />
+                  <Route path="/compose" element={<Compose admin={auth.admin} currentUser={auth.username} />} />
+                  <Route path="/compose/:id" element={<Compose admin={auth.admin} currentUser={auth.username} />} />
                 </Routes>
               </Layout>
             ) : (

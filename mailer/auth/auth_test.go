@@ -3,8 +3,11 @@ package auth
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/kncept/Emissary/mailer/usermanager"
 )
 
 func TestAuthenticator_Authenticate(t *testing.T) {
@@ -214,6 +217,48 @@ func TestAuthenticator_Validate_AudienceAndIssuerMatch(t *testing.T) {
 	}
 	if subject != "user" {
 		t.Errorf("subject = %q, want %q", subject, "user")
+	}
+}
+
+func TestAuthenticator_IssueUser_AdminClaim(t *testing.T) {
+	a := New("admin", "pass", "secret", time.Hour, "", "")
+
+	adminToken, _, err := a.IssueUser(&usermanager.User{ID: "admin", Admin: true})
+	if err != nil {
+		t.Fatalf("IssueUser() error = %v", err)
+	}
+	claims, err := a.ValidateClaims(adminToken)
+	if err != nil {
+		t.Fatalf("ValidateClaims() error = %v", err)
+	}
+	if claims.Subject != "admin" || !claims.Admin {
+		t.Errorf("admin claims = %+v, want subject admin and admin true", claims)
+	}
+
+	userToken, _, err := a.IssueUser(&usermanager.User{ID: "alice@example.com"})
+	if err != nil {
+		t.Fatalf("IssueUser() error = %v", err)
+	}
+	claims, err = a.ValidateClaims(userToken)
+	if err != nil {
+		t.Fatalf("ValidateClaims() error = %v", err)
+	}
+	if claims.Subject != "alice@example.com" || claims.Admin {
+		t.Errorf("user claims = %+v, want non-admin subject", claims)
+	}
+
+	// The admin claim must not be emitted for ordinary users.
+	parts := strings.Split(userToken, ".")
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if _, ok := raw["admin"]; ok {
+		t.Errorf("admin claim should be omitted for ordinary users, got %v", raw)
 	}
 }
 

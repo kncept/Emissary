@@ -4,25 +4,37 @@ import { formatDistanceToNow, parseISO } from 'date-fns';
 import { getEmails } from '../api';
 import type { Email } from '../types';
 
-export default function EmailList() {
+interface EmailListProps {
+  admin?: boolean;
+}
+
+export default function EmailList({ admin = false }: EmailListProps) {
   const [emails, setEmails] = useState<Email[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [userFilter, setUserFilter] = useState('');
+  const [appliedFilter, setAppliedFilter] = useState('');
 
   useEffect(() => {
-    loadEmails();
-  }, []);
+    loadEmails(appliedFilter);
+  }, [appliedFilter]);
 
-  const loadEmails = async () => {
+  const loadEmails = async (filter: string) => {
     try {
       setLoading(true);
-      const data = await getEmails();
+      setError('');
+      const data = await getEmails(admin ? filter : undefined);
       setEmails(data);
     } catch (err) {
       setError('Failed to load emails');
     } finally {
       setLoading(false);
     }
+  };
+
+  const applyFilter = (e: React.FormEvent) => {
+    e.preventDefault();
+    setAppliedFilter(userFilter.trim());
   };
 
   const formatDate = (dateStr: string) => {
@@ -63,6 +75,33 @@ export default function EmailList() {
           Compose
         </Link>
       </div>
+      {admin && (
+        <form className="admin-filter" onSubmit={applyFilter}>
+          <label htmlFor="user-filter">User filter</label>
+          <input
+            id="user-filter"
+            type="email"
+            value={userFilter}
+            onChange={(e) => setUserFilter(e.target.value)}
+            placeholder="All users"
+          />
+          <button type="submit" className="btn btn-secondary">
+            Apply
+          </button>
+          {appliedFilter && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setUserFilter('');
+                setAppliedFilter('');
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </form>
+      )}
       {emails.length === 0 ? (
         <div className="empty-state">
           <p>No emails yet</p>
