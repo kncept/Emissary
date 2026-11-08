@@ -5,26 +5,18 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/kncept/Emissary/mailer/email"
 )
 
 type S3Storage struct {
 	client   *s3.Client
 	bucket   string
 	prefix   string
-}
-
-type Email struct {
-	ID        string
-	From      string
-	To        string
-	Subject   string
-	Body      string
-	Timestamp string
-	Raw       string
 }
 
 func NewS3Storage(bucket, prefix, region string) (*S3Storage, error) {
@@ -39,8 +31,9 @@ func NewS3Storage(bucket, prefix, region string) (*S3Storage, error) {
 	}, nil
 }
 
-func (s *S3Storage) ListEmails(ctx context.Context) ([]Email, error) {
-	var emails []Email
+// ListAllEmails implements the Storage interface.
+func (s *S3Storage) ListAllEmails(ctx context.Context) ([]*email.Email, error) {
+	var emails []*email.Email
 	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(s.bucket),
 		Prefix: aws.String(s.prefix),
@@ -66,7 +59,85 @@ func (s *S3Storage) ListEmails(ctx context.Context) ([]Email, error) {
 	return emails, nil
 }
 
-func (s *S3Storage) GetEmail(ctx context.Context, key string) (Email, error) {
+// GetEmail implements the Storage interface.
+func (s *S3Storage) GetEmail(ctx context.Context, id string) (*email.Email, error) {
+	// The id could be a full key or just the ID
+	key := id
+	if !strings.HasPrefix(key, s.prefix) {
+		key = s.prefix + "/" + key
+	}
+	if !strings.HasSuffix(key, ".eml") {
+		key = key + ".eml"
+	}
+
+	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get object: %w", err)
+	}
+	defer output.Body.Close()
+
+	body, err := io.ReadAll(output.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read body: %w", err)
+	}
+
+	parsedEmail, err := email.Parse(id, strings.NewReader(string(body)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse email: %w", err)
+	}
+	return parsedEmail, nil
+}
+
+// Name returns the storage name.
+func (s *S3Storage) Name() string {
+	return "S3Storage"
+}
+
+// ListEmails is kept for backward compatibility.
+func (s *S3Storage) ListEmails(ctx context.Context) ([]Email, error) {
+	emails, err := s.ListAllEmails(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []Email
+	for _, e := range emails {
+		// Convert to legacy Email type
+		from := ""
+		if len(e.From.Address) > 0 {
+			from = e.From.Address
+		}
+		to := ""
+		if len(e.To) > 0 {
+			to = e.To[0].Address
+		}
+		result = append(result, Email{
+			ID:        e.ID,
+			From:      from,
+			To:        to,
+			Subject:   e.Subject,
+			Body:      e.Text,
+			Timestamp: e.Date.Format(time.RFC3339),
+		})
+	}
+	return result, nil
+}
+
+// Email is the legacy email type for backward compatibility.
+type Email struct {
+	ID        string
+	From      string
+	To        string
+	Subject   string
+	Body      string
+	Timestamp string
+	Raw       string
+}
+
+func (s *S3Storage) GetEmailLegacy(ctx context.Context, key string) (Email, error) {
 	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),

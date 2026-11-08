@@ -10,27 +10,28 @@ import (
 	"time"
 
 	"github.com/kncept/Emissary/mailer/auth"
+	"github.com/kncept/Emissary/mailer/handler"
+	"github.com/kncept/Emissary/mailer/storage"
 )
 
-func init() {
-	// The auth handlers reference the package-level authenticator.
-	authenticator = auth.New("user", "pass", "secret", 24*time.Hour)
-}
+func newTestHandler() (http.Handler, *auth.Authenticator) {
+	authenticator := auth.New("user", "pass", "secret", 24*time.Hour)
 
-// newTestHandler mirrors the auth-related routes from main() so the handlers
-// can be exercised through real routing and middleware.
-func newTestHandler() http.Handler {
-	mux := http.NewServeMux()
+	cfg := handler.HandlerConfig{
+		AuthUser:     "user",
+		AuthPass:     "pass",
+		JWTSecret:    "secret",
+		JWTSecretTTL: 24 * time.Hour,
+		MetadataType: "memory",
+		Storage:      storage.NewMemoryStorage(),
+	}
 
-	mux.Handle("/api/emails", requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"emails": []any{}})
-	})))
+	h, err := handler.New(cfg)
+	if err != nil {
+		panic(err)
+	}
 
-	mux.HandleFunc("POST /api/auth/login", handleLogin)
-	mux.HandleFunc("GET /api/auth/check", handleAuthCheck)
-	mux.HandleFunc("POST /api/auth/logout", handleLogout)
-
-	return mux
+	return h, authenticator
 }
 
 func doRequest(r http.Handler, method, target, body string, token string) *httptest.ResponseRecorder {
@@ -51,7 +52,8 @@ func doRequest(r http.Handler, method, target, body string, token string) *httpt
 }
 
 func TestLogin_IssuesJWT(t *testing.T) {
-	w := doRequest(newTestHandler(), http.MethodPost, "/api/auth/login",
+	h, authenticator := newTestHandler()
+	w := doRequest(h, http.MethodPost, "/api/auth/login",
 		`{"username":"user","password":"pass"}`, "")
 
 	if w.Code != http.StatusOK {
@@ -78,7 +80,8 @@ func TestLogin_IssuesJWT(t *testing.T) {
 }
 
 func TestLogin_InvalidCredentials(t *testing.T) {
-	w := doRequest(newTestHandler(), http.MethodPost, "/api/auth/login",
+	h, _ := newTestHandler()
+	w := doRequest(h, http.MethodPost, "/api/auth/login",
 		`{"username":"user","password":"wrong"}`, "")
 
 	if w.Code != http.StatusUnauthorized {
@@ -87,7 +90,8 @@ func TestLogin_InvalidCredentials(t *testing.T) {
 }
 
 func TestLogin_InvalidJSON(t *testing.T) {
-	w := doRequest(newTestHandler(), http.MethodPost, "/api/auth/login",
+	h, _ := newTestHandler()
+	w := doRequest(h, http.MethodPost, "/api/auth/login",
 		`not json`, "")
 
 	if w.Code != http.StatusBadRequest {
@@ -96,8 +100,9 @@ func TestLogin_InvalidJSON(t *testing.T) {
 }
 
 func TestAuthMiddleware_ValidToken(t *testing.T) {
+	h, authenticator := newTestHandler()
 	token, _, _ := authenticator.Issue("user")
-	w := doRequest(newTestHandler(), http.MethodGet, "/api/emails", "", token)
+	w := doRequest(h, http.MethodGet, "/api/emails", "", token)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -105,7 +110,8 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 }
 
 func TestAuthMiddleware_InvalidToken(t *testing.T) {
-	w := doRequest(newTestHandler(), http.MethodGet, "/api/emails", "", "invalid-token")
+	h, _ := newTestHandler()
+	w := doRequest(h, http.MethodGet, "/api/emails", "", "invalid-token")
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
@@ -113,7 +119,8 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 }
 
 func TestAuthMiddleware_MissingToken(t *testing.T) {
-	w := doRequest(newTestHandler(), http.MethodGet, "/api/emails", "", "")
+	h, _ := newTestHandler()
+	w := doRequest(h, http.MethodGet, "/api/emails", "", "")
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
@@ -121,8 +128,9 @@ func TestAuthMiddleware_MissingToken(t *testing.T) {
 }
 
 func TestAuthCheck_ValidToken(t *testing.T) {
+	h, authenticator := newTestHandler()
 	token, _, _ := authenticator.Issue("user")
-	w := doRequest(newTestHandler(), http.MethodGet, "/api/auth/check", "", token)
+	w := doRequest(h, http.MethodGet, "/api/auth/check", "", token)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
@@ -140,7 +148,8 @@ func TestAuthCheck_ValidToken(t *testing.T) {
 }
 
 func TestAuthCheck_NoToken(t *testing.T) {
-	w := doRequest(newTestHandler(), http.MethodGet, "/api/auth/check", "", "")
+	h, _ := newTestHandler()
+	w := doRequest(h, http.MethodGet, "/api/auth/check", "", "")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)

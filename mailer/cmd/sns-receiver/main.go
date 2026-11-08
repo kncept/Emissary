@@ -11,4 +11,6 @@ func main() {
 	panic("Must run as a lambda")
 }
 
-func runAsAwsLambda() {}
+func runAsAwsLambda() {
+	panic("unimplemented")
+}
