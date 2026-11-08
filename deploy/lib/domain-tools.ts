@@ -13,22 +13,30 @@ export type HostedZoneInfo = {
     name: string,
 }
 
-export async function matchingHostedZone(lambdaHostname: string, region: string): Promise<HostedZoneInfo> {
+export async function matchingHostedZone(fqdn: string, region: string, matchEntireFqdn?: boolean): Promise<HostedZoneInfo> {
     const hostedZones = await listDomainNames(region)
-    hostedZones.sort((a: HostedZoneInfo, b: HostedZoneInfo) : number => {
+    hostedZones.sort((a: HostedZoneInfo, b: HostedZoneInfo): number => {
         return b.name.length - a.name.length
     })
-    
-    for(let i = 0; i < hostedZones.length; i++) {
+
+    for (let i = 0; i < hostedZones.length; i++) {
         const hostedZone = hostedZones[i]
-        if (lambdaHostname.endsWith(`.${hostedZone.name}`)) {
+        if (fqdn.endsWith(`.${hostedZone.name}`)) {
             return hostedZone
         }
     }
-    throw new Error(`No matching hosted zone for ${lambdaHostname}`)
+    if (matchEntireFqdn) {
+        for (let i = 0; i < hostedZones.length; i++) {
+            const hostedZone = hostedZones[i]
+            if (fqdn ===`${hostedZone.name}`) {
+                return hostedZone
+            }
+        }
+    }
+    throw new Error(`No matching hosted zone for ${fqdn}`)
 }
 
-export async function listDomainNames(region: string) : Promise<Array<HostedZoneInfo>> {
+export async function listDomainNames(region: string): Promise<Array<HostedZoneInfo>> {
     const client = new Route53Client({
         region: region
     })
@@ -41,7 +49,8 @@ export async function listDomainNames(region: string) : Promise<Array<HostedZone
         if (id.startsWith('/hostedzone/')) id = id.substring('/hostedzone/'.length)
         let name = hz.Name!
         if (name.endsWith('.')) name = name.substring(0, name.length - 1)
-        return {id, name} as HostedZoneInfo})
+        return { id, name } as HostedZoneInfo
+    })
 }
 
 // export function extractHostedZoneFromHostname(fqdn: string) : string {

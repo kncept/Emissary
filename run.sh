@@ -14,6 +14,8 @@ Commands:
   build:lambda  Build only the Lambda binary (bootstrap), for linux/amd64
   test          Run the test suite (Go and TypeScript)
   run           Build and run the frontend server
+  deploy:init   Initialize the deploy directory (run npm ci)
+  deploy:list   List CDK stacks (runs deploy:init then cdk ls)
 EOF
 }
 
@@ -84,14 +86,36 @@ generate_guid() {
 	fi
 }
 
+# Deploy helpers
+deploy_init() {
+	(
+		cd deploy
+		npm install
+	)
+}
+
+deploy_list() {
+	deploy_init
+	(
+		cd deploy
+		npm run cdk -- ls
+	)
+}
+
 run() {
 	# Build first
 	build
 
-	# Generate credentials
-	USERNAME="Emissary"
-	PASSWORD=$(generate_guid)
-	JWT_SECRET=$(generate_guid)
+	# Generate credentials (only if not already set)
+	USERNAME="${AUTH_USERNAME:-Emissary}"
+	if [[ -z "${AUTH_PASSWORD:-}" ]]; then
+		PASSWORD=$(generate_guid)
+	else
+		PASSWORD="$AUTH_PASSWORD"
+	fi
+	if [[ -z "${JWT_SECRET:-}" ]]; then
+		JWT_SECRET=$(generate_guid)
+	fi
 
 	export AUTH_USERNAME="$USERNAME"
 	export AUTH_PASSWORD="$PASSWORD"
@@ -132,6 +156,12 @@ main() {
 		;;
 	run)
 		run "${@:2}"
+		;;
+	deploy:init)
+		deploy_init
+		;;
+	deploy:list)
+		deploy_list
 		;;
 	"" | -h | --help | help)
 		usage

@@ -49,7 +49,7 @@ const app = new cdk.App()
 
 // javascript workaround - need access to async code in the top level function
 async function init() {
-  const hostedZoneInfo = await matchingHostedZone(emissaryDomain, awsRegion)
+  const hostedZoneInfo = await matchingHostedZone(emissaryDomain, awsRegion, true)
 
   emailIdStack(hostedZoneInfo)
   const inboundEmailBucket = emailInStack(hostedZoneInfo)
