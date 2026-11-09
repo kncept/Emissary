@@ -63,7 +63,7 @@ async function init() {
 function emailIdStack(
   hostedZoneInfo: HostedZoneInfo,
 ) {
-  const stack = new cdk.Stack(app, `emissary-email-id-${emissaryDomain.replaceAll(".", "-")}`, {})
+  const stack = new cdk.Stack(app, `emissary-id-${emissaryDomain.replaceAll(".", "-")}`, {})
 
   const identity = new ses.EmailIdentity(stack, `emissary-email-identity`, {
     identity: ses.Identity.domain(emissaryDomain),
@@ -121,7 +121,7 @@ interface emailInStackDetails {
 function emailInStack(
   hostedZoneInfo: HostedZoneInfo,
 ): emailInStackDetails {
-  const stack = new cdk.Stack(app, `emissary-email-in-${emissaryDomain.replaceAll(".", "-")}`, {})
+  const stack = new cdk.Stack(app, `emissary-in-${emissaryDomain.replaceAll(".", "-")}`, {})
   const inboundEndpoint = `inbound-smtp.${awsRegion}.amazonaws.com`
   // MX record for the receiving domain.
   new route53.CfnRecordSet(stack, 'emissary-email-inbound-mx', {
@@ -241,7 +241,7 @@ async function emailClientStack(
   const inboundEmailBucket = emailInStackDetails.bucket
 
   const accountId = await accountIdPromise
-  const stack = new cdk.Stack(app, `emissary-email-client-${emissaryDomain.replaceAll(".", "-")}`, {})
+  const stack = new cdk.Stack(app, `emissary-client-${emissaryDomain.replaceAll(".", "-")}`, {})
 
   const role = new iam.Role(stack, 'emissary-app-role', {
     assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
