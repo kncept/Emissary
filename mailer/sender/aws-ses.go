@@ -46,7 +46,7 @@ func (s *AwsSesSender) Send(ctx context.Context, message *email.UserEmail) error
 		source = message.From.Address
 	}
 	if source == "" {
-		return errors.New("sender address is not configured (set EMISSARY_SES_FROM)")
+		return errors.New("sender address is not configured (set SES_FROM)")
 	}
 
 	body := &types.Body{}

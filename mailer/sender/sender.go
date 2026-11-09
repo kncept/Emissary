@@ -7,7 +7,7 @@ import (
 )
 
 // Sender is the outbound side of the service. New providers can be added by
-// implementing this interface and selecting them with EMISSARY_SENDER.
+// implementing this interface and selecting them with SENDER.
 type Sender interface {
 	Name() string
 	From() string

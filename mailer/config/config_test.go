@@ -11,20 +11,20 @@ import (
 )
 
 func TestLoad_Defaults(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "testuser")
-	os.Setenv("EMISSARY_PASSWORD", "testpass")
+	os.Setenv("USERNAME", "testuser")
+	os.Setenv("PASSWORD", "testpass")
 	defer func() {
-		os.Unsetenv("EMISSARY_USERNAME")
-		os.Unsetenv("EMISSARY_PASSWORD")
-		os.Unsetenv("EMISSARY_JWT_SECRET")
-		os.Unsetenv("EMISSARY_STORAGE")
-		os.Unsetenv("EMISSARY_SENDER")
-		os.Unsetenv("EMISSARY_METADATA")
-		os.Unsetenv("EMISSARY_JWT_TTL")
-		os.Unsetenv("EMISSARY_PORT")
-		os.Unsetenv("EMISSARY_S3_REGION")
-		os.Unsetenv("EMISSARY_SES_REGION")
-		os.Unsetenv("EMISSARY_METADATA_REGION")
+		os.Unsetenv("USERNAME")
+		os.Unsetenv("PASSWORD")
+		os.Unsetenv("JWT_SECRET")
+		os.Unsetenv("STORAGE")
+		os.Unsetenv("SENDER")
+		os.Unsetenv("METADATA")
+		os.Unsetenv("JWT_TTL")
+		os.Unsetenv("PORT")
+		os.Unsetenv("S3_REGION")
+		os.Unsetenv("SES_REGION")
+		os.Unsetenv("METADATA_REGION")
 		os.Unsetenv("AWS_REGION")
 		envutil.ClearCache()
 	}()
@@ -64,19 +64,19 @@ func TestLoad_Defaults(t *testing.T) {
 }
 
 func TestLoad_CustomValues(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "custom")
-	os.Setenv("EMISSARY_PASSWORD", "secret")
-	os.Setenv("EMISSARY_JWT_SECRET", "mysecret")
-	os.Setenv("EMISSARY_STORAGE", "s3")
-	os.Setenv("EMISSARY_SENDER", "aws-ses")
-	os.Setenv("EMISSARY_METADATA", "file")
-	os.Setenv("EMISSARY_JWT_TTL", "12h")
-	os.Setenv("EMISSARY_PORT", "9090")
-	os.Setenv("EMISSARY_S3_BUCKET", "my-bucket")
-	os.Setenv("EMISSARY_SES_FROM", "sender@example.com")
-	os.Setenv("EMISSARY_SES_REGION", "eu-west-1")
-	os.Setenv("EMISSARY_METADATA_FILE", "/tmp/meta.json")
-	os.Setenv("EMISSARY_METADATA_REGION", "ap-southeast-1")
+	os.Setenv("USERNAME", "custom")
+	os.Setenv("PASSWORD", "secret")
+	os.Setenv("JWT_SECRET", "mysecret")
+	os.Setenv("STORAGE", "s3")
+	os.Setenv("SENDER", "aws-ses")
+	os.Setenv("METADATA", "file")
+	os.Setenv("JWT_TTL", "12h")
+	os.Setenv("PORT", "9090")
+	os.Setenv("S3_BUCKET", "my-bucket")
+	os.Setenv("SES_FROM", "sender@example.com")
+	os.Setenv("SES_REGION", "eu-west-1")
+	os.Setenv("METADATA_FILE", "/tmp/meta.json")
+	os.Setenv("METADATA_REGION", "ap-southeast-1")
 	os.Setenv("AWS_REGION", "us-east-1")
 	defer cleanupEnv()
 
@@ -130,8 +130,8 @@ func TestLoad_CustomValues(t *testing.T) {
 }
 
 func TestLoad_MissingUsername(t *testing.T) {
-	os.Unsetenv("EMISSARY_USERNAME")
-	os.Setenv("EMISSARY_PASSWORD", "pass")
+	os.Unsetenv("USERNAME")
+	os.Setenv("PASSWORD", "pass")
 	defer cleanupEnv()
 
 	_, err := Load(context.Background())
@@ -141,8 +141,8 @@ func TestLoad_MissingUsername(t *testing.T) {
 }
 
 func TestLoad_BlankPasswordAllowed(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "user")
-	os.Unsetenv("EMISSARY_PASSWORD")
+	os.Setenv("USERNAME", "user")
+	os.Unsetenv("PASSWORD")
 	defer cleanupEnv()
 
 	cfg, err := Load(context.Background())
@@ -155,9 +155,9 @@ func TestLoad_BlankPasswordAllowed(t *testing.T) {
 }
 
 func TestLoad_InvalidJWT_TTL(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "user")
-	os.Setenv("EMISSARY_PASSWORD", "pass")
-	os.Setenv("EMISSARY_JWT_TTL", "invalid")
+	os.Setenv("USERNAME", "user")
+	os.Setenv("PASSWORD", "pass")
+	os.Setenv("JWT_TTL", "invalid")
 	defer cleanupEnv()
 
 	_, err := Load(context.Background())
@@ -167,9 +167,9 @@ func TestLoad_InvalidJWT_TTL(t *testing.T) {
 }
 
 func TestLoad_UnknownStorage(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "user")
-	os.Setenv("EMISSARY_PASSWORD", "pass")
-	os.Setenv("EMISSARY_STORAGE", "unknown")
+	os.Setenv("USERNAME", "user")
+	os.Setenv("PASSWORD", "pass")
+	os.Setenv("STORAGE", "unknown")
 	defer cleanupEnv()
 
 	_, err := Load(context.Background())
@@ -179,9 +179,9 @@ func TestLoad_UnknownStorage(t *testing.T) {
 }
 
 func TestLoad_UnknownSender(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "user")
-	os.Setenv("EMISSARY_PASSWORD", "pass")
-	os.Setenv("EMISSARY_SENDER", "unknown")
+	os.Setenv("USERNAME", "user")
+	os.Setenv("PASSWORD", "pass")
+	os.Setenv("SENDER", "unknown")
 	defer cleanupEnv()
 
 	_, err := Load(context.Background())
@@ -191,9 +191,9 @@ func TestLoad_UnknownSender(t *testing.T) {
 }
 
 func TestLoad_UnknownMetadata(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "user")
-	os.Setenv("EMISSARY_PASSWORD", "pass")
-	os.Setenv("EMISSARY_METADATA", "unknown")
+	os.Setenv("USERNAME", "user")
+	os.Setenv("PASSWORD", "pass")
+	os.Setenv("METADATA", "unknown")
 	defer cleanupEnv()
 
 	_, err := Load(context.Background())
@@ -203,9 +203,9 @@ func TestLoad_UnknownMetadata(t *testing.T) {
 }
 
 func TestLoad_S3StorageRequiresBucket(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "user")
-	os.Setenv("EMISSARY_PASSWORD", "pass")
-	os.Setenv("EMISSARY_STORAGE", "s3")
+	os.Setenv("USERNAME", "user")
+	os.Setenv("PASSWORD", "pass")
+	os.Setenv("STORAGE", "s3")
 	defer cleanupEnv()
 
 	_, err := Load(context.Background())
@@ -215,9 +215,9 @@ func TestLoad_S3StorageRequiresBucket(t *testing.T) {
 }
 
 func TestLoad_DDBMetadataRequiresTable(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "user")
-	os.Setenv("EMISSARY_PASSWORD", "pass")
-	os.Setenv("EMISSARY_METADATA", "ddb")
+	os.Setenv("USERNAME", "user")
+	os.Setenv("PASSWORD", "pass")
+	os.Setenv("METADATA", "ddb")
 	defer cleanupEnv()
 
 	_, err := Load(context.Background())
@@ -227,9 +227,9 @@ func TestLoad_DDBMetadataRequiresTable(t *testing.T) {
 }
 
 func TestLoad_DynamoDBAlias(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "user")
-	os.Setenv("EMISSARY_PASSWORD", "pass")
-	os.Setenv("EMISSARY_METADATA", "dynamodb")
+	os.Setenv("USERNAME", "user")
+	os.Setenv("PASSWORD", "pass")
+	os.Setenv("METADATA", "dynamodb")
 	defer cleanupEnv()
 
 	_, err := Load(context.Background())
@@ -239,9 +239,9 @@ func TestLoad_DynamoDBAlias(t *testing.T) {
 }
 
 func TestLoad_FileMetadataDefaultPath(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "user")
-	os.Setenv("EMISSARY_PASSWORD", "pass")
-	os.Setenv("EMISSARY_METADATA", "file")
+	os.Setenv("USERNAME", "user")
+	os.Setenv("PASSWORD", "pass")
+	os.Setenv("METADATA", "file")
 	defer cleanupEnv()
 
 	cfg, err := Load(context.Background())
@@ -255,9 +255,9 @@ func TestLoad_FileMetadataDefaultPath(t *testing.T) {
 }
 
 func TestLoad_ListenAddrWithPort(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "user")
-	os.Setenv("EMISSARY_PASSWORD", "pass")
-	os.Setenv("EMISSARY_PORT", "3000")
+	os.Setenv("USERNAME", "user")
+	os.Setenv("PASSWORD", "pass")
+	os.Setenv("PORT", "3000")
 	defer cleanupEnv()
 
 	cfg, err := Load(context.Background())
@@ -271,9 +271,9 @@ func TestLoad_ListenAddrWithPort(t *testing.T) {
 }
 
 func TestLoad_ListenAddrWithFullAddress(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "user")
-	os.Setenv("EMISSARY_PASSWORD", "pass")
-	os.Setenv("EMISSARY_LISTEN_ADDR", "127.0.0.1:4000")
+	os.Setenv("USERNAME", "user")
+	os.Setenv("PASSWORD", "pass")
+	os.Setenv("LISTEN_ADDR", "127.0.0.1:4000")
 	defer cleanupEnv()
 
 	cfg, err := Load(context.Background())
@@ -287,10 +287,10 @@ func TestLoad_ListenAddrWithFullAddress(t *testing.T) {
 }
 
 func TestLoad_SESRegionDefaultsToAWSRegion(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "user")
-	os.Setenv("EMISSARY_PASSWORD", "pass")
-	os.Setenv("EMISSARY_SENDER", "aws-ses")
-	os.Setenv("EMISSARY_SES_FROM", "sender@example.com")
+	os.Setenv("USERNAME", "user")
+	os.Setenv("PASSWORD", "pass")
+	os.Setenv("SENDER", "aws-ses")
+	os.Setenv("SES_FROM", "sender@example.com")
 	os.Setenv("AWS_REGION", "eu-central-1")
 	defer cleanupEnv()
 
@@ -305,10 +305,10 @@ func TestLoad_SESRegionDefaultsToAWSRegion(t *testing.T) {
 }
 
 func TestLoad_MetadataRegionDefaultsToAWSRegion(t *testing.T) {
-	os.Setenv("EMISSARY_USERNAME", "user")
-	os.Setenv("EMISSARY_PASSWORD", "pass")
-	os.Setenv("EMISSARY_METADATA", "ddb")
-	os.Setenv("EMISSARY_DDB_TABLE", "my-table")
+	os.Setenv("USERNAME", "user")
+	os.Setenv("PASSWORD", "pass")
+	os.Setenv("METADATA", "ddb")
+	os.Setenv("DDB_TABLE", "my-table")
 	os.Setenv("AWS_REGION", "ap-northeast-1")
 	defer cleanupEnv()
 
@@ -466,25 +466,25 @@ func TestConfig_Validate_AllValid(t *testing.T) {
 }
 
 func cleanupEnv() {
-	os.Unsetenv("EMISSARY_USERNAME")
-	os.Unsetenv("EMISSARY_PASSWORD")
-	os.Unsetenv("EMISSARY_JWT_SECRET")
-	os.Unsetenv("EMISSARY_STORAGE")
-	os.Unsetenv("EMISSARY_SENDER")
-	os.Unsetenv("EMISSARY_METADATA")
-	os.Unsetenv("EMISSARY_JWT_TTL")
-	os.Unsetenv("EMISSARY_PORT")
-	os.Unsetenv("EMISSARY_S3_BUCKET")
-	os.Unsetenv("EMISSARY_SES_FROM")
-	os.Unsetenv("EMISSARY_METADATA_FILE")
-	os.Unsetenv("EMISSARY_LISTEN_ADDR")
-	os.Unsetenv("EMISSARY_SES_REGION")
-	os.Unsetenv("EMISSARY_DDB_TABLE")
-	os.Unsetenv("EMISSARY_METADATA_REGION")
-	os.Unsetenv("EMISSARY_USER_MANAGER")
-	os.Unsetenv("EMISSARY_DOMAIN")
-	os.Unsetenv("EMISSARY_USER_TABLE")
-	os.Unsetenv("EMISSARY_USER_REGION")
+	os.Unsetenv("USERNAME")
+	os.Unsetenv("PASSWORD")
+	os.Unsetenv("JWT_SECRET")
+	os.Unsetenv("STORAGE")
+	os.Unsetenv("SENDER")
+	os.Unsetenv("METADATA")
+	os.Unsetenv("JWT_TTL")
+	os.Unsetenv("PORT")
+	os.Unsetenv("S3_BUCKET")
+	os.Unsetenv("SES_FROM")
+	os.Unsetenv("METADATA_FILE")
+	os.Unsetenv("LISTEN_ADDR")
+	os.Unsetenv("SES_REGION")
+	os.Unsetenv("DDB_TABLE")
+	os.Unsetenv("METADATA_REGION")
+	os.Unsetenv("USER_MANAGER")
+	os.Unsetenv("DOMAIN")
+	os.Unsetenv("USER_TABLE")
+	os.Unsetenv("USER_REGION")
 	os.Unsetenv("AWS_REGION")
 	envutil.ClearCache()
 }

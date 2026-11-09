@@ -31,7 +31,7 @@ type ServerConfig struct {
 func (c *ServerConfig) Validate() error {
 	var errs []error
 	if c.Username == "" {
-		errs = append(errs, errors.New("username is not configured (set EMISSARY_USERNAME)"))
+		errs = append(errs, errors.New("username is not configured (set USERNAME)"))
 	}
 	return errors.Join(errs...)
 }
@@ -51,7 +51,7 @@ func (c *StorageConfig) Validate() error {
 		errs = append(errs, fmt.Errorf("unknown storage type %q (want s3 or memory)", c.Type))
 	}
 	if c.Type == "s3" && c.S3Bucket == "" {
-		errs = append(errs, errors.New("storage=s3 requires a bucket (set EMISSARY_S3_BUCKET)"))
+		errs = append(errs, errors.New("storage=s3 requires a bucket (set S3_BUCKET)"))
 	}
 	return errors.Join(errs...)
 }
@@ -89,13 +89,13 @@ func (c *MetadataConfig) Validate() error {
 		errs = append(errs, fmt.Errorf("unknown metadata type %q (want memory, file or ddb)", c.Type))
 	}
 	if (c.Type == "ddb" || c.Type == "dynamodb") && c.DdbTable == "" {
-		errs = append(errs, errors.New("metadata=ddb requires a table (set EMISSARY_DDB_TABLE)"))
+		errs = append(errs, errors.New("metadata=ddb requires a table (set DDB_TABLE)"))
 	}
 	return errors.Join(errs...)
 }
 
 // UserManagerConfig selects the authentication backend for ordinary users.
-// The AUTH_USERNAME/AUTH_PASSWORD administrator is configured separately and
+// The USERNAME/PASSWORD administrator is configured separately and
 // is available with every backend.
 type UserManagerConfig struct {
 	Type   string // "none", "any", "ddb" or "ldap"
@@ -121,13 +121,13 @@ func (c *UserManagerConfig) Validate() error {
 		errs = append(errs, fmt.Errorf("unknown user manager type %q (want none, any, ddb or ldap)", c.Type))
 	}
 	if c.Type == "any" && c.Domain == "" {
-		errs = append(errs, errors.New("user manager any requires a domain (set EMISSARY_DOMAIN)"))
+		errs = append(errs, errors.New("user manager any requires a domain (set DOMAIN)"))
 	}
 	if (c.Type == "ddb" || c.Type == "dynamodb") && c.DdbTable == "" {
-		errs = append(errs, errors.New("user manager ddb requires a table (set EMISSARY_USER_TABLE)"))
+		errs = append(errs, errors.New("user manager ddb requires a table (set USER_TABLE)"))
 	}
 	if c.Type == "ldap" && c.LDAPURL == "" {
-		errs = append(errs, errors.New("user manager ldap requires a server URL (set EMISSARY_LDAP_URL)"))
+		errs = append(errs, errors.New("user manager ldap requires a server URL (set LDAP_URL)"))
 	}
 	return errors.Join(errs...)
 }
@@ -166,45 +166,45 @@ func Load(ctx context.Context) (*Config, error) {
 	cfg := &Config{
 		Server: ServerConfig{
 			ListenAddr:  listenAddr(ctx),
-			Username:    firstEnv(ctx, "EMISSARY_USERNAME", "AUTH_USERNAME", "USERNAME"),
-			Password:    firstEnv(ctx, "EMISSARY_PASSWORD", "AUTH_PASSWORD", "PASSWORD"),
-			JWTSecret:   firstEnv(ctx, "EMISSARY_JWT_SECRET", "JWT_SECRET"),
-			JWTAudience: firstEnv(ctx, "EMISSARY_JWT_AUDIENCE", "JWT_AUDIENCE"),
-			JWTIssuer:   firstEnv(ctx, "EMISSARY_JWT_ISSUER", "JWT_ISSUER"),
+			Username:    firstEnv(ctx, "USERNAME"),
+			Password:    firstEnv(ctx, "PASSWORD"),
+			JWTSecret:   firstEnv(ctx, "JWT_SECRET"),
+			JWTAudience: firstEnv(ctx, "JWT_AUDIENCE"),
+			JWTIssuer:   firstEnv(ctx, "JWT_ISSUER"),
 		},
 		Storage: StorageConfig{
-			Type:     strings.ToLower(strings.TrimSpace(firstEnv(ctx, "EMISSARY_STORAGE"))),
-			S3Bucket: firstEnv(ctx, "EMISSARY_S3_BUCKET", "S3_BUCKET"),
+			Type:     strings.ToLower(strings.TrimSpace(firstEnv(ctx, "STORAGE"))),
+			S3Bucket: firstEnv(ctx, "S3_BUCKET"),
 		},
 		Sender: SenderConfig{
-			Type:   strings.ToLower(strings.TrimSpace(firstEnv(ctx, "EMISSARY_SENDER"))),
-			From:   firstEnv(ctx, "EMISSARY_SES_FROM", "SES_FROM", "SES_FROM_ADDRESS"),
-			Region: firstEnv(ctx, "EMISSARY_SES_REGION", "SES_REGION"),
+			Type:   strings.ToLower(strings.TrimSpace(firstEnv(ctx, "SENDER"))),
+			From:   firstEnv(ctx, "SES_FROM"),
+			Region: firstEnv(ctx, "SES_REGION"),
 		},
 		Metadata: MetadataConfig{
-			Type:     strings.ToLower(strings.TrimSpace(firstEnv(ctx, "EMISSARY_METADATA"))),
-			DdbTable: firstEnv(ctx, "EMISSARY_DDB_TABLE", "DDB_TABLE"),
-			FilePath: firstEnv(ctx, "EMISSARY_METADATA_FILE", "METADATA_FILE"),
-			Region:   firstEnv(ctx, "EMISSARY_METADATA_REGION", "METADATA_REGION"),
+			Type:     strings.ToLower(strings.TrimSpace(firstEnv(ctx, "METADATA"))),
+			DdbTable: firstEnv(ctx, "DDB_TABLE"),
+			FilePath: firstEnv(ctx, "METADATA_FILE"),
+			Region:   firstEnv(ctx, "METADATA_REGION"),
 		},
 		UserManager: UserManagerConfig{
-			Type:             strings.ToLower(strings.TrimSpace(firstEnv(ctx, "EMISSARY_USER_MANAGER", "USER_MANAGER"))),
-			Domain:           strings.ToLower(strings.TrimSpace(firstEnv(ctx, "EMISSARY_DOMAIN", "EMAIL_DOMAIN"))),
-			DdbTable:         firstEnv(ctx, "EMISSARY_USER_TABLE", "USER_TABLE"),
-			Region:           firstEnv(ctx, "EMISSARY_USER_REGION", "USER_REGION"),
-			LDAPURL:          firstEnv(ctx, "EMISSARY_LDAP_URL", "LDAP_URL"),
-			LDAPBindDN:       firstEnv(ctx, "EMISSARY_LDAP_BIND_DN", "LDAP_BIND_DN"),
-			LDAPBindPassword: firstEnv(ctx, "EMISSARY_LDAP_BIND_PASSWORD", "LDAP_BIND_PASSWORD"),
-			LDAPBaseDN:       firstEnv(ctx, "EMISSARY_LDAP_BASE_DN", "LDAP_BASE_DN"),
-			LDAPUserFilter:   firstEnv(ctx, "EMISSARY_LDAP_USER_FILTER", "LDAP_USER_FILTER"),
-			LDAPCacheTTL:     firstEnv(ctx, "EMISSARY_LDAP_CACHE_TTL", "LDAP_CACHE_TTL"),
+			Type:             strings.ToLower(strings.TrimSpace(firstEnv(ctx, "USER_MANAGER"))),
+			Domain:           strings.ToLower(strings.TrimSpace(firstEnv(ctx, "DOMAIN"))),
+			DdbTable:         firstEnv(ctx, "USER_TABLE"),
+			Region:           firstEnv(ctx, "USER_REGION"),
+			LDAPURL:          firstEnv(ctx, "LDAP_URL"),
+			LDAPBindDN:       firstEnv(ctx, "LDAP_BIND_DN"),
+			LDAPBindPassword: firstEnv(ctx, "LDAP_BIND_PASSWORD"),
+			LDAPBaseDN:       firstEnv(ctx, "LDAP_BASE_DN"),
+			LDAPUserFilter:   firstEnv(ctx, "LDAP_USER_FILTER"),
+			LDAPCacheTTL:     firstEnv(ctx, "LDAP_CACHE_TTL"),
 		},
 		AWSRegion: awsRegion,
 	}
 
-	ttl, err := time.ParseDuration(firstEnvDefault(ctx, "24h", "EMISSARY_JWT_TTL", "JWT_TTL"))
+	ttl, err := time.ParseDuration(firstEnvDefault(ctx, "24h", "JWT_TTL"))
 	if err != nil {
-		return nil, fmt.Errorf("invalid EMISSARY_JWT_TTL: %w", err)
+		return nil, fmt.Errorf("invalid JWT_TTL: %w", err)
 	}
 	cfg.Server.JWTExpiry = ttl
 
@@ -265,10 +265,10 @@ func Load(ctx context.Context) (*Config, error) {
 }
 
 func listenAddr(ctx context.Context) string {
-	if addr := firstEnv(ctx, "EMISSARY_LISTEN_ADDR", "LISTEN_ADDR"); addr != "" {
+	if addr := firstEnv(ctx, "LISTEN_ADDR"); addr != "" {
 		return addr
 	}
-	port := firstEnvDefault(ctx, "8080", "EMISSARY_PORT", "PORT")
+	port := firstEnvDefault(ctx, "8080", "PORT")
 	if strings.HasPrefix(port, ":") {
 		return port
 	}

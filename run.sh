@@ -147,19 +147,19 @@ run() {
 	build
 
 	# Generate credentials only when the variable is unset. An explicitly
-	# blank AUTH_PASSWORD disables the administrator login.
-	USERNAME="${AUTH_USERNAME:-Emissary}"
-	if [[ -z "${AUTH_PASSWORD+x}" ]]; then
+	# blank PASSWORD disables the administrator login.
+	USERNAME="${USERNAME:-Emissary}"
+	if [[ -z "${PASSWORD+x}" ]]; then
 		PASSWORD=$(generate_guid)
 	else
-		PASSWORD="$AUTH_PASSWORD"
+		PASSWORD="$PASSWORD"
 	fi
 	if [[ -z "${JWT_SECRET:-}" ]]; then
 		JWT_SECRET=$(generate_guid)
 	fi
 
-	export AUTH_USERNAME="$USERNAME"
-	export AUTH_PASSWORD="$PASSWORD"
+	export USERNAME="$USERNAME"
+	export PASSWORD="$PASSWORD"
 	export JWT_SECRET="$JWT_SECRET"
 	export S3_BUCKET="${S3_BUCKET:-emissary-emails}"
 	export S3_PREFIX="${S3_PREFIX:-emails}"

@@ -11,7 +11,7 @@ import (
 var ErrNotFound = errors.New("email not found")
 
 // Storage is the read side of the mail source. New providers can be added by
-// implementing this interface and selecting them with EMISSARY_STORAGE.
+// implementing this interface and selecting them with STORAGE.
 type Storage interface {
 	Name() string
 

@@ -25,9 +25,9 @@ import { lookupAccountId } from './lib/account-tools'
 
 const accountIdPromise = lookupAccountId()
 
-const emissaryDomain = env.EMISSARY_DOMAIN || env.EMAIL_DOMAIN || ""
+const emissaryDomain = env.DOMAIN || ""
 if (emissaryDomain === "") {
-  throw new Error("Please speficy an EMISSARY_DOMAIN")
+  throw new Error("Please specify a DOMAIN")
 }
 
 const awsRegion = env.AWS_REGION || ""
@@ -296,15 +296,15 @@ async function emailClientStack(
   })
   metadataTable.grantReadWriteData(role)
 
-  const authUsername = env.EMISSARY_USERNAME || env.AUTH_USERNAME || ''
-  const authPassword = env.EMISSARY_PASSWORD || env.AUTH_PASSWORD || ''
+  const authUsername = env.USERNAME || ''
+  const authPassword = env.PASSWORD || ''
   if (authPassword === '') {
-    console.warn('EMISSARY_PASSWORD (or AUTH_PASSWORD) is not set; the deployed Lambda will not have a default admin user.')
+    console.warn('PASSWORD is not set; the deployed Lambda will not have a default admin user.')
   }
 
   // Create a secret in Secrets Manager for the JWT secret.
-  // If EMISSARY_JWT_SECRET is provided, use it; otherwise generate a new one.
-  const jwtSecretValue = env.EMISSARY_JWT_SECRET || env.JWT_SECRET || ''
+  // If JWT_SECRET is provided, use it; otherwise generate a new one.
+  const jwtSecretValue = env.JWT_SECRET || ''
   const jwtSecret = new secretsmanager.Secret(stack, 'emissary-jwt-secret', {
     secretName: `emissary/${emissaryDomain.replaceAll(".", "-")}/jwt-secret`,
     description: 'JWT signing secret for Emissary email application',
@@ -362,30 +362,23 @@ async function emailClientStack(
     memorySize: 512,
     environment: {
       // Configuration consumed by mailer/config (and the current frontend).
-      EMISSARY_USERNAME: authUsername,
-      AUTH_USERNAME: authUsername,
-      EMISSARY_DOMAIN: emissaryDomain,
-      EMAIL_DOMAIN: emissaryDomain,
-      EMISSARY_USER_MANAGER: env.EMISSARY_USER_MANAGER || 'none',
-      EMISSARY_STORAGE: 's3',
-      EMISSARY_S3_BUCKET: inboundEmailBucket.bucketName,
+      USERNAME: authUsername,
+      DOMAIN: emissaryDomain,
+      USER_MANAGER: env.USER_MANAGER || 'none',
+      STORAGE: 's3',
       S3_BUCKET: inboundEmailBucket.bucketName,
       S3_REGION: awsRegion,
-      EMISSARY_SENDER: 'aws-ses',
-      EMISSARY_SES_FROM: env.EMISSARY_SES_FROM || `no-reply@${emissaryDomain}`,
-      EMISSARY_SES_REGION: awsRegion,
-      EMISSARY_METADATA: 'ddb',
-      METADATA_TYPE: 'ddb',
-      EMISSARY_DDB_TABLE: metadataTable.tableName,
-      METADATA_TABLE: metadataTable.tableName,
-      EMISSARY_METADATA_REGION: awsRegion,
+      SENDER: 'aws-ses',
+      SES_FROM: env.SES_FROM || `no-reply@${emissaryDomain}`,
+      SES_REGION: awsRegion,
+      METADATA: 'ddb',
+      DDB_TABLE: metadataTable.tableName,
       METADATA_REGION: awsRegion,
-      ...(authPassword ? { EMISSARY_PASSWORD: authPassword, AUTH_PASSWORD: authPassword } : {}),
+      ...(authPassword ? { PASSWORD: authPassword } : {}),
       // Pass the JWT secret ARN - the application will resolve it at runtime
-      EMISSARY_JWT_SECRET: jwtSecret.secretArn,
       JWT_SECRET: jwtSecret.secretArn,
-      EMISSARY_JWT_AUDIENCE: mailFromDomain,
-      EMISSARY_JWT_ISSUER: `emissary-${emissaryDomain}`,
+      JWT_AUDIENCE: mailFromDomain,
+      JWT_ISSUER: `emissary-${emissaryDomain}`,
     },
   })
 

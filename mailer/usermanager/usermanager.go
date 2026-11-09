@@ -1,5 +1,5 @@
 // Package usermanager provides the pluggable authentication backends used by
-// Emissary. The configured AUTH_USERNAME/AUTH_PASSWORD pair is always treated
+// Emissary. The configured USERNAME/PASSWORD pair is always treated
 // as the single built-in administrator; a backend only decides how ordinary
 // (non-admin) users are authenticated.
 package usermanager
@@ -163,7 +163,7 @@ var _ Manager = (*AnyManager)(nil)
 func NewAny(cfg Config) (*AnyManager, error) {
 	domain := normalizeDomain(cfg.Domain)
 	if domain == "" {
-		return nil, errors.New("user manager any requires a domain (set EMISSARY_DOMAIN)")
+		return nil, errors.New("user manager any requires a domain (set DOMAIN)")
 	}
 	return &AnyManager{admin: newAdminAuth(cfg), domain: domain}, nil
 }
