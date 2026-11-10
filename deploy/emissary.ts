@@ -54,7 +54,11 @@ async function init() {
 
   emailIdStack(hostedZoneInfo)
   const emailInStackDetails = emailInStack(hostedZoneInfo)
-  await emailClientStack(hostedZoneInfo, emailInStackDetails)
+
+  // Connect to the inbound bucket by name. S3_BUCKET can override it entirely
+  // (for example to use a pre-existing bucket).
+  const inboundEmailBucketName = env.S3_BUCKET || emailInStackDetails.bucketName
+  await emailClientStack(hostedZoneInfo, inboundEmailBucketName)
 
   console.log(`Configured email for account id ${await accountIdPromise}`)
 }
@@ -113,8 +117,6 @@ function emailIdStack(
 }
 
 interface emailInStackDetails {
-  stack: cdk.Stack
-  bucket: s3.Bucket
   bucketName: string
   bucketNameParam: string
 }
@@ -144,7 +146,7 @@ function emailInStack(
     removalPolicy: cdk.RemovalPolicy.DESTROY,
   })
 
-  // Publish the bucket name so it can be read if required
+  // Publish the bucket name so it is deterministically knowable.
   // N.B. Need to support multiple emissary instances to this
   // is qualified
   const bucketNameParam = `/emissary/${emissaryDomain.replaceAll(".", "-")}/bucketname`
@@ -216,8 +218,6 @@ function emailInStack(
   })
 
   return {
-    stack,
-    bucket,
     bucketName: bucket.bucketName,
     bucketNameParam,
   }
@@ -229,7 +229,7 @@ function emailInStack(
 // that `cdk synth`/`cdk deploy --all` still works for the email-only stacks.
 async function emailClientStack(
   hostedZoneInfo: HostedZoneInfo,
-  emailInStackDetails: emailInStackDetails,
+  inboundEmailBucketName: string,
 ) {
   if (!fs.existsSync(appBootstrap)) {
     console.warn(
@@ -238,8 +238,6 @@ async function emailClientStack(
     )
     return
   }
-  const inboundEmailBucket = emailInStackDetails.bucket
-
   const accountId = await accountIdPromise
   const stack = new cdk.Stack(app, `emissary-client-${emissaryDomain.replaceAll(".", "-")}`, {})
 
@@ -258,9 +256,9 @@ async function emailClientStack(
   })
   logGroup.grantWrite(role)
 
-  // Read access to the raw inbound EML messages. This is added as a policy on
-  // the Lambda role (rather than a bucket grant) so the bucket stays owned by
-  // the email-in stack without creating a cross-stack dependency cycle.
+  // Read access to the raw inbound EML messages. The ARNs are built from the
+  // bucket name string (rather than a bucket grant) so the bucket stays owned
+  // by the email-in stack without creating a cross-stack reference.
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'InboundEmailRead',
     actions: [
@@ -268,8 +266,8 @@ async function emailClientStack(
       's3:ListBucket',
     ],
     resources: [
-      inboundEmailBucket.bucketArn,
-      inboundEmailBucket.arnForObjects('*'),
+      `arn:aws:s3:::${inboundEmailBucketName}`,
+      `arn:aws:s3:::${inboundEmailBucketName}/*`,
     ],
     effect: iam.Effect.ALLOW,
   }))
@@ -366,7 +364,7 @@ async function emailClientStack(
       DOMAIN: emissaryDomain,
       USER_MANAGER: env.USER_MANAGER || 'none',
       STORAGE: 's3',
-      S3_BUCKET: inboundEmailBucket.bucketName,
+      S3_BUCKET: inboundEmailBucketName,
       SENDER: 'aws-ses',
       SES_FROM: env.SES_FROM || `no-reply@${emissaryDomain}`,
       SES_REGION: awsRegion,
