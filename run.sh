@@ -162,8 +162,6 @@ run() {
 	export PASSWORD="$PASSWORD"
 	export JWT_SECRET="$JWT_SECRET"
 	export S3_BUCKET="${S3_BUCKET:-emissary-emails}"
-	export S3_PREFIX="${S3_PREFIX:-emails}"
-	export S3_REGION="${S3_REGION:-us-east-1}"
 	export METADATA_TYPE="${METADATA_TYPE:-memory}"
 	export PORT="${PORT:-8080}"
 
@@ -176,8 +174,6 @@ run() {
 	fi
 	echo "  JWT Secret: $JWT_SECRET"
 	echo "  S3 Bucket: $S3_BUCKET"
-	echo "  S3 Prefix: $S3_PREFIX"
-	echo "  S3 Region: $S3_REGION"
 	echo "  Metadata Type: $METADATA_TYPE"
 	echo "  Port: $PORT"
 	echo ""

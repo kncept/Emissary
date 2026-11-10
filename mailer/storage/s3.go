@@ -2,32 +2,45 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/kncept/Emissary/mailer/email"
 )
 
-type S3Storage struct {
-	client   *s3.Client
-	bucket   string
-	prefix   string
+// s3API is the subset of the S3 client used by S3Storage. Keeping it as an
+// interface makes the storage layer testable without contacting AWS.
+type s3API interface {
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
 
-func NewS3Storage(bucket, prefix, region string) (*S3Storage, error) {
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(region))
+type S3Storage struct {
+	client s3API
+	bucket string
+	prefix string
+}
+
+func NewS3Storage(bucket string) (*S3Storage, error) {
+	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 	return &S3Storage{
 		client: s3.NewFromConfig(cfg),
 		bucket: bucket,
-		prefix: strings.TrimPrefix(prefix, "/"),
 	}, nil
 }
 
@@ -36,7 +49,7 @@ func (s *S3Storage) ListAllEmails(ctx context.Context) ([]*email.UserEmail, erro
 	var emails []*email.UserEmail
 	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(s.bucket),
-		Prefix: aws.String(s.prefix),
+		Prefix: aws.String(s.listPrefix()),
 	})
 
 	for paginator.HasMorePages() {
@@ -49,46 +62,100 @@ func (s *S3Storage) ListAllEmails(ctx context.Context) ([]*email.UserEmail, erro
 			if obj.Key == nil || strings.HasSuffix(*obj.Key, "/") {
 				continue
 			}
-			email, err := s.GetEmail(ctx, *obj.Key)
+			// Read the object by its exact key. SES stores inbound messages
+			// under the raw message ID (no extension), so deriving a different
+			// key here would make every message fail to load and be skipped.
+			message, err := s.getEmailByKey(ctx, *obj.Key)
 			if err != nil {
+				log.Printf("s3: skipping object %q: %v", *obj.Key, err)
 				continue
 			}
-			emails = append(emails, email)
+			emails = append(emails, message)
 		}
 	}
 	return emails, nil
 }
 
-// GetEmail implements the Storage interface.
-func (s *S3Storage) GetEmail(ctx context.Context, id string) (*email.UserEmail, error) {
-	// The id could be a full key or just the ID
-	key := id
-	if !strings.HasPrefix(key, s.prefix) {
-		key = s.prefix + "/" + key
+func (s *S3Storage) listPrefix() string {
+	if s.prefix == "" {
+		return ""
 	}
-	if !strings.HasSuffix(key, ".eml") {
-		key = key + ".eml"
+	return s.prefix + "/"
+}
+
+// emailKeyCandidates returns the S3 keys to try for an id. Callers may pass a
+// full object key or an id stored under the configured prefix.
+func (s *S3Storage) emailKeyCandidates(id string) []string {
+	id = strings.TrimPrefix(id, "/")
+	if id == "" {
+		return nil
 	}
 
+	candidates := make([]string, 0, 2)
+	add := func(key string) {
+		if key == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == key {
+				return
+			}
+		}
+		candidates = append(candidates, key)
+	}
+
+	add(id)
+	if s.prefix != "" {
+		add(s.prefix + "/" + id)
+	}
+	return candidates
+}
+
+// GetEmail implements the Storage interface.
+func (s *S3Storage) GetEmail(ctx context.Context, id string) (*email.UserEmail, error) {
+	for _, key := range s.emailKeyCandidates(id) {
+		message, err := s.getEmailByKey(ctx, key)
+		if err == nil {
+			return message, nil
+		}
+		// A missing candidate is expected while probing alternate layouts.
+		// Surface anything else (permissions, throttling, network, ...).
+		if !isObjectNotFound(err) {
+			return nil, err
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (s *S3Storage) getEmailByKey(ctx context.Context, key string) (*email.UserEmail, error) {
 	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get object: %w", err)
+		return nil, fmt.Errorf("failed to get object %q: %w", key, err)
 	}
 	defer output.Body.Close()
 
 	body, err := io.ReadAll(output.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read body: %w", err)
+		return nil, fmt.Errorf("failed to read object %q: %w", key, err)
 	}
 
-	parsedEmail, err := email.Parse(id, strings.NewReader(string(body)))
+	parsedEmail, err := email.Parse(key, strings.NewReader(string(body)))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse email: %w", err)
+		return nil, fmt.Errorf("failed to parse email %q: %w", key, err)
 	}
 	return parsedEmail, nil
+}
+
+func isObjectNotFound(err error) bool {
+	var noSuchKey *types.NoSuchKey
+	if errors.As(err, &noSuchKey) {
+		return true
+	}
+	var responseError *smithyhttp.ResponseError
+	return errors.As(err, &responseError) && responseError.HTTPStatusCode() == http.StatusNotFound
 }
 
 // Name returns the storage name.
@@ -156,9 +223,13 @@ func (s *S3Storage) GetEmailLegacy(ctx context.Context, key string) (Email, erro
 }
 
 func (s *S3Storage) PutEmail(ctx context.Context, email Email) error {
+	key := email.ID
+	if s.prefix != "" {
+		key = s.prefix + "/" + key
+	}
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(s.bucket),
-		Key:    aws.String(s.prefix + "/" + email.ID + ".eml"),
+		Key:    aws.String(key),
 		Body:   strings.NewReader(email.Raw),
 	})
 	return err
@@ -167,8 +238,8 @@ func (s *S3Storage) PutEmail(ctx context.Context, email Email) error {
 func parseEmail(key, raw string) Email {
 	lines := strings.Split(raw, "\n")
 	email := Email{
-		ID:   strings.TrimSuffix(strings.TrimPrefix(key, ""), ".eml"),
-		Raw:  raw,
+		ID:  key,
+		Raw: raw,
 	}
 
 	bodyStarted := false

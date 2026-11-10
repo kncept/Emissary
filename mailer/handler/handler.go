@@ -54,8 +54,6 @@ type HandlerConfig struct {
 	JWTSecret      string
 	JWTSecretTTL   time.Duration
 	S3Bucket       string
-	S3Prefix       string
-	S3Region       string
 	MetadataType   string
 	MetadataPath   string
 	MetadataTable  string
@@ -139,7 +137,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 	if cfg.Storage != nil {
 		emailStore = cfg.Storage
 	} else {
-		emailStore, err = storage.NewS3Storage(cfg.S3Bucket, cfg.S3Prefix, cfg.S3Region)
+		emailStore, err = storage.NewS3Storage(cfg.S3Bucket)
 		if err != nil {
 			return nil, err
 		}

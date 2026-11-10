@@ -22,7 +22,6 @@ func TestLoad_Defaults(t *testing.T) {
 		os.Unsetenv("METADATA")
 		os.Unsetenv("JWT_TTL")
 		os.Unsetenv("PORT")
-		os.Unsetenv("S3_REGION")
 		os.Unsetenv("SES_REGION")
 		os.Unsetenv("METADATA_REGION")
 		os.Unsetenv("AWS_REGION")

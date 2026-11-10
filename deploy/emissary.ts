@@ -367,7 +367,6 @@ async function emailClientStack(
       USER_MANAGER: env.USER_MANAGER || 'none',
       STORAGE: 's3',
       S3_BUCKET: inboundEmailBucket.bucketName,
-      S3_REGION: awsRegion,
       SENDER: 'aws-ses',
       SES_FROM: env.SES_FROM || `no-reply@${emissaryDomain}`,
       SES_REGION: awsRegion,

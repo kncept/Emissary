@@ -29,7 +29,6 @@ func main() {
 		JWTSecret:      cfg.Server.JWTSecret,
 		JWTSecretTTL:   cfg.Server.JWTExpiry,
 		S3Bucket:       cfg.Storage.S3Bucket,
-		S3Region:       cfg.AWSRegion,
 		MetadataType:   cfg.Metadata.Type,
 		MetadataPath:   cfg.Metadata.FilePath,
 		MetadataTable:  cfg.Metadata.DdbTable,
