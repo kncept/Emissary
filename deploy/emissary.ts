@@ -38,6 +38,24 @@ if (awsRegion == "") {
 // The MAIL FROM subdomain is also the hostname the application is served on.
 const mailFromDomain = `mail.${emissaryDomain}`
 
+// SUBDOMAINS controls which recipients the inbound receipt rule accepts:
+//   - unset/empty: only the main DOMAIN
+//   - "*": the main DOMAIN and every subdomain
+//   - comma-separated list: the main DOMAIN plus the listed domains. An entry
+//     without a dot is treated as a subdomain of DOMAIN (e.g. "foo,bar"
+//     accepts foo.<DOMAIN> and bar.<DOMAIN>); an entry with a dot is used as-is.
+const inboundRecipients = (() => {
+  const subdomains = (env.SUBDOMAINS || '').trim()
+  if (subdomains === '') return [emissaryDomain]
+  if (subdomains === '*') return [emissaryDomain, `.${emissaryDomain}`]
+  const listed = subdomains
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '')
+    .map((entry) => (entry.includes('.') ? entry : `${entry}.${emissaryDomain}`))
+  return Array.from(new Set([emissaryDomain, ...listed]))
+})()
+
 // Lambda custom runtimes require the handler to be a file named `bootstrap` in
 // the deployment package. Build it with `./run.sh build:lambda`.
 const appAssetDirectory = path.join(__dirname, '..', 'mailer', 'cmd', 'frontend')
@@ -165,7 +183,7 @@ function emailInStack(
     receiptRuleSetName: `emissary-${emissaryDomain.replaceAll(".", "-")}`,
     rules: [
       {
-        recipients: [emissaryDomain],
+        recipients: inboundRecipients,
         actions: [
           new sesActions.S3({
             bucket: bucket,
