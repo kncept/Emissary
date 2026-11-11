@@ -110,6 +110,23 @@ func responseIDs(t *testing.T, w *httptest.ResponseRecorder) map[string]bool {
 	return ids
 }
 
+func TestListEmailsEmptyInboxReturnsArray(t *testing.T) {
+	h, _, _ := newHandlerForTest(t, "any", "example.com", "secret")
+
+	status, token, _ := login(t, h, "bob@example.com", "anything")
+	if status != http.StatusOK {
+		t.Fatalf("login status = %d, want %d", status, http.StatusOK)
+	}
+
+	w := request(t, h, http.MethodGet, "/api/emails", "", token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if body := strings.TrimSpace(w.Body.String()); body != "[]" {
+		t.Errorf("list body = %q, want []", body)
+	}
+}
+
 func TestUserModeFiltersEmailsByOwner(t *testing.T) {
 	h, store, _ := newHandlerForTest(t, "any", "example.com", "secret")
 	addEmail(store, "received", "alice@example.com", "bob@example.com")

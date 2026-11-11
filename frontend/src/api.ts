@@ -81,11 +81,18 @@ export async function logout(): Promise<void> {
 export async function getEmails(user?: string): Promise<Email[]> {
   const query = user?.trim() ? `?user=${encodeURIComponent(user.trim())}` : '';
   const response = await fetchWithAuth(`${API_BASE}/emails${query}`);
-  return response.json();
+  if (!response.ok) {
+    throw new Error(`Failed to list emails (${response.status})`);
+  }
+  const data = await response.json();
+  return Array.isArray(data) ? data : [];
 }
 
 export async function getEmail(id: string): Promise<Email> {
   const response = await fetchWithAuth(`${API_BASE}/emails/${id}`);
+  if (!response.ok) {
+    throw new Error(`Failed to load email (${response.status})`);
+  }
   return response.json();
 }
 

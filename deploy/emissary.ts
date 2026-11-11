@@ -385,7 +385,6 @@ async function emailClientStack(
       S3_BUCKET: inboundEmailBucketName,
       SENDER: 'aws-ses',
       SES_FROM: env.SES_FROM || `no-reply@${emissaryDomain}`,
-      SES_REGION: awsRegion,
       METADATA: 'ddb',
       DDB_TABLE: metadataTable.tableName,
       METADATA_REGION: awsRegion,

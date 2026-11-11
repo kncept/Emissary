@@ -41,7 +41,7 @@ func TestLogSender_DefaultFrom(t *testing.T) {
 func TestAwsSesSender_InvalidConfig(t *testing.T) {
 	// Test that NewAwsSesSender fails gracefully without AWS credentials
 	// This is more of an integration test, so we just verify the constructor doesn't panic
-	_, err := NewAwsSesSender(context.Background(), "us-east-1", "")
+	_, err := NewAwsSesSender(context.Background(), "")
 	if err == nil {
 		t.Log("NewAwsSesSender succeeded (may have default credentials)")
 	} else {

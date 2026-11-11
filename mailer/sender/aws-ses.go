@@ -20,12 +20,8 @@ type AwsSesSender struct {
 	from   string
 }
 
-func NewAwsSesSender(ctx context.Context, region, from string) (*AwsSesSender, error) {
-	options := make([]func(*awsconfig.LoadOptions) error, 0, 1)
-	if region != "" {
-		options = append(options, awsconfig.WithRegion(region))
-	}
-	cfg, err := awsconfig.LoadDefaultConfig(ctx, options...)
+func NewAwsSesSender(ctx context.Context, from string) (*AwsSesSender, error) {
+	cfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}

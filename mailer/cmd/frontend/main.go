@@ -29,6 +29,7 @@ func main() {
 		JWTSecret:      cfg.Server.JWTSecret,
 		JWTSecretTTL:   cfg.Server.JWTExpiry,
 		S3Bucket:       cfg.Storage.S3Bucket,
+		StorageType:    cfg.Storage.Type,
 		MetadataType:   cfg.Metadata.Type,
 		MetadataPath:   cfg.Metadata.FilePath,
 		MetadataTable:  cfg.Metadata.DdbTable,
@@ -47,9 +48,8 @@ func main() {
 		LDAPUserFilter:   cfg.UserManager.LDAPUserFilter,
 		LDAPCacheTTL:     cfg.UserManager.LDAPCacheTTL,
 
-		SenderType:   cfg.Sender.Type,
-		SenderFrom:   cfg.Sender.From,
-		SenderRegion: cfg.Sender.Region,
+		SenderType: cfg.Sender.Type,
+		SenderFrom: cfg.Sender.From,
 	}
 
 	h, err := handler.New(handlerCfg)

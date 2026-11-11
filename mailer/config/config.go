@@ -56,11 +56,11 @@ func (c *StorageConfig) Validate() error {
 	return errors.Join(errs...)
 }
 
-// SenderConfig holds outbound email sender configuration.
+// SenderConfig holds outbound email sender configuration. The SES region is
+// resolved from the AWS SDK configuration, not from the environment.
 type SenderConfig struct {
-	Type   string // "aws-ses" or "log"
-	From   string // SES from address
-	Region string // AWS region for SES
+	Type string // "aws-ses" or "log"
+	From string // SES from address
 }
 
 // Validate checks that the sender configuration is complete and consistent.
@@ -177,9 +177,8 @@ func Load(ctx context.Context) (*Config, error) {
 			S3Bucket: firstEnv(ctx, "S3_BUCKET"),
 		},
 		Sender: SenderConfig{
-			Type:   strings.ToLower(strings.TrimSpace(firstEnv(ctx, "SENDER"))),
-			From:   firstEnv(ctx, "SES_FROM"),
-			Region: firstEnv(ctx, "SES_REGION"),
+			Type: strings.ToLower(strings.TrimSpace(firstEnv(ctx, "SENDER"))),
+			From: firstEnv(ctx, "SES_FROM"),
 		},
 		Metadata: MetadataConfig{
 			Type:     strings.ToLower(strings.TrimSpace(firstEnv(ctx, "METADATA"))),
@@ -233,9 +232,6 @@ func Load(ctx context.Context) (*Config, error) {
 		} else {
 			cfg.Sender.Type = "log"
 		}
-	}
-	if cfg.Sender.Region == "" {
-		cfg.Sender.Region = cfg.AWSRegion
 	}
 
 	// Metadata defaults

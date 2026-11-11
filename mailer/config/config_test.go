@@ -22,7 +22,6 @@ func TestLoad_Defaults(t *testing.T) {
 		os.Unsetenv("METADATA")
 		os.Unsetenv("JWT_TTL")
 		os.Unsetenv("PORT")
-		os.Unsetenv("SES_REGION")
 		os.Unsetenv("METADATA_REGION")
 		os.Unsetenv("AWS_REGION")
 		envutil.ClearCache()
@@ -73,7 +72,6 @@ func TestLoad_CustomValues(t *testing.T) {
 	os.Setenv("PORT", "9090")
 	os.Setenv("S3_BUCKET", "my-bucket")
 	os.Setenv("SES_FROM", "sender@example.com")
-	os.Setenv("SES_REGION", "eu-west-1")
 	os.Setenv("METADATA_FILE", "/tmp/meta.json")
 	os.Setenv("METADATA_REGION", "ap-southeast-1")
 	os.Setenv("AWS_REGION", "us-east-1")
@@ -113,9 +111,6 @@ func TestLoad_CustomValues(t *testing.T) {
 	}
 	if cfg.Sender.From != "sender@example.com" {
 		t.Errorf("Sender.From = %q", cfg.Sender.From)
-	}
-	if cfg.Sender.Region != "eu-west-1" {
-		t.Errorf("Sender.Region = %q", cfg.Sender.Region)
 	}
 	if cfg.Metadata.FilePath != "/tmp/meta.json" {
 		t.Errorf("Metadata.FilePath = %q", cfg.Metadata.FilePath)
@@ -282,24 +277,6 @@ func TestLoad_ListenAddrWithFullAddress(t *testing.T) {
 
 	if cfg.Server.ListenAddr != "127.0.0.1:4000" {
 		t.Errorf("Server.ListenAddr = %q, want %q", cfg.Server.ListenAddr, "127.0.0.1:4000")
-	}
-}
-
-func TestLoad_SESRegionDefaultsToAWSRegion(t *testing.T) {
-	os.Setenv("USERNAME", "user")
-	os.Setenv("PASSWORD", "pass")
-	os.Setenv("SENDER", "aws-ses")
-	os.Setenv("SES_FROM", "sender@example.com")
-	os.Setenv("AWS_REGION", "eu-central-1")
-	defer cleanupEnv()
-
-	cfg, err := Load(context.Background())
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	if cfg.Sender.Region != "eu-central-1" {
-		t.Errorf("Sender.Region = %q, want %q", cfg.Sender.Region, "eu-central-1")
 	}
 }
 
@@ -477,7 +454,6 @@ func cleanupEnv() {
 	os.Unsetenv("SES_FROM")
 	os.Unsetenv("METADATA_FILE")
 	os.Unsetenv("LISTEN_ADDR")
-	os.Unsetenv("SES_REGION")
 	os.Unsetenv("DDB_TABLE")
 	os.Unsetenv("METADATA_REGION")
 	os.Unsetenv("USER_MANAGER")

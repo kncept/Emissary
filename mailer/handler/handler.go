@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -54,6 +55,7 @@ type HandlerConfig struct {
 	JWTSecret      string
 	JWTSecretTTL   time.Duration
 	S3Bucket       string
+	StorageType    string
 	MetadataType   string
 	MetadataPath   string
 	MetadataTable  string
@@ -79,10 +81,9 @@ type HandlerConfig struct {
 
 	// Outbound email sender. Sender may be supplied directly for tests;
 	// otherwise it is built from the fields below.
-	Sender       sender.Sender
-	SenderType   string
-	SenderFrom   string
-	SenderRegion string
+	Sender     sender.Sender
+	SenderType string
+	SenderFrom string
 }
 
 // New creates a new HTTP handler with all routes configured.
@@ -137,9 +138,14 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 	if cfg.Storage != nil {
 		emailStore = cfg.Storage
 	} else {
-		emailStore, err = storage.NewS3Storage(cfg.S3Bucket)
-		if err != nil {
-			return nil, err
+		switch strings.ToLower(strings.TrimSpace(cfg.StorageType)) {
+		case "memory":
+			emailStore = storage.NewMemoryStorage()
+		default:
+			emailStore, err = storage.NewS3Storage(cfg.S3Bucket)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -162,7 +168,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 	if mailSender == nil {
 		switch strings.ToLower(strings.TrimSpace(cfg.SenderType)) {
 		case "aws-ses", "ses":
-			mailSender, err = sender.NewAwsSesSender(context.Background(), cfg.SenderRegion, cfg.SenderFrom)
+			mailSender, err = sender.NewAwsSesSender(context.Background(), cfg.SenderFrom)
 			if err != nil {
 				return nil, err
 			}
@@ -382,6 +388,7 @@ func handleListEmails(w http.ResponseWriter, r *http.Request, emailStore storage
 
 	emails, err := emailStore.ListAllEmails(ctx)
 	if err != nil {
+		fmt.Printf("%v\n", err)
 		writeError(w, http.StatusInternalServerError, "failed to list emails")
 		return
 	}
@@ -392,7 +399,9 @@ func handleListEmails(w http.ResponseWriter, r *http.Request, emailStore storage
 		metaMap[m.ID] = m
 	}
 
-	var response []EmailResponse
+	// An empty slice (not nil) so an empty inbox marshals as [] rather than
+	// null; clients iterate the result directly.
+	response := make([]EmailResponse, 0, len(emails))
 	for _, email := range emails {
 		if !canAccessEmail(claims, email, requested) {
 			continue

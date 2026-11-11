@@ -1,4 +1,4 @@
-import { Outlet, Link, useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 
 interface LayoutProps {
@@ -6,7 +6,7 @@ interface LayoutProps {
   onLogout: () => void;
 }
 
-export default function Layout({ onLogout }: LayoutProps) {
+export default function Layout({ children, onLogout }: LayoutProps) {
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -51,7 +51,7 @@ export default function Layout({ onLogout }: LayoutProps) {
         </div>
       </header>
       <main className="app-main">
-        <Outlet />
+        {children}
       </main>
       {mobileMenuOpen && (
         <div className="mobile-overlay" onClick={() => setMobileMenuOpen(false)} />
