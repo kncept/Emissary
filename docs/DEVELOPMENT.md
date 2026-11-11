@@ -53,11 +53,11 @@ STORAGE=memory ./run.sh run
 
 `run.sh run` builds first, then starts `.build/frontend`. It defaults
 `USERNAME=Emissary`, generates `PASSWORD` and `JWT_SECRET` when unset
-(printed at startup), and defaults `S3_BUCKET=emissary-emails` — so set
-`STORAGE=memory` explicitly for an AWS-free run. With no `SES_FROM`,
-outbound mail uses the log sender (messages appear in stdout only).
-See [CONFIGURATION.md](CONFIGURATION.md) for the full variable list
-and defaults.
+(printed at startup). `S3_BUCKET` must be set explicitly when using
+`STORAGE=s3` — set `STORAGE=memory` explicitly for an AWS-free run. With
+no `SES_FROM`, outbound mail uses the log sender (messages appear in
+stdout only). See [CONFIGURATION.md](CONFIGURATION.md) for the full
+variable list and defaults.
 
 For pure UI work, `cd frontend && npm run dev` starts the Vite dev
 server, but it does not proxy `/api` — end-to-end work happens against

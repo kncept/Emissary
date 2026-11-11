@@ -88,7 +88,7 @@ instantiated in `handler.New`:
 
 | Seam | Interface | Selector | Implementations | Notes |
 | --- | --- | --- | --- | --- |
-| Inbound messages | `storage.Storage` | `STORAGE` | `s3`, `memory` | `s3` needs `S3_BUCKET`. Defaults to `s3` when `S3_BUCKET` is set, else `memory`. |
+| Inbound messages | `storage.Storage` | `STORAGE` | `s3`, `memory` | `s3` needs `S3_BUCKET`. Defaults to `memory`. |
 | Outbound mail | `sender.Sender` | `SENDER` | `aws-ses`, `log` | Defaults to `aws-ses` when `SES_FROM` is set, else `log`. |
 | Message state | `metadata.MetadataStore` | `METADATA` | `memory` (default), `file`, `ddb` | `ddb` needs `DDB_TABLE`. |
 | Users | `usermanager.Manager` | `USER_MANAGER` | `none` (default), `any`, `ddb`, `ldap` | `any` accepts any address in `DOMAIN` with any password. `ddb`/`ldap` are unimplemented. |

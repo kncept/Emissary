@@ -23,8 +23,8 @@ deployed Lambda receives its JWT secret as an ARN.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `STORAGE` | `s3` if `S3_BUCKET` is set, else `memory` | `s3` or `memory`. |
-| `S3_BUCKET` | — | Bucket holding raw inbound messages. Required when `STORAGE=s3`. Objects are read at their exact key (SES writes them at the bucket root). |
+| `STORAGE` | `memory` | `s3` or `memory`. |
+| `S3_BUCKET` | — (required when `STORAGE=s3`) | Bucket holding raw inbound messages. Required when `STORAGE=s3`. Objects are read at their exact key (SES writes them at the bucket root). |
 
 ## Sender (write side of mail)
 
@@ -72,9 +72,8 @@ behaviours on top of the table above:
 - A random `PASSWORD` is generated when the variable is **unset**;
   explicitly setting it blank disables admin login.
 - A random `JWT_SECRET` is generated when unset.
-- `S3_BUCKET` defaults to `emissary-emails`, which implies
-  `STORAGE=s3`. For a fully local, AWS-free run use
-  `STORAGE=memory ./run.sh run`.
+- `S3_BUCKET` must be set explicitly when using `STORAGE=s3`. For a
+  fully local, AWS-free run use `STORAGE=memory ./run.sh run`.
 - `METADATA` defaults to `memory` and `PORT` to `8080`.
 
 ## Deployed values (set by the CDK client stack)
