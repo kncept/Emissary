@@ -73,9 +73,9 @@ listens with `net/http` and uses the memory/log implementations.
 | `awsutil` | Lambda detection and Secrets Manager access. |
 | `auth` | JWT issue/validate (`Claims`: `sub`, `sid`, `admin`, `iat`, `exp`, optional `aud`/`iss`). |
 | `usermanager` | Pluggable login backends; every backend also knows the built-in admin. |
-| `storage` | Read side of mail: `ListAllEmails`, `GetEmail`. |
+| `storage` | Mail source: `ListAllEmails`, `GetEmail`, `DeleteEmail`. |
 | `sender` | Write side of mail: `Send`. |
-| `metadata` | Per-message read/flag state. |
+| `metadata` | Per-message read/flag state, discarded when a message is deleted. |
 | `email` | RFC 5322 parsing: `WireFormatEmail` (full structure) and `UserEmail` (simplified). |
 | `handler` | The HTTP API, auth middleware, panic recovery, and the embedded frontend. |
 | `gui` | `//go:embed all:frontend/dist` — the built SPA. |
@@ -132,9 +132,11 @@ key, so a key prefix would change every id.
   `Authorization: Bearer <token>`.
 - `requireAuth` middleware validates the signature, expiry, audience
   and issuer, then stashes the claims in the request context.
-- Listing/opening applies `canAccessEmail`: admins see everything
+- Listing/opening/deleting applies `canAccessEmail`: admins see everything
   (optionally filtered by `?user=`), users see only their own
-  conversations, and anything else is a `404`.
+  conversations, and anything else is a `404`. Deleting a message removes
+  the single underlying object, so it takes effect for every user who
+  could see it.
 
 ## Request handling details
 

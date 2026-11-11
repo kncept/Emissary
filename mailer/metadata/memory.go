@@ -55,6 +55,14 @@ func (m *MemoryMetadata) SetFlagged(ctx context.Context, id string, flagged bool
 	return nil
 }
 
+func (m *MemoryMetadata) Delete(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.data, id)
+	return nil
+}
+
 func (m *MemoryMetadata) List(ctx context.Context) ([]EmailMetadata, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

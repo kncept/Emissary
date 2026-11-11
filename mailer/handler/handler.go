@@ -59,7 +59,8 @@ type HandlerConfig struct {
 	MetadataPath   string
 	MetadataTable  string
 	MetadataRegion string
-	Storage        storage.Storage // Optional: for testing with custom storage
+	Storage        storage.Storage        // Optional: for testing with custom storage
+	Metadata       metadata.MetadataStore // Optional: for testing with custom metadata
 	// JWT audience and issuer for token validation
 	JWTAudience string
 	JWTIssuer   string
@@ -150,13 +151,17 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 
 	// Initialize metadata store
 	var metaStore metadata.MetadataStore
-	switch cfg.MetadataType {
-	case "file":
-		metaStore, err = metadata.NewFileMetadata(cfg.MetadataPath)
-	case "ddb", "dynamodb":
-		metaStore, err = metadata.NewDdbMetadata(cfg.MetadataTable, cfg.MetadataRegion)
-	default:
-		metaStore = metadata.NewMemoryMetadata()
+	if cfg.Metadata != nil {
+		metaStore = cfg.Metadata
+	} else {
+		switch cfg.MetadataType {
+		case "file":
+			metaStore, err = metadata.NewFileMetadata(cfg.MetadataPath)
+		case "ddb", "dynamodb":
+			metaStore, err = metadata.NewDdbMetadata(cfg.MetadataTable, cfg.MetadataRegion)
+		default:
+			metaStore = metadata.NewMemoryMetadata()
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -196,6 +201,9 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 	})))
 	mux.Handle("POST /api/emails/{id}/flag", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleMarkFlagged(w, r, emailStore, metaStore)
+	})))
+	mux.Handle("DELETE /api/emails/{id}", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleDeleteEmail(w, r, emailStore, metaStore)
 	})))
 	mux.Handle("POST /api/emails/send", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleSendEmail(w, r, emailStore, mailSender)
@@ -561,6 +569,37 @@ func handleMarkFlagged(w http.ResponseWriter, r *http.Request, emailStore storag
 		logRequestError(r, "update flag status "+strconv.Quote(id), err)
 		writeError(w, http.StatusInternalServerError, "failed to update flag status")
 		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+// handleDeleteEmail removes a message the caller can see. Deletion follows
+// the visibility rules of read/flag, but is shared: the message is a single
+// object, so removing it takes effect for every recipient.
+func handleDeleteEmail(w http.ResponseWriter, r *http.Request, emailStore storage.Storage, metaStore metadata.MetadataStore) {
+	ctx := r.Context()
+
+	message, ok := requireVisibleEmail(w, r, emailStore)
+	if !ok {
+		return
+	}
+
+	if err := emailStore.DeleteEmail(ctx, message.ID); err != nil {
+		if err == storage.ErrNotFound {
+			// Deleted concurrently between the visibility check and the
+			// delete; report it the same as any other missing message.
+			writeError(w, http.StatusNotFound, "email not found")
+			return
+		}
+		logRequestError(r, "delete email "+strconv.Quote(message.ID), err)
+		writeError(w, http.StatusInternalServerError, "failed to delete email")
+		return
+	}
+
+	// Metadata is decorative: a failure to clean it up must not fail the
+	// delete, but it is kept in the log.
+	if err := metaStore.Delete(ctx, message.ID); err != nil {
+		logRequestError(r, "delete email metadata "+strconv.Quote(message.ID), err)
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }

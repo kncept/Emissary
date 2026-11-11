@@ -24,6 +24,7 @@ type s3API interface {
 	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+	HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
 
@@ -154,6 +155,11 @@ func isObjectNotFound(err error) bool {
 	if errors.As(err, &noSuchKey) {
 		return true
 	}
+	// HeadObject reports a missing key as NotFound rather than NoSuchKey.
+	var notFound *types.NotFound
+	if errors.As(err, &notFound) {
+		return true
+	}
 	var responseError *smithyhttp.ResponseError
 	return errors.As(err, &responseError) && responseError.HTTPStatusCode() == http.StatusNotFound
 }
@@ -267,12 +273,42 @@ func parseEmail(key, raw string) Email {
 	return email
 }
 
-func (s *S3Storage) DeleteEmail(ctx context.Context, key string) error {
-	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(key),
-	})
-	return err
+// DeleteEmail implements the Storage interface. It resolves the id the same
+// way GetEmail does and deletes every matching object, so it returns
+// ErrNotFound only when no candidate key exists.
+func (s *S3Storage) DeleteEmail(ctx context.Context, id string) error {
+	candidates := s.emailKeyCandidates(id)
+	if len(candidates) == 0 {
+		return ErrNotFound
+	}
+
+	deleted := false
+	for _, key := range candidates {
+		// DeleteObject succeeds even when the key does not exist, so the
+		// object's presence is checked first to keep ErrNotFound meaningful.
+		_, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+			Bucket: aws.String(s.bucket),
+			Key:    aws.String(key),
+		})
+		if err != nil {
+			if isObjectNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("failed to check object %q: %w", key, err)
+		}
+		_, err = s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(s.bucket),
+			Key:    aws.String(key),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to delete object %q: %w", key, err)
+		}
+		deleted = true
+	}
+	if !deleted {
+		return ErrNotFound
+	}
+	return nil
 }
 
 type SESClient struct {

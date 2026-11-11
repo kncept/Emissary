@@ -66,11 +66,11 @@ Each pluggable seam is a small interface plus a selector switch. To
 add a new implementation, three places change:
 
 1. Implement the interface (in its package, next to the others):
-   - `storage.Storage` — `Name`, `ListAllEmails`, `GetEmail`
-     (`mailer/storage`)
+   - `storage.Storage` — `Name`, `ListAllEmails`, `GetEmail`,
+     `DeleteEmail` (`mailer/storage`)
    - `sender.Sender` — `Name`, `From`, `Send` (`mailer/sender`)
-   - `metadata.MetadataStore` — `Get`, `SetRead`, `SetFlagged`, `List`
-     (`mailer/metadata`)
+   - `metadata.MetadataStore` — `Get`, `SetRead`, `SetFlagged`, `Delete`,
+     `List` (`mailer/metadata`)
    - `usermanager.Manager` — `Name`, `Authenticate`, `IsAdmin`
      (`mailer/usermanager`)
 2. Register it in the `switch` that builds that component

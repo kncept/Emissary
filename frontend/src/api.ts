@@ -110,6 +110,14 @@ export async function markFlagged(id: string, flagged: boolean): Promise<void> {
   });
 }
 
+// Deleting removes the message for every recipient, not just the caller.
+export async function deleteEmail(id: string): Promise<void> {
+  const response = await fetchWithAuth(`${API_BASE}/emails/${id}`, { method: 'DELETE' });
+  if (!response.ok) {
+    throw new Error(`Failed to delete email (${response.status})`);
+  }
+}
+
 export async function sendEmail(data: SendEmailRequest): Promise<{ success: boolean; message?: string }> {
   const response = await fetchWithAuth(`${API_BASE}/emails/send`, {
     method: 'POST',

@@ -99,8 +99,8 @@ Skipped (with a warning) unless `mailer/cmd/frontend/bootstrap` exists.
   only if provided), `JWT_SECRET` as a Secrets Manager ARN, and the JWT
   audience/issuer.
 - IAM role `emissary-<domain>-app`: Lambda basic execution (logs to
-  `/logs/emissary/<domain>`, 3-month retention), read-only access to
-  the inbound bucket, `ses:SendEmail`/`ses:SendRawEmail` on the
+  `/logs/emissary/<domain>`, 3-month retention), read and delete access
+  to the inbound bucket, `ses:SendEmail`/`ses:SendRawEmail` on the
   account's identities, read/write on the metadata table, and read on
   the JWT secret.
 - DynamoDB table `emissary-<domain>-metadata` (partition key `id`,

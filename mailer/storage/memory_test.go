@@ -179,3 +179,39 @@ func TestMemoryStorage_CloneIsolation(t *testing.T) {
 		t.Errorf("Got modified email: Subject = %q, want %q", got.Subject, "Test")
 	}
 }
+
+func TestMemoryStorage_DeleteEmail(t *testing.T) {
+	s := NewMemoryStorage()
+
+	s.Add(&email.UserEmail{
+		ID:      "test-1",
+		From:    email.Address{Address: "from@example.com"},
+		To:      []email.Address{{Address: "to@example.com"}},
+		Subject: "Test",
+		Date:    time.Now(),
+		Text:    "Body",
+	})
+
+	if err := s.DeleteEmail(context.Background(), "test-1"); err != nil {
+		t.Fatalf("DeleteEmail() error = %v", err)
+	}
+
+	if _, err := s.GetEmail(context.Background(), "test-1"); err != ErrNotFound {
+		t.Errorf("GetEmail() after delete error = %v, want ErrNotFound", err)
+	}
+	emails, err := s.ListAllEmails(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllEmails() error = %v", err)
+	}
+	if len(emails) != 0 {
+		t.Errorf("ListAllEmails() after delete returned %d emails, want 0", len(emails))
+	}
+
+	// Deleting an absent email is reported, and deleting twice does not resurrect it.
+	if err := s.DeleteEmail(context.Background(), "test-1"); err != ErrNotFound {
+		t.Errorf("DeleteEmail() absent error = %v, want ErrNotFound", err)
+	}
+	if err := s.DeleteEmail(context.Background(), "never-existed"); err != ErrNotFound {
+		t.Errorf("DeleteEmail() nonexistent error = %v, want ErrNotFound", err)
+	}
+}

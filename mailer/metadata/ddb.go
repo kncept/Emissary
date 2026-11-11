@@ -67,6 +67,21 @@ func (d *DdbMetadata) SetFlagged(ctx context.Context, id string, flagged bool) e
 	return d.put(ctx, metadata)
 }
 
+// Delete removes the item for the given id. DynamoDB deletes are
+// idempotent, so an absent id is not an error.
+func (d *DdbMetadata) Delete(ctx context.Context, id string) error {
+	_, err := d.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(d.tableName),
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: id},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete item: %w", err)
+	}
+	return nil
+}
+
 func (d *DdbMetadata) put(ctx context.Context, metadata EmailMetadata) error {
 	item, err := attributevalue.MarshalMap(metadata)
 	if err != nil {

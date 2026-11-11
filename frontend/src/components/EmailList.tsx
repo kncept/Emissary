@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { formatDistanceToNow, parseISO } from 'date-fns';
-import { getEmails } from '../api';
+import { getEmails, deleteEmail } from '../api';
 import type { Email } from '../types';
 
 interface EmailListProps {
@@ -35,6 +35,16 @@ export default function EmailList({ admin = false }: EmailListProps) {
   const applyFilter = (e: React.FormEvent) => {
     e.preventDefault();
     setAppliedFilter(userFilter.trim());
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('Delete this email? This cannot be undone.')) return;
+    try {
+      await deleteEmail(id);
+      setEmails((prev) => prev.filter((email) => email.id !== id));
+    } catch {
+      setError('Failed to delete email');
+    }
   };
 
   const formatDate = (dateStr: string) => {
@@ -153,6 +163,17 @@ export default function EmailList({ admin = false }: EmailListProps) {
                   aria-label={email.flagged ? 'Remove flag' : 'Flag'}
                 >
                   {email.flagged ? '🚩' : '🏳️'}
+                </button>
+                <button
+                  className="icon-btn"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleDelete(email.id);
+                  }}
+                  aria-label="Delete email"
+                >
+                  🗑️
                 </button>
               </div>
             </li>

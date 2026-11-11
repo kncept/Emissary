@@ -42,6 +42,19 @@ func (m *mockStorage) GetEmail(ctx context.Context, id string) (*email.UserEmail
 	return nil, storage.ErrNotFound
 }
 
+func (m *mockStorage) DeleteEmail(ctx context.Context, id string) error {
+	if m.err != nil {
+		return m.err
+	}
+	for i, e := range m.emails {
+		if e.ID == id {
+			m.emails = append(m.emails[:i], m.emails[i+1:]...)
+			return nil
+		}
+	}
+	return storage.ErrNotFound
+}
+
 type mockSender struct {
 	from string
 	err  error

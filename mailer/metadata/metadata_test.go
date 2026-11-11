@@ -71,6 +71,74 @@ func TestMemoryMetadata_Concurrent(t *testing.T) {
 	}
 }
 
+func TestMemoryMetadata_Delete(t *testing.T) {
+	m := NewMemoryMetadata()
+	ctx := context.Background()
+
+	if err := m.MarkRead(ctx, "email-1"); err != nil {
+		t.Fatalf("MarkRead() error = %v", err)
+	}
+	if err := m.Delete(ctx, "email-1"); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	meta, err := m.Get(ctx, "email-1")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if meta.Read || meta.Flagged {
+		t.Errorf("Get() after delete = %+v, want no state", meta)
+	}
+	list, err := m.List(ctx)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("List() after delete = %v, want empty", list)
+	}
+
+	// Deleting an absent id is not an error.
+	if err := m.Delete(ctx, "absent"); err != nil {
+		t.Errorf("Delete() absent error = %v, want nil", err)
+	}
+}
+
+func TestFileMetadata_Delete(t *testing.T) {
+	tmpDir := t.TempDir()
+	tmpFile := tmpDir + "/metadata.json"
+
+	m, err := NewFileMetadata(tmpFile)
+	if err != nil {
+		t.Fatalf("NewFileMetadata() error = %v", err)
+	}
+	ctx := context.Background()
+
+	if err := m.MarkRead(ctx, "email-1"); err != nil {
+		t.Fatalf("MarkRead() error = %v", err)
+	}
+	if err := m.Delete(ctx, "email-1"); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	// A fresh instance shows the deletion was persisted.
+	m2, err := NewFileMetadata(tmpFile)
+	if err != nil {
+		t.Fatalf("NewFileMetadata() error = %v", err)
+	}
+	list, err := m2.List(ctx)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("List() after delete = %v, want empty", list)
+	}
+
+	// Deleting an absent id is not an error.
+	if err := m2.Delete(ctx, "absent"); err != nil {
+		t.Errorf("Delete() absent error = %v, want nil", err)
+	}
+}
+
 func TestFileMetadata(t *testing.T) {
 	tmpFile := "/tmp/emissary-test-metadata-" + string(rune('0'+int(time.Now().UnixNano()%1000))) + ".json"
 	defer os.Remove(tmpFile)

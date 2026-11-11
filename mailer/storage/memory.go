@@ -64,6 +64,18 @@ func (s *MemoryStorage) GetEmail(_ context.Context, id string) (*email.UserEmail
 	return clone(e), nil
 }
 
+// DeleteEmail implements the Storage interface.
+func (s *MemoryStorage) DeleteEmail(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.emails[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.emails, id)
+	return nil
+}
+
 func clone(e *email.UserEmail) *email.UserEmail {
 	copied := *e
 	copied.To = append([]email.Address(nil), e.To...)

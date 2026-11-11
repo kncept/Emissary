@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kncept/Emissary/mailer/email"
+	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/storage"
 )
 
@@ -184,6 +185,101 @@ func TestAdminCanFilterAndSeeAllUsers(t *testing.T) {
 
 	if w := request(t, h, http.MethodGet, "/api/emails/unrelated", "", token); w.Code != http.StatusOK {
 		t.Errorf("admin get unrelated status = %d, want 200", w.Code)
+	}
+}
+
+func TestDeleteEmailVisibilityAndRemoval(t *testing.T) {
+	h, store, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	addEmail(store, "received", "alice@example.com", "bob@example.com")
+	addEmail(store, "unrelated", "carol@example.com", "dave@example.com")
+
+	_, token, _ := login(t, h, "bob@example.com", "anything")
+
+	// A message outside the caller's visibility is not deletable.
+	if w := request(t, h, http.MethodDelete, "/api/emails/unrelated", "", token); w.Code != http.StatusNotFound {
+		t.Errorf("delete unrelated status = %d, want 404", w.Code)
+	}
+
+	// Deleting a visible message succeeds and removes it for everyone,
+	// including the administrator.
+	if w := request(t, h, http.MethodDelete, "/api/emails/received", "", token); w.Code != http.StatusOK {
+		t.Fatalf("delete received status = %d, want %d (body %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	ids := responseIDs(t, request(t, h, http.MethodGet, "/api/emails", "", token))
+	if ids["received"] {
+		t.Error("deleted email still listed for owner")
+	}
+	_, adminToken, _ := login(t, h, "admin", "secret")
+	ids = responseIDs(t, request(t, h, http.MethodGet, "/api/emails", "", adminToken))
+	if ids["received"] {
+		t.Error("deleted email still listed for admin")
+	}
+	if !ids["unrelated"] {
+		t.Error("unrelated email should still exist")
+	}
+
+	// An email that is already gone is reported like any other missing one.
+	if w := request(t, h, http.MethodDelete, "/api/emails/received", "", token); w.Code != http.StatusNotFound {
+		t.Errorf("re-delete status = %d, want 404", w.Code)
+	}
+	if w := request(t, h, http.MethodDelete, "/api/emails/missing", "", token); w.Code != http.StatusNotFound {
+		t.Errorf("delete missing status = %d, want 404", w.Code)
+	}
+
+	// The administrator can delete any message.
+	if w := request(t, h, http.MethodDelete, "/api/emails/unrelated", "", adminToken); w.Code != http.StatusOK {
+		t.Errorf("admin delete status = %d, want 200", w.Code)
+	}
+	ids = responseIDs(t, request(t, h, http.MethodGet, "/api/emails", "", adminToken))
+	if len(ids) != 0 {
+		t.Errorf("admin list after deletes = %v, want empty", ids)
+	}
+}
+
+func TestDeleteEmailAlsoDeletesMetadata(t *testing.T) {
+	store := storage.NewMemoryStorage()
+	metaStore := metadata.NewMemoryMetadata()
+	addEmail(store, "received", "alice@example.com", "bob@example.com")
+
+	h, err := New(HandlerConfig{
+		AuthUser:        "admin",
+		AuthPass:        "secret",
+		JWTSecret:       "secret",
+		JWTSecretTTL:    time.Hour,
+		Storage:         store,
+		Metadata:        metaStore,
+		UserManagerType: "any",
+		UserDomain:      "example.com",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	_, token, _ := login(t, h, "bob@example.com", "anything")
+	if w := request(t, h, http.MethodPost, "/api/emails/received/read", `{"read":true}`, token); w.Code != http.StatusOK {
+		t.Fatalf("mark read status = %d, want 200", w.Code)
+	}
+	if w := request(t, h, http.MethodPost, "/api/emails/received/flag", `{"flagged":true}`, token); w.Code != http.StatusOK {
+		t.Fatalf("mark flagged status = %d, want 200", w.Code)
+	}
+
+	if w := request(t, h, http.MethodDelete, "/api/emails/received", "", token); w.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200", w.Code)
+	}
+
+	meta, err := metaStore.Get(context.Background(), "received")
+	if err != nil {
+		t.Fatalf("metadata Get() error = %v", err)
+	}
+	if meta.Read || meta.Flagged {
+		t.Errorf("metadata after delete = %+v, want no read/flag state", meta)
+	}
+	list, err := metaStore.List(context.Background())
+	if err != nil {
+		t.Fatalf("metadata List() error = %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("metadata list after delete = %v, want empty", list)
 	}
 }
 

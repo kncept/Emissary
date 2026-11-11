@@ -274,14 +274,15 @@ async function emailClientStack(
   })
   logGroup.grantWrite(role)
 
-  // Read access to the raw inbound EML messages. The ARNs are built from the
+  // Access to the raw inbound EML messages. The ARNs are built from the
   // bucket name string (rather than a bucket grant) so the bucket stays owned
   // by the email-in stack without creating a cross-stack reference.
   role.addToPolicy(new iam.PolicyStatement({
-    sid: 'InboundEmailRead',
+    sid: 'InboundEmailAccess',
     actions: [
       's3:GetObject',
       's3:ListBucket',
+      's3:DeleteObject',
     ],
     resources: [
       `arn:aws:s3:::${inboundEmailBucketName}`,

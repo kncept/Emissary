@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { checkAuth, login } from './api';
+import { checkAuth, deleteEmail, login } from './api';
 
 const TOKEN_KEY = 'emissary_token';
 
@@ -43,6 +43,38 @@ describe('auth api', () => {
         headers: { Authorization: 'Bearer abc123' },
       });
       expect(result).toEqual({ authenticated: true, username: 'Emissary' });
+    });
+  });
+
+  describe('deleteEmail', () => {
+    it('sends a DELETE request with the stored token', async () => {
+      window.localStorage.setItem(TOKEN_KEY, 'abc123');
+      const fetchMock = vi.fn(async () => ({
+        status: 200,
+        ok: true,
+        json: async () => ({ success: true }),
+      }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await deleteEmail('email-id');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith('/api/emails/email-id', {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer abc123', 'Content-Type': 'application/json' },
+      });
+    });
+
+    it('throws when the delete fails', async () => {
+      window.localStorage.setItem(TOKEN_KEY, 'abc123');
+      const fetchMock = vi.fn(async () => ({
+        status: 404,
+        ok: false,
+        json: async () => ({ error: 'email not found' }),
+      }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(deleteEmail('missing')).rejects.toThrow('Failed to delete email (404)');
     });
   });
 

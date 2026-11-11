@@ -113,6 +113,14 @@ func (f *FileMetadata) SetFlagged(ctx context.Context, id string, flagged bool) 
 	return f.saveLocked()
 }
 
+func (f *FileMetadata) Delete(ctx context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	delete(f.data, id)
+	return f.saveLocked()
+}
+
 func (f *FileMetadata) List(ctx context.Context) ([]EmailMetadata, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()

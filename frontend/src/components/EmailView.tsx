@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { parseISO, format } from 'date-fns';
-import { getEmail, markRead, markFlagged } from '../api';
+import { getEmail, markRead, markFlagged, deleteEmail } from '../api';
 import type { Email } from '../types';
 
 export default function EmailView() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [email, setEmail] = useState<Email | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -45,6 +46,17 @@ export default function EmailView() {
       setEmail({ ...email, flagged });
     } catch (err) {
       // Error handling
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!email) return;
+    if (!window.confirm('Delete this email? This cannot be undone.')) return;
+    try {
+      await deleteEmail(email.id);
+      navigate('/');
+    } catch {
+      setError('Failed to delete email');
     }
   };
 
@@ -108,6 +120,9 @@ export default function EmailView() {
           <Link to={`/compose/${email.id}`} className="btn btn-secondary">
             Reply
           </Link>
+          <button className="btn btn-danger" onClick={handleDelete}>
+            Delete
+          </button>
           <Link to="/" className="btn btn-secondary">
             Back
           </Link>

@@ -28,6 +28,7 @@ as the webmail client. The API lives under the `/api` prefix; unknown
 | `GET` | `/api/emails/{id}` | Bearer | Fetch a single message. |
 | `POST` | `/api/emails/{id}/read` | Bearer | Set the read flag. |
 | `POST` | `/api/emails/{id}/flag` | Bearer | Set the flagged flag. |
+| `DELETE` | `/api/emails/{id}` | Bearer | Delete a message. |
 | `POST` | `/api/emails/send` | Bearer | Send a message via the configured sender. |
 
 ## `POST /api/auth/login`
@@ -113,6 +114,19 @@ Applies only to messages visible to the caller.
 
 Request: `{ "flagged": true }`. Response: `{ "success": true }`.
 Applies only to messages visible to the caller.
+
+## `DELETE /api/emails/{id}`
+
+Response: `{ "success": true }`. There is no request body.
+
+Deletes the message from storage. The visibility rules are the same as
+read/flag — only a message the caller can see (or an administrator) can be
+deleted, and anything else returns `404 email not found`.
+
+Deletion is **shared, not per-user**: each message is a single object, so
+deleting it removes it for every sender and recipient. Read/flag metadata
+for the message is discarded as well; a metadata failure is logged but
+does not fail the delete.
 
 ## `POST /api/emails/send`
 

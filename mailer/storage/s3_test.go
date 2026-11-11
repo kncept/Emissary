@@ -72,6 +72,15 @@ func (f *fakeS3) DeleteObject(_ context.Context, input *s3.DeleteObjectInput, _ 
 	return &s3.DeleteObjectOutput{}, nil
 }
 
+func (f *fakeS3) HeadObject(_ context.Context, input *s3.HeadObjectInput, _ ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+	key := aws.ToString(input.Key)
+	body, ok := f.objects[key]
+	if !ok {
+		return nil, &types.NotFound{}
+	}
+	return &s3.HeadObjectOutput{ContentLength: aws.Int64(int64(len(body)))}, nil
+}
+
 func TestS3StorageListAllEmailsReadsSESMessageKeys(t *testing.T) {
 	const key = "4s5k9q1abc-amazon-ses-message-id"
 	fake := newFakeS3(map[string]string{key: testMessage})
@@ -137,5 +146,68 @@ func TestS3StorageGetEmailReturnsErrNotFound(t *testing.T) {
 	_, err := store.GetEmail(context.Background(), "missing")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("GetEmail() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestS3StorageDeleteEmailRemovesObject(t *testing.T) {
+	const key = "4s5k9q1abc-amazon-ses-message-id"
+	fake := newFakeS3(map[string]string{key: testMessage})
+	store := &S3Storage{client: fake, bucket: "mail-bucket"}
+
+	if err := store.DeleteEmail(context.Background(), key); err != nil {
+		t.Fatalf("DeleteEmail() error = %v", err)
+	}
+
+	emails, err := store.ListAllEmails(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllEmails() error = %v", err)
+	}
+	if len(emails) != 0 {
+		t.Fatalf("ListAllEmails() after delete returned %d emails, want 0", len(emails))
+	}
+	if _, err := store.GetEmail(context.Background(), key); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetEmail() after delete error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestS3StorageDeleteEmailResolvesPrefixedId(t *testing.T) {
+	fake := newFakeS3(map[string]string{
+		"emails/one":  testMessage,
+		"root-object": testMessage,
+	})
+	store := &S3Storage{client: fake, bucket: "mail-bucket", prefix: "emails"}
+
+	// A bare id is resolved against the configured prefix.
+	if err := store.DeleteEmail(context.Background(), "one"); err != nil {
+		t.Fatalf("DeleteEmail() error = %v", err)
+	}
+
+	emails, err := store.ListAllEmails(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllEmails() error = %v", err)
+	}
+	if len(emails) != 0 {
+		t.Fatalf("ListAllEmails() = %v, want empty", emails)
+	}
+	// The store only lists objects under its prefix; check the untouched
+	// root object in the backing bucket directly.
+	if _, ok := fake.objects["root-object"]; !ok {
+		t.Error("root-object should not have been deleted")
+	}
+	if _, ok := fake.objects["emails/one"]; ok {
+		t.Error("emails/one should have been deleted")
+	}
+}
+
+func TestS3StorageDeleteEmailReturnsErrNotFound(t *testing.T) {
+	fake := newFakeS3(map[string]string{"present": testMessage})
+	store := &S3Storage{client: fake, bucket: "mail-bucket"}
+
+	if err := store.DeleteEmail(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("DeleteEmail() missing error = %v, want ErrNotFound", err)
+	}
+	// Nothing else was touched.
+	if _, err := store.GetEmail(context.Background(), "present"); err != nil {
+		t.Errorf("GetEmail() error = %v, want nil", err)
 	}
 }
