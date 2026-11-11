@@ -14,6 +14,7 @@ It can be set up as a lambda, run natively or embedded in a dockerfile.
 - [API](docs/API.md) — the HTTP API reference
 - [Deployment](docs/DEPLOYMENT.md) — the CDK stacks and deploy workflow
 - [Development](docs/DEVELOPMENT.md) — building, testing and extending
+- [Testing](docs/TESTING.md) — the test strategy, layers and conventions
 
 ## Building
 Use the run.sh build command, as it handles embedding the frontend

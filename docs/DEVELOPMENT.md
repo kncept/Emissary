@@ -27,6 +27,10 @@ when `dist/` is missing.
 
 ## Test
 
+The full testing strategy — layers, test doubles, conventions and
+the invariants that must stay covered — is documented in
+[TESTING.md](TESTING.md).
+
 `./run.sh test` builds the frontend (see above), then runs:
 
 - `go test ./...` in `mailer/` — unit tests are colocated with the
