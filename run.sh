@@ -158,10 +158,15 @@ run() {
 		JWT_SECRET=$(generate_guid)
 	fi
 
+	if [[ -z "${S3_BUCKET:-}" ]]; then
+		echo "Error: S3_BUCKET environment variable must be set" >&2
+		return 1
+	fi
+
 	export USERNAME="$USERNAME"
 	export PASSWORD="$PASSWORD"
 	export JWT_SECRET="$JWT_SECRET"
-	export S3_BUCKET="${S3_BUCKET:-emissary-emails}"
+	export S3_BUCKET="$S3_BUCKET"
 	export METADATA="${METADATA:-memory}"
 	export PORT="${PORT:-8080}"
 
