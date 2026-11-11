@@ -399,7 +399,7 @@ async function emailClientStack(
 
   const restApi = new apigateway.LambdaRestApi(stack, 'emissary-restapi', {
     restApiName: `emissary-${emissaryDomain.replaceAll(".", "-")}`,
-    description: 'Emissary email application',
+    description: `Emissary email application for ${emissaryDomain}`,
     endpointTypes: [apigateway.EndpointType.REGIONAL],
     handler: fn,
     minCompressionSize: cdk.Size.bytes(0),
@@ -420,6 +420,7 @@ async function emailClientStack(
 
   const certificate = new certificatemanager.Certificate(stack, 'emissary-app-cert', {
     domainName: mailFromDomain,
+    subjectAlternativeNames: [mailFromDomain],
     validation: certificatemanager.CertificateValidation.fromDns(zone),
   })
 
