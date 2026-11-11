@@ -40,11 +40,13 @@ type EmailResponse struct {
 type SendEmailRequest struct {
 	// From may only be set by an administrator. Ordinary users always send as
 	// their own address.
-	From      string `json:"from,omitempty"`
-	To        string `json:"to"`
-	Subject   string `json:"subject"`
-	Body      string `json:"body"`
-	ReplyToID string `json:"replyToId,omitempty"`
+	From      string   `json:"from,omitempty"`
+	To        []string `json:"to"`
+	Cc        []string `json:"cc,omitempty"`
+	Bcc       []string `json:"bcc,omitempty"`
+	Subject   string   `json:"subject"`
+	Body      string   `json:"body"`
+	ReplyToID string   `json:"replyToId,omitempty"`
 }
 
 // HandlerConfig holds configuration for creating the handler.
@@ -612,7 +614,7 @@ func handleSendEmail(w http.ResponseWriter, r *http.Request, emailStore storage.
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if strings.TrimSpace(req.To) == "" || req.Subject == "" || req.Body == "" {
+	if len(req.To) == 0 || req.Subject == "" || req.Body == "" {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
@@ -648,16 +650,47 @@ func handleSendEmail(w http.ResponseWriter, r *http.Request, emailStore storage.
 		from = mailSender.From()
 	}
 
-	to, err := mail.ParseAddress(strings.TrimSpace(req.To))
-	if err != nil {
-		logRequestError(r, "parse to address "+strconv.Quote(req.To), err)
-		writeError(w, http.StatusBadRequest, "invalid to address")
-		return
+	// Parse all To addresses
+	toAddresses := make([]email.Address, 0, len(req.To))
+	for _, addr := range req.To {
+		parsed, err := mail.ParseAddress(strings.TrimSpace(addr))
+		if err != nil {
+			logRequestError(r, "parse to address "+strconv.Quote(addr), err)
+			writeError(w, http.StatusBadRequest, "invalid to address")
+			return
+		}
+		toAddresses = append(toAddresses, email.Address{Address: parsed.Address})
+	}
+
+	// Parse CC addresses
+	ccAddresses := make([]email.Address, 0, len(req.Cc))
+	for _, addr := range req.Cc {
+		parsed, err := mail.ParseAddress(strings.TrimSpace(addr))
+		if err != nil {
+			logRequestError(r, "parse cc address "+strconv.Quote(addr), err)
+			writeError(w, http.StatusBadRequest, "invalid cc address")
+			return
+		}
+		ccAddresses = append(ccAddresses, email.Address{Address: parsed.Address})
+	}
+
+	// Parse BCC addresses
+	bccAddresses := make([]email.Address, 0, len(req.Bcc))
+	for _, addr := range req.Bcc {
+		parsed, err := mail.ParseAddress(strings.TrimSpace(addr))
+		if err != nil {
+			logRequestError(r, "parse bcc address "+strconv.Quote(addr), err)
+			writeError(w, http.StatusBadRequest, "invalid bcc address")
+			return
+		}
+		bccAddresses = append(bccAddresses, email.Address{Address: parsed.Address})
 	}
 
 	message := &email.UserEmail{
 		From:    email.Address{Address: from},
-		To:      []email.Address{{Address: to.Address}},
+		To:      toAddresses,
+		Cc:      ccAddresses,
+		Bcc:     bccAddresses,
 		Subject: strings.TrimSpace(req.Subject),
 		Date:    time.Now().UTC(),
 		Text:    req.Body,

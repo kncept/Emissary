@@ -337,7 +337,7 @@ func TestSendEmailFromRules(t *testing.T) {
 
 	_, userToken, _ := login(t, h, "bob@example.com", "anything")
 	w := request(t, h, http.MethodPost, "/api/emails/send",
-		`{"from":"carol@example.com","to":"dave@example.com","subject":"hello","body":"body"}`, userToken)
+		`{"from":"carol@example.com","to":["dave@example.com"],"subject":"hello","body":"body"}`, userToken)
 	if w.Code != http.StatusOK {
 		t.Fatalf("user send status = %d, want 200 (body %s)", w.Code, w.Body.String())
 	}
@@ -347,7 +347,7 @@ func TestSendEmailFromRules(t *testing.T) {
 
 	_, adminToken, _ := login(t, h, "admin", "secret")
 	w = request(t, h, http.MethodPost, "/api/emails/send",
-		`{"from":"dave@example.com","to":"alice@example.com","subject":"hello","body":"body"}`, adminToken)
+		`{"from":"dave@example.com","to":["alice@example.com"],"subject":"hello","body":"body"}`, adminToken)
 	if w.Code != http.StatusOK {
 		t.Fatalf("admin send status = %d, want 200 (body %s)", w.Code, w.Body.String())
 	}
@@ -357,11 +357,47 @@ func TestSendEmailFromRules(t *testing.T) {
 
 	// Replying without an explicit From defaults to the original recipient.
 	w = request(t, h, http.MethodPost, "/api/emails/send",
-		`{"to":"alice@example.com","subject":"re","body":"body","replyToId":"original"}`, adminToken)
+		`{"to":["alice@example.com"],"subject":"re","body":"body","replyToId":"original"}`, adminToken)
 	if w.Code != http.StatusOK {
 		t.Fatalf("admin reply status = %d, want 200 (body %s)", w.Code, w.Body.String())
 	}
 	if got := sender.messages[len(sender.messages)-1].From.Address; got != "bob@example.com" {
 		t.Errorf("admin reply from = %q, want bob@example.com", got)
+	}
+}
+
+func TestSendEmailWithCCAndBCC(t *testing.T) {
+	h, _, sender := newHandlerForTest(t, "any", "example.com", "secret")
+
+	_, userToken, _ := login(t, h, "bob@example.com", "anything")
+
+	// Test sending with CC and BCC
+	w := request(t, h, http.MethodPost, "/api/emails/send",
+		`{"to":["dave@example.com"],"cc":["eve@example.com","frank@example.com"],"bcc":["george@example.com"],"subject":"test cc bcc","body":"body"}`, userToken)
+	if w.Code != http.StatusOK {
+		t.Fatalf("send with cc/bcc status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+
+	msg := sender.messages[len(sender.messages)-1]
+	if len(msg.To) != 1 || msg.To[0].Address != "dave@example.com" {
+		t.Errorf("to = %+v, want [dave@example.com]", msg.To)
+	}
+	if len(msg.Cc) != 2 || msg.Cc[0].Address != "eve@example.com" || msg.Cc[1].Address != "frank@example.com" {
+		t.Errorf("cc = %+v, want [eve@example.com, frank@example.com]", msg.Cc)
+	}
+	if len(msg.Bcc) != 1 || msg.Bcc[0].Address != "george@example.com" {
+		t.Errorf("bcc = %+v, want [george@example.com]", msg.Bcc)
+	}
+
+	// Test sending with multiple TO addresses
+	w = request(t, h, http.MethodPost, "/api/emails/send",
+		`{"to":["alice@example.com","carol@example.com"],"subject":"multi-to","body":"body"}`, userToken)
+	if w.Code != http.StatusOK {
+		t.Fatalf("send multi-to status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+
+	msg = sender.messages[len(sender.messages)-1]
+	if len(msg.To) != 2 || msg.To[0].Address != "alice@example.com" || msg.To[1].Address != "carol@example.com" {
+		t.Errorf("multi to = %+v, want [alice@example.com, carol@example.com]", msg.To)
 	}
 }
