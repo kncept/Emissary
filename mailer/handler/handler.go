@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -243,6 +242,7 @@ func bearerClaims(authenticator *auth.Authenticator, r *http.Request) (*auth.Cla
 	token := strings.TrimSpace(strings.TrimPrefix(header, prefix))
 	claims, err := authenticator.ValidateClaims(token)
 	if err != nil {
+		logRequestError(r, "validate bearer token", err)
 		return nil, false
 	}
 	return claims, true
@@ -273,19 +273,26 @@ func handleLogin(w http.ResponseWriter, r *http.Request, authenticator *auth.Aut
 	}
 	// A blank password is intentionally allowed: the "any" user manager
 	// accepts any password, while the administrator is rejected separately.
-	if err := decodeJSON(w, r, &req); err != nil || strings.TrimSpace(req.Username) == "" {
+	if err := decodeJSON(w, r, &req); err != nil {
+		logRequestError(r, "decode login request", err)
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if strings.TrimSpace(req.Username) == "" {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 
 	user, err := authenticator.AuthenticateUser(r.Context(), req.Username, req.Password)
 	if err != nil {
+		logRequestError(r, "authenticate "+strconv.Quote(req.Username), err)
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
 	token, expiresAt, err := authenticator.IssueUser(user)
 	if err != nil {
+		logRequestError(r, "issue token for "+strconv.Quote(req.Username), err)
 		writeError(w, http.StatusInternalServerError, "failed to issue token")
 		return
 	}
@@ -388,12 +395,17 @@ func handleListEmails(w http.ResponseWriter, r *http.Request, emailStore storage
 
 	emails, err := emailStore.ListAllEmails(ctx)
 	if err != nil {
-		fmt.Printf("%v\n", err)
+		logRequestError(r, "list emails", err)
 		writeError(w, http.StatusInternalServerError, "failed to list emails")
 		return
 	}
 
-	metaList, _ := metaStore.List(ctx)
+	metaList, err := metaStore.List(ctx)
+	if err != nil {
+		// Read/flagged state is decorative: serve the emails anyway, but
+		// keep the cause in the log.
+		logRequestError(r, "list email metadata", err)
+	}
 	metaMap := make(map[string]metadata.EmailMetadata)
 	for _, m := range metaList {
 		metaMap[m.ID] = m
@@ -444,6 +456,7 @@ func handleGetEmail(w http.ResponseWriter, r *http.Request, emailStore storage.S
 			writeError(w, http.StatusNotFound, "email not found")
 			return
 		}
+		logRequestError(r, "get email "+strconv.Quote(id), err)
 		writeError(w, http.StatusInternalServerError, "failed to get email")
 		return
 	}
@@ -454,7 +467,11 @@ func handleGetEmail(w http.ResponseWriter, r *http.Request, emailStore storage.S
 		return
 	}
 
-	meta, _ := metaStore.Get(ctx, id)
+	meta, err := metaStore.Get(ctx, id)
+	if err != nil {
+		// Missing metadata should not make the message unreadable.
+		logRequestError(r, "get email metadata "+strconv.Quote(id), err)
+	}
 	fromAddr := ""
 	if message.From.Address != "" {
 		fromAddr = message.From.Address
@@ -483,6 +500,7 @@ func requireVisibleEmail(w http.ResponseWriter, r *http.Request, emailStore stor
 			writeError(w, http.StatusNotFound, "email not found")
 			return nil, false
 		}
+		logRequestError(r, "get email "+strconv.Quote(r.PathValue("id")), err)
 		writeError(w, http.StatusInternalServerError, "failed to get email")
 		return nil, false
 	}
@@ -507,11 +525,13 @@ func handleMarkRead(w http.ResponseWriter, r *http.Request, emailStore storage.S
 		Read bool `json:"read"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
+		logRequestError(r, "decode mark-read request "+strconv.Quote(id), err)
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 
 	if err := metaStore.SetRead(ctx, id, req.Read); err != nil {
+		logRequestError(r, "update read status "+strconv.Quote(id), err)
 		writeError(w, http.StatusInternalServerError, "failed to update read status")
 		return
 	}
@@ -532,11 +552,13 @@ func handleMarkFlagged(w http.ResponseWriter, r *http.Request, emailStore storag
 		Flagged bool `json:"flagged"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
+		logRequestError(r, "decode mark-flagged request "+strconv.Quote(id), err)
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 
 	if err := metaStore.SetFlagged(ctx, id, req.Flagged); err != nil {
+		logRequestError(r, "update flag status "+strconv.Quote(id), err)
 		writeError(w, http.StatusInternalServerError, "failed to update flag status")
 		return
 	}
@@ -546,7 +568,12 @@ func handleMarkFlagged(w http.ResponseWriter, r *http.Request, emailStore storag
 func handleSendEmail(w http.ResponseWriter, r *http.Request, emailStore storage.Storage, mailSender sender.Sender) {
 	claims := currentClaims(r)
 	var req SendEmailRequest
-	if err := decodeJSON(w, r, &req); err != nil || strings.TrimSpace(req.To) == "" || req.Subject == "" || req.Body == "" {
+	if err := decodeJSON(w, r, &req); err != nil {
+		logRequestError(r, "decode send-email request", err)
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if strings.TrimSpace(req.To) == "" || req.Subject == "" || req.Body == "" {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
@@ -557,7 +584,10 @@ func handleSendEmail(w http.ResponseWriter, r *http.Request, emailStore storage.
 		// When replying, an admin defaults to the address the original
 		// message was addressed to (i.e. the user whose inbox it is in).
 		if from == "" && req.ReplyToID != "" {
-			if original, err := emailStore.GetEmail(r.Context(), req.ReplyToID); err == nil && len(original.To) > 0 {
+			original, err := emailStore.GetEmail(r.Context(), req.ReplyToID)
+			if err != nil {
+				logRequestError(r, "load reply target "+strconv.Quote(req.ReplyToID), err)
+			} else if len(original.To) > 0 {
 				from = original.To[0].Address
 			}
 		}
@@ -569,6 +599,7 @@ func handleSendEmail(w http.ResponseWriter, r *http.Request, emailStore storage.
 	if from != "" {
 		parsed, err := mail.ParseAddress(from)
 		if err != nil {
+			logRequestError(r, "parse from address "+strconv.Quote(from), err)
 			writeError(w, http.StatusBadRequest, "invalid from address")
 			return
 		}
@@ -580,6 +611,7 @@ func handleSendEmail(w http.ResponseWriter, r *http.Request, emailStore storage.
 
 	to, err := mail.ParseAddress(strings.TrimSpace(req.To))
 	if err != nil {
+		logRequestError(r, "parse to address "+strconv.Quote(req.To), err)
 		writeError(w, http.StatusBadRequest, "invalid to address")
 		return
 	}
@@ -592,7 +624,7 @@ func handleSendEmail(w http.ResponseWriter, r *http.Request, emailStore storage.
 		Text:    req.Body,
 	}
 	if err := mailSender.Send(r.Context(), message); err != nil {
-		log.Printf("send email: %v", err)
+		logRequestError(r, "send email", err)
 		writeError(w, http.StatusBadGateway, "could not send email")
 		return
 	}
@@ -611,6 +643,7 @@ func serveFrontend(w http.ResponseWriter, r *http.Request) {
 		path = "/index.html"
 		file, err = gui.Files.Open("frontend/dist/index.html")
 		if err != nil {
+			logRequestError(r, "open embedded frontend index", err)
 			http.Error(w, "Frontend not built. Run 'npm run build' in frontend directory.", http.StatusNotFound)
 			return
 		}
@@ -619,6 +652,7 @@ func serveFrontend(w http.ResponseWriter, r *http.Request) {
 
 	stat, err := file.Stat()
 	if err != nil {
+		logRequestError(r, "stat embedded frontend file "+strconv.Quote(path), err)
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
@@ -631,7 +665,9 @@ func serveFrontend(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
 	w.WriteHeader(http.StatusOK)
 	if r.Method != http.MethodHead {
-		_, _ = io.Copy(w, file)
+		if _, err := io.Copy(w, file); err != nil {
+			logRequestError(r, "write embedded frontend file "+strconv.Quote(path), err)
+		}
 	}
 }
 
@@ -650,6 +686,13 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+// logRequestError records the underlying cause of a failed request. Clients
+// only ever see the generic message passed to writeError; the real error is
+// kept in the server log for debugging.
+func logRequestError(r *http.Request, operation string, err error) {
+	log.Printf("%s %q: %s: %v", r.Method, r.URL.Path, operation, err)
 }
 
 func getContentType(path string) string {
