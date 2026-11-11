@@ -7,6 +7,14 @@ This provides a simple and lightweight way to access emails from an AWS SES S3 s
 
 It can be set up as a lambda, run natively or embedded in a dockerfile.
 
+## Documentation
+- [Design](docs/DESIGN.md) — what Emissary is, its goals and technology choices
+- [Architecture](docs/ARCHITECTURE.md) — how the components fit together and the mail/auth flows
+- [Configuration](docs/CONFIGURATION.md) — every environment variable
+- [API](docs/API.md) — the HTTP API reference
+- [Deployment](docs/DEPLOYMENT.md) — the CDK stacks and deploy workflow
+- [Development](docs/DEVELOPMENT.md) — building, testing and extending
+
 ## Building
 Use the run.sh build command, as it handles embedding the frontend
 

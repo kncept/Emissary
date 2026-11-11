@@ -120,7 +120,7 @@ deploy_id() {
 	deploy_init
 	(
 		cd deploy
-		npm run cdk -- deploy emissary-email-id-*
+		npm run cdk -- deploy emissary-id-*
 	)
 }
 
@@ -129,7 +129,7 @@ deploy_in() {
 	deploy_init
 	(
 		cd deploy
-		npm run cdk -- deploy emissary-email-id-* emissary-email-in-*
+		npm run cdk -- deploy emissary-id-* emissary-in-*
 	)
 }
 
@@ -138,7 +138,7 @@ deploy_client() {
 	deploy_init
 	(
 		cd deploy
-		npm run cdk -- deploy emissary-email-client-*
+		npm run cdk -- deploy emissary-client-*
 	)
 }
 
@@ -162,7 +162,7 @@ run() {
 	export PASSWORD="$PASSWORD"
 	export JWT_SECRET="$JWT_SECRET"
 	export S3_BUCKET="${S3_BUCKET:-emissary-emails}"
-	export METADATA_TYPE="${METADATA_TYPE:-memory}"
+	export METADATA="${METADATA:-memory}"
 	export PORT="${PORT:-8080}"
 
 	echo "Starting Emissary frontend..."
@@ -174,7 +174,7 @@ run() {
 	fi
 	echo "  JWT Secret: $JWT_SECRET"
 	echo "  S3 Bucket: $S3_BUCKET"
-	echo "  Metadata Type: $METADATA_TYPE"
+	echo "  Metadata Type: $METADATA"
 	echo "  Port: $PORT"
 	echo ""
 
