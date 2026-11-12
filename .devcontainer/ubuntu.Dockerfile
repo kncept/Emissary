@@ -44,7 +44,8 @@ RUN echo "${USERNAME}:${USERNAME}" | chpasswd
 USER ${USERNAME}
 WORKDIR /home/${USERNAME}
 
-# Install ogen (JMAP code generator) and oapi-codegen
+# Install ogen (generates the Go API types from api/jmap.yaml and
+# api/auth.yaml) and oapi-codegen
 RUN go install github.com/ogen-go/ogen/cmd/ogen@latest && \
     go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
 

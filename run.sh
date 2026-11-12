@@ -23,12 +23,15 @@ Commands:
 EOF
 }
 
-# Generate JMAP Go types and stubs from api/jmap.yaml using ogen
-generate_jmap() {
+# Generate Go types and stubs from the OpenAPI specs using ogen. Both specs
+# are always generated together so the two generated trees
+# (api/jmap/generated and api/auth/generated) stay in sync.
+generate_api() {
 	(
 		cd mailer
 		# Ensure ogen is available
-		go tool ogen -target ../api/generated ../api/jmap.yaml
+		go tool ogen -target ../api/jmap/generated ../api/jmap.yaml
+		go tool ogen -target ../api/auth/generated ../api/auth.yaml
 	)
 }
 
@@ -64,7 +67,7 @@ build_lambda() {
 }
 
 build() {
-	generate_jmap
+	generate_api
 	build_frontend
 	build_backend
 	build_lambda
@@ -72,7 +75,7 @@ build() {
 
 test() {
 	# The //go:embed directives require the built frontend to be present
-	generate_jmap
+	generate_api
 	build_frontend
 
 	echo "=== Running Go tests ==="
