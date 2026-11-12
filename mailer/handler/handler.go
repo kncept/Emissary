@@ -192,17 +192,17 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, metaStore metadata.MetadataStore, mailSender sender.Sender) http.Handler {
 	mux := http.NewServeMux()
 
-	// JMAP routes (RFC 8620/8621)
+	// JMAP routes (RFC 8620/8621) - all require JWT authentication
 	dispatcher := jmap.NewDispatcher(&jmap.UnimplementedHandler{})
-	mux.HandleFunc("GET /.well-known/jmap", func(w http.ResponseWriter, r *http.Request) {
-		handleJMAPSession(w, r, "state123")
-	})
-	mux.HandleFunc("POST /api/", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /.well-known/jmap", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleJMAPSession(w, r)
+	})))
+	mux.Handle("POST /api/", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPAPIRequest(w, r, dispatcher)
-	})
-	mux.HandleFunc("POST /upload/", handleJMAPUpload)
-	mux.HandleFunc("GET /download/", handleJMAPDownload)
-	mux.HandleFunc("GET /eventsource/", handleJMAPPush)
+	})))
+	mux.Handle("POST /upload/", requireAuth(authenticator, http.HandlerFunc(handleJMAPUpload)))
+	mux.Handle("GET /download/", requireAuth(authenticator, http.HandlerFunc(handleJMAPDownload)))
+	mux.Handle("GET /eventsource/", requireAuth(authenticator, http.HandlerFunc(handleJMAPPush)))
 
 	// API routes (authenticated) - legacy Emissary API
 	mux.Handle("GET /api/emails", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -825,22 +825,42 @@ func getContentType(path string) string {
 // JMAP handler functions
 
 // handleJMAPSession returns the JMAP Session object (RFC 8620 Section 2)
-func handleJMAPSession(w http.ResponseWriter, r *http.Request, sessionState string) {
+func handleJMAPSession(w http.ResponseWriter, r *http.Request) {
+	claims := currentClaims(r)
+	username := claims.Subject
+
 	session := map[string]any{
 		"capabilities": map[string]any{
-			"urn:ietf:params:jmap:core":          map[string]any{},
-			"urn:ietf:params:jmap:mail":          map[string]any{},
-			"urn:ietf:params:jmap:submission":    map[string]any{},
-			"urn:ietf:params:jmap:vacationresponse": map[string]any{},
+			"urn:ietf:params:jmap:core":               map[string]any{},
+			"urn:ietf:params:jmap:mail":               map[string]any{},
+			"urn:ietf:params:jmap:submission":         map[string]any{},
+			"urn:ietf:params:jmap:vacationresponse":   map[string]any{},
 		},
-		"accounts":        map[string]any{},
-		"primaryAccounts": map[string]any{},
-		"username":        "user@example.com",
-		"apiUrl":          "/api/",
-		"downloadUrl":     "/download/{accountId}/{blobId}/{name}",
-		"uploadUrl":       "/upload/{accountId}/",
-		"eventSourceUrl":  "/eventsource/",
-		"state":           sessionState,
+		"accounts": map[string]any{
+			username: map[string]any{
+				"name":        username,
+				"isPersonal":  true,
+				"isReadOnly":  false,
+				"accountCapabilities": map[string]any{
+					"urn:ietf:params:jmap:core":               map[string]any{},
+					"urn:ietf:params:jmap:mail":               map[string]any{},
+					"urn:ietf:params:jmap:submission":         map[string]any{},
+					"urn:ietf:params:jmap:vacationresponse":   map[string]any{},
+				},
+			},
+		},
+		"primaryAccounts": map[string]any{
+			"urn:ietf:params:jmap:core":               username,
+			"urn:ietf:params:jmap:mail":               username,
+			"urn:ietf:params:jmap:submission":         username,
+			"urn:ietf:params:jmap:vacationresponse":   username,
+		},
+		"username":       username,
+		"apiUrl":         "/api/",
+		"downloadUrl":    "/download/{accountId}/{blobId}/{name}",
+		"uploadUrl":      "/upload/{accountId}/",
+		"eventSourceUrl": "/eventsource/",
+		"state":          "state123",
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -855,9 +875,9 @@ func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jm
 		return
 	}
 
-	// For now, use a default account ID
-	// In a real implementation, this would be extracted from authentication
-	accountID := "default"
+	// Extract account ID from JWT claims
+	claims := currentClaims(r)
+	accountID := claims.Subject
 
 	resp, err := dispatcher.DispatchRequest(r.Context(), accountID, &req)
 	if err != nil {

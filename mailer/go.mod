@@ -16,7 +16,7 @@ require (
 	github.com/kncept/Emissary/api v0.0.0
 )
 
-replace github.com/kncept/Emissary/api => ../api/generated
+replace github.com/kncept/Emissary/api => ../api
 
 require (
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.27 // indirect
