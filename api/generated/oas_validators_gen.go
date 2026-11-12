@@ -473,15 +473,8 @@ func (s *MailCapability) Validate() error {
 		})
 	}
 	if err := func() error {
-		if value, ok := s.MaxMailboxDepth.Get(); ok {
-			if err := func() error {
-				if err := value.Validate(); err != nil {
-					return err
-				}
-				return nil
-			}(); err != nil {
-				return err
-			}
+		if err := s.MaxMailboxDepth.Validate(); err != nil {
+			return err
 		}
 		return nil
 	}(); err != nil {

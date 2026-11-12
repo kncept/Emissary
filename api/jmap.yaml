@@ -1,8 +1,8 @@
-openapi: "3.1.0"
+openapi: 3.1.0
 info:
-  title: "JMAP for Mail (RFC 8621)"
-  version: "1.0.0"
-  description: |
+  title: JMAP for Mail (RFC 8621)
+  version: 1.0.0
+  description: |-
     Interface for a minimal implementation of JMAP for Mail as defined in
     RFC 8621, using the core protocol from RFC 8620.
 
@@ -38,246 +38,245 @@ info:
     `EmailDelivery` is a push-only type; it has no methods.
   contact:
     name: IETF
+    email: jmap@ietf.org
     url: https://www.ietf.org/
   license:
     name: BSD-3-Clause
     url: https://trustee.ietf.org/license-info
-
 servers:
-  - url: "https://{host}"
-    description: "JMAP server host"
-    variables:
-      host:
-        default: "example.com"
-
+- url: https://{host}
+  description: JMAP server host
+  variables:
+    host:
+      default: example.com
 security:
-  - basicAuth: []
-  - bearerAuth: []
-
+- basicAuth: []
+- bearerAuth: []
 tags:
-  - name: "Session"
-    description: "JMAP Session resource for capability discovery"
-  - name: "Core"
-    description: "Core JMAP methods needed for mail (RFC 8620)"
-  - name: "Mailbox"
-    description: "Mailbox management (RFC 8621 Section 2)"
-  - name: "Thread"
-    description: "Thread management (RFC 8621 Section 3)"
-  - name: "Email"
-    description: "Email management (RFC 8621 Section 4)"
-  - name: "SearchSnippet"
-    description: "Search snippets (RFC 8621 Section 5)"
-  - name: "Identity"
-    description: "Identity management (RFC 8621 Section 6)"
-  - name: "EmailSubmission"
-    description: "Email submission/sending (RFC 8621 Section 7)"
-  - name: "VacationResponse"
-    description: "Vacation/auto-reply (RFC 8621 Section 8)"
-  - name: "Binary"
-    description: "Binary data upload/download (RFC 8620 Section 6)"
-  - name: "Push"
-    description: "Push notification subscriptions (RFC 8620 Section 7)"
-
+- name: Session
+  description: JMAP Session resource for capability discovery
+- name: Core
+  description: Core JMAP methods needed for mail (RFC 8620)
+- name: Mailbox
+  description: Mailbox management (RFC 8621 Section 2)
+- name: Thread
+  description: Thread management (RFC 8621 Section 3)
+- name: Email
+  description: Email management (RFC 8621 Section 4)
+- name: SearchSnippet
+  description: Search snippets (RFC 8621 Section 5)
+- name: Identity
+  description: Identity management (RFC 8621 Section 6)
+- name: EmailSubmission
+  description: Email submission/sending (RFC 8621 Section 7)
+- name: VacationResponse
+  description: Vacation/auto-reply (RFC 8621 Section 8)
+- name: Binary
+  description: Binary data upload/download (RFC 8620 Section 6)
+- name: Push
+  description: Push notification subscriptions (RFC 8620 Section 7)
 paths:
   /.well-known/jmap:
     get:
-      tags: ["Session"]
-      summary: "Get the JMAP Session object"
-      description: |
+      tags:
+      - Session
+      summary: Get the JMAP Session object
+      description: |-
         Returns the Session object for the authenticated user. The response
         should disable HTTP caching (for example, with
         `Cache-Control: no-cache, no-store, must-revalidate`).
-      operationId: "getSession"
+      operationId: getSession
       responses:
-        "200":
-          description: "Session object with capabilities and account information"
+        '200':
+          description: Session object with capabilities and account information
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Session"
-        "401":
-          description: "Authentication required"
+                $ref: '#/components/schemas/Session'
+        '401':
+          description: Authentication required
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ProblemDetails"
-
+                $ref: '#/components/schemas/ProblemDetails'
   /api:
     post:
-      tags: ["Core"]
-      summary: "Make a JMAP API request"
-      description: |
+      tags:
+      - Core
+      summary: Make a JMAP API request
+      description: |-
         Processes an ordered batch of JMAP method calls. The request and
         response bodies are JSON `Request` and `Response` objects. Method
         failures are returned inside `methodResponses` as `error`
         invocations; only request-level failures use an HTTP error status.
-      operationId: "apiRequest"
+      operationId: apiRequest
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/JmapRequest"
+              $ref: '#/components/schemas/JmapRequest'
       responses:
-        "200":
-          description: "Method responses"
+        '200':
+          description: Method responses
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/JmapResponse"
-        "400":
-          description: "Request-level error (RFC 7807 problem details)"
+                $ref: '#/components/schemas/JmapResponse'
+        '400':
+          description: Request-level error (RFC 7807 problem details)
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ProblemDetails"
-        "401":
-          description: "Authentication required"
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Authentication required
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ProblemDetails"
-
+                $ref: '#/components/schemas/ProblemDetails'
   /upload/{accountId}:
     post:
-      tags: ["Binary"]
-      summary: "Upload binary data"
-      description: |
+      tags:
+      - Binary
+      summary: Upload binary data
+      description: |-
         Uploads raw binary data. The request `Content-Type` is the media type
         of the uploaded file and is echoed in the response `type` property.
-      operationId: "uploadBinary"
+      operationId: uploadBinary
       parameters:
-        - name: accountId
-          in: path
-          required: true
-          schema:
-            $ref: "#/components/schemas/Id"
+      - name: accountId
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/Id'
       requestBody:
         required: true
-        description: "Raw file contents. The Content-Type is the file media type."
+        description: Raw file contents. The Content-Type is the file media type.
         content:
           application/octet-stream:
             schema:
               type: string
               format: binary
       responses:
-        "200":
-          description: "Upload successful"
+        '200':
+          description: Upload successful
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/UploadResponse"
-        "400":
-          description: "Upload failed"
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          description: Upload failed
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ProblemDetails"
-        "401":
-          description: "Authentication required"
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Authentication required
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ProblemDetails"
-
+                $ref: '#/components/schemas/ProblemDetails'
   /download/{accountId}/{blobId}/{name}:
     get:
-      tags: ["Binary"]
-      summary: "Download binary data"
-      description: |
+      tags:
+      - Binary
+      summary: Download binary data
+      description: |-
         Downloads the bytes referenced by `blobId`. The `type` query parameter
         is the media type to use for the response `Content-Type`; the `name`
         path parameter is the filename to use for `Content-Disposition`.
-      operationId: "downloadBinary"
+      operationId: downloadBinary
       parameters:
-        - name: accountId
-          in: path
-          required: true
-          schema:
-            $ref: "#/components/schemas/Id"
-        - name: blobId
-          in: path
-          required: true
-          schema:
-            $ref: "#/components/schemas/Id"
-        - name: name
-          in: path
-          required: true
-          description: "Filename to use for Content-Disposition"
-          schema:
-            type: string
-        - name: type
-          in: query
-          required: false
-          description: "Media type to use for the response Content-Type"
-          schema:
-            type: string
+      - name: accountId
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/Id'
+      - name: blobId
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/Id'
+      - name: name
+        in: path
+        required: true
+        description: Filename to use for Content-Disposition
+        schema:
+          type: string
+      - name: type
+        in: query
+        required: false
+        description: Media type to use for the response Content-Type
+        schema:
+          type: string
       responses:
-        "200":
-          description: "File contents"
+        '200':
+          description: File contents
           content:
             application/octet-stream:
               schema:
                 type: string
                 format: binary
-        "401":
-          description: "Authentication required"
+        '401':
+          description: Authentication required
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ProblemDetails"
-        "404":
-          description: "Blob not found"
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Blob not found
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ProblemDetails"
-
+                $ref: '#/components/schemas/ProblemDetails'
   /eventsource:
     get:
-      tags: ["Push"]
-      summary: "EventSource push connection"
-      description: |
+      tags:
+      - Push
+      summary: EventSource push connection
+      description: |-
         Long-running `text/event-stream` connection. The server emits `state`
         events whose data is a `StateChange` object, and `ping` events whose
         data is `{"interval": <seconds>}`.
-      operationId: "pushConnection"
+      operationId: pushConnection
       parameters:
-        - name: types
-          in: query
-          required: true
-          description: "Comma-separated type names, or `*` for all types"
-          schema:
-            type: string
-        - name: closeafter
-          in: query
-          required: false
-          schema:
-            type: string
-            enum: ["state", "no"]
-            default: "no"
-        - name: ping
-          in: query
-          required: false
-          description: "Ping interval in seconds; 0 disables ping events"
-          schema:
-            type: integer
-            minimum: 0
-            default: 0
+      - name: types
+        in: query
+        required: true
+        description: Comma-separated type names, or `*` for all types
+        schema:
+          type: string
+      - name: closeafter
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - state
+          - 'no'
+          default: 'no'
+      - name: ping
+        in: query
+        required: false
+        description: Ping interval in seconds; 0 disables ping events
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
       responses:
-        "200":
-          description: "Server-sent event stream"
+        '200':
+          description: Server-sent event stream
           content:
             text/event-stream:
               schema:
                 type: string
-        "401":
-          description: "Authentication required"
+        '401':
+          description: Authentication required
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ProblemDetails"
-
+                $ref: '#/components/schemas/ProblemDetails'
 components:
   securitySchemes:
     basicAuth:
@@ -286,100 +285,84 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-
   schemas:
-    # ============================================================
-    # Primitive types (RFC 8620 Section 1)
-    # ============================================================
-
     Id:
       type: string
-      pattern: '^[A-Za-z0-9_-]{1,255}$'
-      description: "Server-assigned immutable object id (1-255 URL-safe characters)"
-
+      pattern: ^[A-Za-z0-9_-]{1,255}$
+      description: Server-assigned immutable object id (1-255 URL-safe characters)
     IdOrCreationId:
       type: string
-      pattern: '^#?[A-Za-z0-9_-]{1,255}$'
-      description: |
+      pattern: ^#?[A-Za-z0-9_-]{1,255}$
+      description: |-
         An `Id`, or a creation reference consisting of `#` followed by the
         client-supplied creation id from the same request.
-
     UnsignedInt:
       type: integer
       minimum: 0
       maximum: 9007199254740991
-
     Int:
       type: integer
       minimum: -9007199254740991
       maximum: 9007199254740991
-
     Date:
       type: string
       format: date-time
-      description: "RFC 3339 date-time with any valid timezone offset"
-
+      description: RFC 3339 date-time with any valid timezone offset
     UTCDate:
       type: string
       format: date-time
-      pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$'
-      description: "RFC 3339 date-time in UTC (always suffixed with `Z`)"
-
+      pattern: ^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$
+      description: RFC 3339 date-time in UTC (always suffixed with `Z`)
     PatchObject:
       type: object
       additionalProperties: true
-      description: |
+      description: |-
         A JMAP Patch object: a map of JSON Pointer paths (with an implicit
         leading `/`) to replacement values. A null value removes the property
         or restores its default. Array elements may not be patched
         individually.
-
     IdBooleanMap:
       type: object
-      description: |
+      description: |-
         A set of ids represented as an object whose values are all `true`.
         Keys may be creation references when used in a create.
       propertyNames:
-        $ref: "#/components/schemas/IdOrCreationId"
+        $ref: '#/components/schemas/IdOrCreationId'
       additionalProperties:
         type: boolean
-        const: true
-
+        enum:
+        - true
     StringBooleanMap:
       type: object
-      description: "A set of strings represented as an object whose values are all `true`"
+      description: A set of strings represented as an object whose values are all `true`
       additionalProperties:
         type: boolean
-        const: true
-
-    # ============================================================
-    # Session resource (RFC 8620 Section 2)
-    # ============================================================
-
+        enum:
+        - true
     Session:
       type: object
       required:
-        - capabilities
-        - accounts
-        - primaryAccounts
-        - username
-        - apiUrl
-        - downloadUrl
-        - uploadUrl
-        - eventSourceUrl
-        - state
+      - capabilities
+      - accounts
+      - primaryAccounts
+      - username
+      - apiUrl
+      - downloadUrl
+      - uploadUrl
+      - eventSourceUrl
+      - state
       properties:
         capabilities:
-          $ref: "#/components/schemas/SessionCapabilities"
+          $ref: '#/components/schemas/SessionCapabilities'
         accounts:
           type: object
           additionalProperties:
-            $ref: "#/components/schemas/Account"
+            $ref: '#/components/schemas/Account'
         primaryAccounts:
           type: object
-          description: "Map of capability URI to the user's primary account id for that capability"
+          description: Map of capability URI to the user's primary account id for that capability
           additionalProperties:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         username:
           type: string
         apiUrl:
@@ -387,26 +370,29 @@ components:
           format: uri
         downloadUrl:
           type: string
-          description: |
+          description: |-
             URI Template (RFC 6570 level 1) containing the variables
             `accountId`, `blobId`, `type`, and `name`.
         uploadUrl:
           type: string
-          description: |
+          description: |-
             URI Template (RFC 6570 level 1) containing the variable
             `accountId`.
         eventSourceUrl:
           type: string
-          description: |
+          description: |-
             URI Template (RFC 6570 level 1) containing the variables
             `types`, `closeafter`, and `ping`.
         state:
           type: string
       additionalProperties: true
-
     Account:
       type: object
-      required: [name, isPersonal, isReadOnly, accountCapabilities]
+      required:
+      - name
+      - isPersonal
+      - isReadOnly
+      - accountCapabilities
       properties:
         name:
           type: string
@@ -415,103 +401,97 @@ components:
         isReadOnly:
           type: boolean
         accountCapabilities:
-          $ref: "#/components/schemas/AccountCapabilities"
+          $ref: '#/components/schemas/AccountCapabilities'
       additionalProperties: true
-
     SessionCapabilities:
       type: object
       required:
-        - "urn:ietf:params:jmap:core"
+      - urn:ietf:params:jmap:core
       properties:
-        "urn:ietf:params:jmap:core":
-          $ref: "#/components/schemas/CoreCapability"
-        "urn:ietf:params:jmap:mail":
+        urn:ietf:params:jmap:core:
+          $ref: '#/components/schemas/CoreCapability'
+        urn:ietf:params:jmap:mail:
           type: object
-          description: "The mail capability value in the Session object is an empty object"
+          description: The mail capability value in the Session object is an empty object
           additionalProperties: false
-        "urn:ietf:params:jmap:submission":
+        urn:ietf:params:jmap:submission:
           type: object
-          description: "The submission capability value in the Session object is an empty object"
+          description: The submission capability value in the Session object is an empty object
           additionalProperties: false
-        "urn:ietf:params:jmap:vacationresponse":
+        urn:ietf:params:jmap:vacationresponse:
           type: object
-          description: "The vacation-response capability value in the Session object is an empty object"
+          description: The vacation-response capability value in the Session object is an empty object
           additionalProperties: false
       additionalProperties: true
-
     AccountCapabilities:
       type: object
       properties:
-        "urn:ietf:params:jmap:core":
-          $ref: "#/components/schemas/CoreCapability"
-        "urn:ietf:params:jmap:mail":
-          $ref: "#/components/schemas/MailCapability"
-        "urn:ietf:params:jmap:submission":
-          $ref: "#/components/schemas/SubmissionCapability"
-        "urn:ietf:params:jmap:vacationresponse":
+        urn:ietf:params:jmap:core:
+          $ref: '#/components/schemas/CoreCapability'
+        urn:ietf:params:jmap:mail:
+          $ref: '#/components/schemas/MailCapability'
+        urn:ietf:params:jmap:submission:
+          $ref: '#/components/schemas/SubmissionCapability'
+        urn:ietf:params:jmap:vacationresponse:
           type: object
-          description: "The vacation-response capability value in an account is an empty object"
+          description: The vacation-response capability value in an account is an empty object
           additionalProperties: false
       additionalProperties: true
-
     CoreCapability:
       type: object
       required:
-        - maxSizeUpload
-        - maxConcurrentUpload
-        - maxSizeRequest
-        - maxConcurrentRequests
-        - maxCallsInRequest
-        - maxObjectsInGet
-        - maxObjectsInSet
-        - collationAlgorithms
+      - maxSizeUpload
+      - maxConcurrentUpload
+      - maxSizeRequest
+      - maxConcurrentRequests
+      - maxCallsInRequest
+      - maxObjectsInGet
+      - maxObjectsInSet
+      - collationAlgorithms
       properties:
         maxSizeUpload:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         maxConcurrentUpload:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         maxSizeRequest:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         maxConcurrentRequests:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         maxCallsInRequest:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         maxObjectsInGet:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         maxObjectsInSet:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         collationAlgorithms:
           type: array
           items:
             type: string
       additionalProperties: true
-
     MailCapability:
       type: object
       required:
-        - maxMailboxesPerEmail
-        - maxMailboxDepth
-        - maxSizeMailboxName
-        - maxSizeAttachmentsPerEmail
-        - emailQuerySortOptions
-        - mayCreateTopLevelMailbox
+      - maxMailboxesPerEmail
+      - maxMailboxDepth
+      - maxSizeMailboxName
+      - maxSizeAttachmentsPerEmail
+      - emailQuerySortOptions
+      - mayCreateTopLevelMailbox
       properties:
         maxMailboxesPerEmail:
-          oneOf:
-            - type: integer
-              minimum: 1
-              maximum: 9007199254740991
-            - type: "null"
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          nullable: true
         maxMailboxDepth:
-          oneOf:
-            - $ref: "#/components/schemas/UnsignedInt"
-            - type: "null"
+          $ref: '#/components/schemas/UnsignedInt'
+          nullable: true
         maxSizeMailboxName:
           type: integer
           minimum: 100
           maximum: 9007199254740991
         maxSizeAttachmentsPerEmail:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         emailQuerySortOptions:
           type: array
           items:
@@ -519,13 +499,14 @@ components:
         mayCreateTopLevelMailbox:
           type: boolean
       additionalProperties: true
-
     SubmissionCapability:
       type: object
-      required: [maxDelayedSend, submissionExtensions]
+      required:
+      - maxDelayedSend
+      - submissionExtensions
       properties:
         maxDelayedSend:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         submissionExtensions:
           type: object
           additionalProperties:
@@ -533,79 +514,78 @@ components:
             items:
               type: string
       additionalProperties: true
-
-    # ============================================================
-    # Request/Response envelope (RFC 8620 Section 3)
-    # ============================================================
-
     Invocation:
       type: array
-      description: |
+      description: |-
         A three-element tuple: `[methodName, arguments, methodCallId]`.
         For responses, `methodName` is the method name or `"error"`.
       minItems: 3
       maxItems: 3
       prefixItems:
-        - type: string
-          description: "Method name or `error`"
-        - type: object
-          description: "Method arguments"
-          additionalProperties: true
-        - type: string
-          description: "Client-supplied method call id, echoed by the server"
-
+      - type: string
+        description: Method name or `error`
+      - type: object
+        description: Method arguments
+        additionalProperties: true
+      - type: string
+        description: Client-supplied method call id, echoed by the server
     JmapRequest:
       type: object
-      description: |
+      description: |-
         The RFC 8620 "Request" object. Named `JmapRequest` here to avoid a
         collision with the generated request type name.
-      required: [using, methodCalls]
+      required:
+      - using
+      - methodCalls
       properties:
         using:
           type: array
-          description: "Capability URIs the client wishes to use"
+          description: Capability URIs the client wishes to use
           items:
             type: string
         methodCalls:
           type: array
           items:
-            $ref: "#/components/schemas/Invocation"
+            $ref: '#/components/schemas/Invocation'
         createdIds:
           type: object
-          description: |
+          description: |-
             Map of client creation id to server-assigned id. If supplied, the
             response will also include `createdIds`.
           additionalProperties:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
       additionalProperties: true
-
     JmapResponse:
       type: object
-      description: |
+      description: |-
         The RFC 8620 "Response" object. Named `JmapResponse` here for
         symmetry with `JmapRequest`.
-      required: [methodResponses, sessionState]
+      required:
+      - methodResponses
+      - sessionState
       properties:
         methodResponses:
           type: array
           items:
-            $ref: "#/components/schemas/Invocation"
+            $ref: '#/components/schemas/Invocation'
         createdIds:
           type: object
           additionalProperties:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         sessionState:
           type: string
       additionalProperties: true
-
     ProblemDetails:
       type: object
-      description: "RFC 7807 problem details used for request-level errors"
-      required: [type, status, detail]
+      description: RFC 7807 problem details used for request-level errors
+      required:
+      - type
+      - status
+      - detail
       properties:
         type:
           type: string
-          description: |
+          description: |-
             A URI identifying the problem type. The JMAP-defined types are:
             `urn:ietf:params:jmap:error:unknownCapability`,
             `urn:ietf:params:jmap:error:notJSON`,
@@ -621,163 +601,122 @@ components:
           type: string
         limit:
           type: string
-          description: "The limit that was exceeded, for `urn:ietf:params:jmap:error:limit`"
+          description: The limit that was exceeded, for `urn:ietf:params:jmap:error:limit`
           enum:
-            - maxSizeUpload
-            - maxConcurrentUpload
-            - maxSizeRequest
-            - maxConcurrentRequests
-            - maxCallsInRequest
-            - maxObjectsInGet
-            - maxObjectsInSet
+          - maxSizeUpload
+          - maxConcurrentUpload
+          - maxSizeRequest
+          - maxConcurrentRequests
+          - maxCallsInRequest
+          - maxObjectsInGet
+          - maxObjectsInSet
       additionalProperties: true
-
-    MethodError:
-      type: object
-      description: |
-        The arguments of an `error` invocation. Common types include
-        `serverUnavailable`, `serverFail`, `serverPartialFail`, `unknownMethod`,
-        `invalidArguments`, `invalidResultReference`, `forbidden`,
-        `accountNotFound`, `accountNotSupportedByMethod`, `accountReadOnly`,
-        `requestTooLarge`, `cannotCalculateChanges`, `stateMismatch`,
-        `anchorNotFound`, `unsupportedSort`, `unsupportedFilter`,
-        `tooManyChanges`, `fromAccountNotFound`, and
-        `fromAccountNotSupportedByMethod`.
-      required: [type]
-      properties:
-        type:
-          type: string
-        description:
-          type: string
-      additionalProperties: true
-
     SetError:
       type: object
-      description: |
+      description: |-
         A per-record error in a `/set`, `/copy`, or `/import` response.
-        Standard types: `forbidden`, `overQuota`, `tooLarge`, `rateLimit`,
-        `notFound`, `invalidPatch`, `willDestroy`, `invalidProperties`,
-        `singleton`, `alreadyExists`, `stateMismatch`, `requestTooLarge`.
-        Mail-specific types: `mailboxHasChild`, `mailboxHasEmail`,
-        `blobNotFound`, `tooManyKeywords`, `tooManyMailboxes`, `invalidEmail`,
-        `tooManyRecipients`, `noRecipients`, `invalidRecipients`,
+        Set error types (RFC 8620 Section 5.3): `forbidden`, `overQuota`,
+        `tooLarge`, `rateLimit`, `notFound`, `invalidPatch`, `willDestroy`,
+        `invalidProperties`, `singleton`. Copy error type (RFC 8620 Section
+        5.4): `alreadyExists` (with `existingId`). Mail-specific types
+        (RFC 8621): `mailboxHasChild`, `mailboxHasEmail`, `blobNotFound`
+        (with `notFound`), `tooManyKeywords`, `tooManyMailboxes`,
+        `invalidEmail`, `tooManyRecipients` (with `maxRecipients`),
+        `noRecipients`, `invalidRecipients` (with `invalidRecipients`),
         `forbiddenMailFrom`, `forbiddenFrom`, `forbiddenToSend`,
-        `cannotUnsend`.
-      required: [type]
+        `cannotUnsend`. Note that `stateMismatch` and `requestTooLarge`
+        are method-level errors returned instead of the response, not
+        per-record SetErrors.
+      required:
+      - type
       properties:
         type:
           type: string
         description:
-          type: [string, "null"]
+          type: string
+          nullable: true
         properties:
           type: array
-          description: "For `invalidProperties`: the invalid properties"
+          description: 'For `invalidProperties`: the invalid properties'
           items:
             type: string
         notFound:
           type: array
-          description: "For `blobNotFound`: blob ids that could not be found"
+          description: 'For `blobNotFound`: blob ids that could not be found'
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         existingId:
-          $ref: "#/components/schemas/Id"
-          description: "For `alreadyExists`: the id of the existing object"
+          $ref: '#/components/schemas/Id'
+          description: 'For `alreadyExists`: the id of the existing object'
         maxSize:
-          $ref: "#/components/schemas/UnsignedInt"
-          description: "For `tooLarge`: the maximum size of the object"
+          $ref: '#/components/schemas/UnsignedInt'
+          description: 'For `tooLarge`: the maximum size of the object'
         maxRecipients:
-          $ref: "#/components/schemas/UnsignedInt"
-          description: "For `tooManyRecipients`: the maximum number of recipients"
+          $ref: '#/components/schemas/UnsignedInt'
+          description: 'For `tooManyRecipients`: the maximum number of recipients'
         invalidRecipients:
           type: array
-          description: "For `invalidRecipients`: the invalid addresses"
+          description: 'For `invalidRecipients`: the invalid addresses'
           items:
             type: string
       additionalProperties: true
-
-    # ============================================================
-    # Core method arguments (RFC 8620 Sections 4-5)
-    # ============================================================
-
     CoreEchoRequest:
       type: object
-      description: "`Core/echo` arguments: any object, returned unchanged"
+      description: '`Core/echo` arguments: any object, returned unchanged'
       additionalProperties: true
-
     CoreEchoResponse:
       type: object
-      description: "`Core/echo` response: the request arguments unchanged"
+      description: '`Core/echo` response: the request arguments unchanged'
       additionalProperties: true
-
     GetRequest:
       type: object
-      required: [accountId]
+      required:
+      - accountId
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         ids:
-          description: "Ids to fetch, or null for all objects"
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
+          description: Ids to fetch, or null for all objects
         properties:
-          description: "Properties to return, or null for all properties"
-          oneOf:
-            - type: array
-              items:
-                type: string
-            - type: "null"
-      additionalProperties: true
-
-    GetResponse:
-      type: object
-      required: [accountId, state, list, notFound]
-      properties:
-        accountId:
-          $ref: "#/components/schemas/Id"
-        state:
-          type: string
-        list:
           type: array
           items:
-            type: object
-        notFound:
-          type: array
-          items:
-            $ref: "#/components/schemas/Id"
+            type: string
+          nullable: true
+          description: Properties to return, or null for all properties
       additionalProperties: true
-
     ChangesRequest:
       type: object
-      required: [accountId, sinceState]
+      required:
+      - accountId
+      - sinceState
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         sinceState:
           type: string
         maxChanges:
-          oneOf:
-            - type: integer
-              minimum: 1
-              maximum: 9007199254740991
-            - type: "null"
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          nullable: true
       additionalProperties: true
-
     ChangesResponse:
       type: object
       required:
-        - accountId
-        - oldState
-        - newState
-        - hasMoreChanges
-        - created
-        - updated
-        - destroyed
+      - accountId
+      - oldState
+      - newState
+      - hasMoreChanges
+      - created
+      - updated
+      - destroyed
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         oldState:
           type: string
         newState:
@@ -787,193 +726,83 @@ components:
         created:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         updated:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         destroyed:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
       additionalProperties: true
-
-    SetRequest:
-      type: object
-      required: [accountId]
-      properties:
-        accountId:
-          $ref: "#/components/schemas/Id"
-        ifInState:
-          type: [string, "null"]
-        create:
-          oneOf:
-            - type: object
-              additionalProperties:
-                type: object
-            - type: "null"
-        update:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/PatchObject"
-            - type: "null"
-        destroy:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
-      additionalProperties: true
-
-    SetResponse:
-      type: object
-      required:
-        - accountId
-        - oldState
-        - newState
-        - created
-        - updated
-        - destroyed
-        - notCreated
-        - notUpdated
-        - notDestroyed
-      properties:
-        accountId:
-          $ref: "#/components/schemas/Id"
-        oldState:
-          type: [string, "null"]
-        newState:
-          type: string
-        created:
-          oneOf:
-            - type: object
-              additionalProperties:
-                type: object
-            - type: "null"
-        updated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                oneOf:
-                  - type: object
-                  - type: "null"
-            - type: "null"
-        destroyed:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
-        notCreated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
-        notUpdated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
-        notDestroyed:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
-      additionalProperties: true
-
-    CopyRequest:
-      type: object
-      required: [fromAccountId, accountId, create]
-      properties:
-        fromAccountId:
-          $ref: "#/components/schemas/Id"
-        ifFromInState:
-          type: [string, "null"]
-        accountId:
-          $ref: "#/components/schemas/Id"
-        ifInState:
-          type: [string, "null"]
-        create:
-          type: object
-          additionalProperties:
-            $ref: "#/components/schemas/CopySpecification"
-        onSuccessDestroyOriginal:
-          type: boolean
-          default: false
-        destroyFromIfInState:
-          type: [string, "null"]
-      additionalProperties: true
-
     CopySpecification:
       type: object
-      required: [id]
+      required:
+      - id
       properties:
         id:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
       additionalProperties: true
-
     CopyResponse:
       type: object
       required:
-        - fromAccountId
-        - accountId
-        - oldState
-        - newState
-        - created
-        - notCreated
+      - fromAccountId
+      - accountId
+      - oldState
+      - newState
+      - created
+      - notCreated
       properties:
         fromAccountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         oldState:
-          type: [string, "null"]
+          type: string
+          nullable: true
         newState:
           type: string
         created:
-          oneOf:
-            - type: object
-              additionalProperties:
-                type: object
-            - type: "null"
+          type: object
+          additionalProperties:
+            type: object
+          nullable: true
         notCreated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
       additionalProperties: true
-
     FilterCondition:
       type: object
-      description: "A generic FilterCondition. Method-specific schemas narrow this."
+      description: A generic FilterCondition. Method-specific schemas narrow this.
       additionalProperties: true
-
     FilterOperator:
       type: object
-      required: [operator, conditions]
+      required:
+      - operator
+      - conditions
       properties:
         operator:
           type: string
-          enum: [AND, OR, NOT]
+          enum:
+          - AND
+          - OR
+          - NOT
         conditions:
           type: array
           items:
-            $ref: "#/components/schemas/Filter"
+            $ref: '#/components/schemas/Filter'
       additionalProperties: false
-
     Filter:
       oneOf:
-        - $ref: "#/components/schemas/FilterOperator"
-        - $ref: "#/components/schemas/FilterCondition"
-
+      - $ref: '#/components/schemas/FilterOperator'
+      - $ref: '#/components/schemas/FilterCondition'
     Comparator:
       type: object
-      required: [property]
+      required:
+      - property
       properties:
         property:
           type: string
@@ -984,167 +813,98 @@ components:
           type: string
         keyword:
           type: string
-          description: "Required when sorting on a thread keyword property"
+          description: Required when sorting on a thread keyword property
       additionalProperties: true
-
-    QueryRequest:
-      type: object
-      required: [accountId]
-      properties:
-        accountId:
-          $ref: "#/components/schemas/Id"
-        filter:
-          oneOf:
-            - $ref: "#/components/schemas/Filter"
-            - type: "null"
-        sort:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Comparator"
-            - type: "null"
-        position:
-          $ref: "#/components/schemas/Int"
-          default: 0
-        anchor:
-          oneOf:
-            - $ref: "#/components/schemas/Id"
-            - type: "null"
-        anchorOffset:
-          $ref: "#/components/schemas/Int"
-          default: 0
-        limit:
-          oneOf:
-            - $ref: "#/components/schemas/UnsignedInt"
-            - type: "null"
-        calculateTotal:
-          type: boolean
-          default: false
-      additionalProperties: true
-
     QueryResponse:
       type: object
-      required: [accountId, queryState, canCalculateChanges, position, ids]
+      required:
+      - accountId
+      - queryState
+      - canCalculateChanges
+      - position
+      - ids
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         queryState:
           type: string
         canCalculateChanges:
           type: boolean
         position:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         ids:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         total:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         limit:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
       additionalProperties: true
-
-    QueryChangesRequest:
-      type: object
-      required: [accountId, sinceQueryState]
-      properties:
-        accountId:
-          $ref: "#/components/schemas/Id"
-        filter:
-          oneOf:
-            - $ref: "#/components/schemas/Filter"
-            - type: "null"
-        sort:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Comparator"
-            - type: "null"
-        sinceQueryState:
-          type: string
-        maxChanges:
-          oneOf:
-            - type: integer
-              minimum: 1
-              maximum: 9007199254740991
-            - type: "null"
-        upToId:
-          oneOf:
-            - $ref: "#/components/schemas/Id"
-            - type: "null"
-        calculateTotal:
-          type: boolean
-          default: false
-      additionalProperties: true
-
     QueryChangesResponse:
       type: object
       required:
-        - accountId
-        - oldQueryState
-        - newQueryState
-        - removed
-        - added
+      - accountId
+      - oldQueryState
+      - newQueryState
+      - removed
+      - added
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         oldQueryState:
           type: string
         newQueryState:
           type: string
         total:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         removed:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         added:
           type: array
           items:
-            $ref: "#/components/schemas/AddedItem"
+            $ref: '#/components/schemas/AddedItem'
       additionalProperties: true
-
     AddedItem:
       type: object
-      required: [id, index]
+      required:
+      - id
+      - index
       properties:
         id:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         index:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
       additionalProperties: false
-
-    # ============================================================
-    # Mailbox (RFC 8621 Section 2)
-    # ============================================================
-
     Mailbox:
       type: object
       required:
-        - id
-        - name
-        - parentId
-        - role
-        - sortOrder
-        - totalEmails
-        - unreadEmails
-        - totalThreads
-        - unreadThreads
-        - myRights
-        - isSubscribed
+      - id
+      - name
+      - parentId
+      - role
+      - sortOrder
+      - totalEmails
+      - unreadEmails
+      - totalThreads
+      - unreadThreads
+      - myRights
+      - isSubscribed
       properties:
         id:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         name:
           type: string
           minLength: 1
         parentId:
-          oneOf:
-            - $ref: "#/components/schemas/Id"
-            - type: "null"
+          $ref: '#/components/schemas/Id'
+          nullable: true
         role:
-          type: [string, "null"]
-          description: |
+          type: string
+          nullable: true
+          description: |-
             A role from the IANA "IMAP Mailbox Name Attributes" registry,
             lowercased (for example `inbox`, `archive`, `drafts`, `flagged`,
             `junk`, `sent`, `trash`, `all`). The registry is extensible, so
@@ -1154,31 +914,30 @@ components:
           minimum: 0
           maximum: 2147483647
         totalEmails:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         unreadEmails:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         totalThreads:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         unreadThreads:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         myRights:
-          $ref: "#/components/schemas/MailboxRights"
+          $ref: '#/components/schemas/MailboxRights'
         isSubscribed:
           type: boolean
       additionalProperties: true
-
     MailboxRights:
       type: object
       required:
-        - mayReadItems
-        - mayAddItems
-        - mayRemoveItems
-        - maySetSeen
-        - maySetKeywords
-        - mayCreateChild
-        - mayRename
-        - mayDelete
-        - maySubmit
+      - mayReadItems
+      - mayAddItems
+      - mayRemoveItems
+      - maySetSeen
+      - maySetKeywords
+      - mayCreateChild
+      - mayRename
+      - mayDelete
+      - maySubmit
       properties:
         mayReadItems:
           type: boolean
@@ -1199,79 +958,81 @@ components:
         maySubmit:
           type: boolean
       additionalProperties: false
-
     MailboxFilterCondition:
       type: object
       properties:
         parentId:
-          oneOf:
-            - $ref: "#/components/schemas/Id"
-            - type: "null"
+          $ref: '#/components/schemas/Id'
+          nullable: true
         name:
           type: string
         role:
-          type: [string, "null"]
+          type: string
+          nullable: true
         hasAnyRole:
           type: boolean
         isSubscribed:
           type: boolean
       additionalProperties: false
-
     MailboxFilterOperator:
       type: object
-      required: [operator, conditions]
+      required:
+      - operator
+      - conditions
       properties:
         operator:
           type: string
-          enum: [AND, OR, NOT]
+          enum:
+          - AND
+          - OR
+          - NOT
         conditions:
           type: array
           items:
-            $ref: "#/components/schemas/MailboxFilter"
+            $ref: '#/components/schemas/MailboxFilter'
       additionalProperties: false
-
     MailboxFilter:
       oneOf:
-        - $ref: "#/components/schemas/MailboxFilterOperator"
-        - $ref: "#/components/schemas/MailboxFilterCondition"
-
+      - $ref: '#/components/schemas/MailboxFilterOperator'
+      - $ref: '#/components/schemas/MailboxFilterCondition'
     MailboxGetRequest:
-      $ref: "#/components/schemas/GetRequest"
-
+      $ref: '#/components/schemas/GetRequest'
     MailboxGetResponse:
       type: object
-      required: [accountId, state, list, notFound]
+      required:
+      - accountId
+      - state
+      - list
+      - notFound
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         state:
           type: string
         list:
           type: array
           items:
-            $ref: "#/components/schemas/Mailbox"
+            $ref: '#/components/schemas/Mailbox'
         notFound:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
       additionalProperties: true
-
     MailboxChangesRequest:
-      $ref: "#/components/schemas/ChangesRequest"
-
+      $ref: '#/components/schemas/ChangesRequest'
     MailboxChangesResponse:
       type: object
       required:
-        - accountId
-        - oldState
-        - newState
-        - hasMoreChanges
-        - created
-        - updated
-        - destroyed
+      - accountId
+      - oldState
+      - newState
+      - hasMoreChanges
+      - created
+      - updated
+      - destroyed
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         oldState:
           type: string
         newState:
@@ -1281,56 +1042,51 @@ components:
         created:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         updated:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         destroyed:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         updatedProperties:
-          description: |
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: |-
             If only the Mailbox count properties changed, the list of count
             properties that may have changed; otherwise null.
-          oneOf:
-            - type: array
-              items:
-                type: string
-            - type: "null"
       additionalProperties: true
-
     MailboxQueryRequest:
       type: object
-      required: [accountId]
+      required:
+      - accountId
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         filter:
-          oneOf:
-            - $ref: "#/components/schemas/MailboxFilter"
-            - type: "null"
+          $ref: '#/components/schemas/MailboxFilter'
+          nullable: true
         sort:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Comparator"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Comparator'
+          nullable: true
         position:
-          $ref: "#/components/schemas/Int"
+          $ref: '#/components/schemas/Int'
           default: 0
         anchor:
-          oneOf:
-            - $ref: "#/components/schemas/Id"
-            - type: "null"
+          $ref: '#/components/schemas/Id'
+          nullable: true
         anchorOffset:
-          $ref: "#/components/schemas/Int"
+          $ref: '#/components/schemas/Int'
           default: 0
         limit:
-          oneOf:
-            - $ref: "#/components/schemas/UnsignedInt"
-            - type: "null"
+          $ref: '#/components/schemas/UnsignedInt'
+          nullable: true
         calculateTotal:
           type: boolean
           default: false
@@ -1341,59 +1097,54 @@ components:
           type: boolean
           default: false
       additionalProperties: true
-
     MailboxQueryResponse:
-      $ref: "#/components/schemas/QueryResponse"
-
+      $ref: '#/components/schemas/QueryResponse'
     MailboxQueryChangesRequest:
       type: object
-      required: [accountId, sinceQueryState]
+      required:
+      - accountId
+      - sinceQueryState
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         filter:
-          oneOf:
-            - $ref: "#/components/schemas/MailboxFilter"
-            - type: "null"
+          $ref: '#/components/schemas/MailboxFilter'
+          nullable: true
         sort:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Comparator"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Comparator'
+          nullable: true
         sinceQueryState:
           type: string
         maxChanges:
-          oneOf:
-            - type: integer
-              minimum: 1
-              maximum: 9007199254740991
-            - type: "null"
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          nullable: true
         upToId:
-          oneOf:
-            - $ref: "#/components/schemas/Id"
-            - type: "null"
+          $ref: '#/components/schemas/Id'
+          nullable: true
         calculateTotal:
           type: boolean
           default: false
       additionalProperties: true
-
     MailboxQueryChangesResponse:
-      $ref: "#/components/schemas/QueryChangesResponse"
-
+      $ref: '#/components/schemas/QueryChangesResponse'
     MailboxCreate:
       type: object
-      required: [name]
+      required:
+      - name
       properties:
         name:
           type: string
           minLength: 1
         parentId:
-          oneOf:
-            - $ref: "#/components/schemas/IdOrCreationId"
-            - type: "null"
+          $ref: '#/components/schemas/IdOrCreationId'
+          nullable: true
         role:
-          type: [string, "null"]
+          type: string
+          nullable: true
         sortOrder:
           type: integer
           minimum: 0
@@ -1402,172 +1153,157 @@ components:
         isSubscribed:
           type: boolean
       additionalProperties: false
-
     MailboxUpdate:
-      $ref: "#/components/schemas/PatchObject"
-
+      $ref: '#/components/schemas/PatchObject'
     MailboxSetRequest:
       type: object
-      required: [accountId]
+      required:
+      - accountId
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         ifInState:
-          type: [string, "null"]
+          type: string
+          nullable: true
         create:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/MailboxCreate"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/MailboxCreate'
+          nullable: true
         update:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/MailboxUpdate"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/MailboxUpdate'
+          nullable: true
         destroy:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
         onDestroyRemoveEmails:
           type: boolean
           default: false
       additionalProperties: true
-
     MailboxSetResponse:
       type: object
       required:
-        - accountId
-        - oldState
-        - newState
-        - created
-        - updated
-        - destroyed
-        - notCreated
-        - notUpdated
-        - notDestroyed
+      - accountId
+      - oldState
+      - newState
+      - created
+      - updated
+      - destroyed
+      - notCreated
+      - notUpdated
+      - notDestroyed
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         oldState:
-          type: [string, "null"]
+          type: string
+          nullable: true
         newState:
           type: string
         created:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/Mailbox"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Mailbox'
+          nullable: true
         updated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                oneOf:
-                  - $ref: "#/components/schemas/Mailbox"
-                  - type: "null"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Mailbox'
+            nullable: true
+          nullable: true
         destroyed:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
         notCreated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
         notUpdated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
         notDestroyed:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
       additionalProperties: true
-
-    # ============================================================
-    # Thread (RFC 8621 Section 3)
-    # ============================================================
-
     Thread:
       type: object
-      required: [id, emailIds]
+      required:
+      - id
+      - emailIds
       properties:
         id:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         emailIds:
           type: array
-          description: "Email ids in the thread, oldest first"
+          description: Email ids in the thread, oldest first
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
       additionalProperties: false
-
     ThreadGetRequest:
-      $ref: "#/components/schemas/GetRequest"
-
+      $ref: '#/components/schemas/GetRequest'
     ThreadGetResponse:
       type: object
-      required: [accountId, state, list, notFound]
+      required:
+      - accountId
+      - state
+      - list
+      - notFound
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         state:
           type: string
         list:
           type: array
           items:
-            $ref: "#/components/schemas/Thread"
+            $ref: '#/components/schemas/Thread'
         notFound:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
       additionalProperties: true
-
     ThreadChangesRequest:
-      $ref: "#/components/schemas/ChangesRequest"
-
+      $ref: '#/components/schemas/ChangesRequest'
     ThreadChangesResponse:
-      $ref: "#/components/schemas/ChangesResponse"
-
-    # ============================================================
-    # Email (RFC 8621 Section 4)
-    # ============================================================
-
+      $ref: '#/components/schemas/ChangesResponse'
     EmailAddress:
       type: object
-      required: [email]
+      required:
+      - email
       properties:
         name:
-          type: [string, "null"]
+          type: string
+          nullable: true
         email:
           type: string
-          description: "The email address (may be an empty string only where JMAP permits it)"
+          description: The email address (may be an empty string only where JMAP permits it)
       additionalProperties: false
-
     EmailHeader:
       type: object
-      required: [name, value]
+      required:
+      - name
+      - value
       properties:
         name:
           type: string
         value:
           type: string
       additionalProperties: false
-
     EmailBodyValue:
       type: object
-      required: [value]
+      required:
+      - value
       properties:
         value:
           type: string
@@ -1578,182 +1314,176 @@ components:
           type: boolean
           default: false
       additionalProperties: false
-
     EmailBodyPart:
       type: object
-      required: [type, size]
+      required:
+      - type
+      - size
       properties:
         partId:
-          type: [string, "null"]
-          description: "Null if and only if the part is multipart/*"
+          type: string
+          nullable: true
+          description: Null if and only if the part is multipart/*
         blobId:
-          oneOf:
-            - $ref: "#/components/schemas/Id"
-            - type: "null"
-          description: "Null if and only if the part is multipart/*"
+          $ref: '#/components/schemas/Id'
+          nullable: true
+          description: Null if and only if the part is multipart/*
         size:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         headers:
           type: array
           items:
-            $ref: "#/components/schemas/EmailHeader"
+            $ref: '#/components/schemas/EmailHeader'
         name:
-          type: [string, "null"]
+          type: string
+          nullable: true
         type:
           type: string
         charset:
-          type: [string, "null"]
+          type: string
+          nullable: true
         disposition:
-          type: [string, "null"]
+          type: string
+          nullable: true
         cid:
-          type: [string, "null"]
+          type: string
+          nullable: true
         language:
-          oneOf:
-            - type: array
-              items:
-                type: string
-            - type: "null"
+          type: array
+          items:
+            type: string
+          nullable: true
         location:
-          type: [string, "null"]
+          type: string
+          nullable: true
         subParts:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailBodyPart"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailBodyPart'
+          nullable: true
       additionalProperties: true
-      description: |
+      description: |-
         A MIME body part. `header:{name}` properties may also be requested or
         supplied, following the Email header-property syntax.
-
     Email:
       type: object
-      description: |
+      description: |-
         An Email object. Only `id` is guaranteed in every response; the
         properties returned depend on the `properties` argument to `Email/get`.
         The `header:{name}[:as{form}][:all]` dynamic properties are also
         permitted.
-      required: [id]
+      required:
+      - id
       properties:
         id:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         blobId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         threadId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         mailboxIds:
-          $ref: "#/components/schemas/IdBooleanMap"
+          $ref: '#/components/schemas/IdBooleanMap'
         keywords:
-          $ref: "#/components/schemas/StringBooleanMap"
+          $ref: '#/components/schemas/StringBooleanMap'
         size:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         receivedAt:
-          $ref: "#/components/schemas/UTCDate"
+          $ref: '#/components/schemas/UTCDate'
         messageId:
-          oneOf:
-            - type: array
-              items:
-                type: string
-            - type: "null"
+          type: array
+          items:
+            type: string
+          nullable: true
         inReplyTo:
-          oneOf:
-            - type: array
-              items:
-                type: string
-            - type: "null"
+          type: array
+          items:
+            type: string
+          nullable: true
         references:
-          oneOf:
-            - type: array
-              items:
-                type: string
-            - type: "null"
+          type: array
+          items:
+            type: string
+          nullable: true
         sender:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         from:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         to:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         cc:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         bcc:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         replyTo:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         subject:
-          type: [string, "null"]
+          type: string
+          nullable: true
         sentAt:
-          oneOf:
-            - $ref: "#/components/schemas/Date"
-            - type: "null"
+          $ref: '#/components/schemas/Date'
+          nullable: true
         hasAttachment:
           type: boolean
         preview:
           type: string
         bodyStructure:
-          $ref: "#/components/schemas/EmailBodyPart"
+          $ref: '#/components/schemas/EmailBodyPart'
         bodyValues:
           type: object
           additionalProperties:
-            $ref: "#/components/schemas/EmailBodyValue"
+            $ref: '#/components/schemas/EmailBodyValue'
         textBody:
           type: array
           items:
-            $ref: "#/components/schemas/EmailBodyPart"
+            $ref: '#/components/schemas/EmailBodyPart'
         htmlBody:
           type: array
           items:
-            $ref: "#/components/schemas/EmailBodyPart"
+            $ref: '#/components/schemas/EmailBodyPart'
         attachments:
           type: array
           items:
-            $ref: "#/components/schemas/EmailBodyPart"
+            $ref: '#/components/schemas/EmailBodyPart'
         headers:
           type: array
           items:
-            $ref: "#/components/schemas/EmailHeader"
+            $ref: '#/components/schemas/EmailHeader'
       additionalProperties: true
-
     EmailFilterCondition:
       type: object
       properties:
         inMailbox:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         inMailboxOtherThan:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         before:
-          $ref: "#/components/schemas/UTCDate"
+          $ref: '#/components/schemas/UTCDate'
         after:
-          $ref: "#/components/schemas/UTCDate"
+          $ref: '#/components/schemas/UTCDate'
         minSize:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         maxSize:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
         allInThreadHaveKeyword:
           type: string
         someInThreadHaveKeyword:
@@ -1782,52 +1512,53 @@ components:
           type: string
         header:
           type: array
-          description: "One or two elements: header name, and optional value text"
+          description: 'One or two elements: header name, and optional value text'
           minItems: 1
           maxItems: 2
           items:
             type: string
       additionalProperties: false
-
     EmailFilterOperator:
       type: object
-      required: [operator, conditions]
+      required:
+      - operator
+      - conditions
       properties:
         operator:
           type: string
-          enum: [AND, OR, NOT]
+          enum:
+          - AND
+          - OR
+          - NOT
         conditions:
           type: array
           items:
-            $ref: "#/components/schemas/EmailFilter"
+            $ref: '#/components/schemas/EmailFilter'
       additionalProperties: false
-
     EmailFilter:
       oneOf:
-        - $ref: "#/components/schemas/EmailFilterOperator"
-        - $ref: "#/components/schemas/EmailFilterCondition"
-
+      - $ref: '#/components/schemas/EmailFilterOperator'
+      - $ref: '#/components/schemas/EmailFilterCondition'
     EmailGetRequest:
       type: object
-      required: [accountId]
+      required:
+      - accountId
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         ids:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
         properties:
-          oneOf:
-            - type: array
-              items:
-                type: string
-            - type: "null"
+          type: array
+          items:
+            type: string
+          nullable: true
         bodyProperties:
           type: array
-          description: |
+          description: |-
             Properties to fetch for each EmailBodyPart. Defaults to
             partId, blobId, size, name, type, charset, disposition, cid,
             language, location.
@@ -1843,64 +1574,61 @@ components:
           type: boolean
           default: false
         maxBodyValueBytes:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
           default: 0
       additionalProperties: true
-
     EmailGetResponse:
       type: object
-      required: [accountId, state, list, notFound]
+      required:
+      - accountId
+      - state
+      - list
+      - notFound
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         state:
           type: string
         list:
           type: array
           items:
-            $ref: "#/components/schemas/Email"
+            $ref: '#/components/schemas/Email'
         notFound:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
       additionalProperties: true
-
     EmailChangesRequest:
-      $ref: "#/components/schemas/ChangesRequest"
-
+      $ref: '#/components/schemas/ChangesRequest'
     EmailChangesResponse:
-      $ref: "#/components/schemas/ChangesResponse"
-
+      $ref: '#/components/schemas/ChangesResponse'
     EmailQueryRequest:
       type: object
-      required: [accountId]
+      required:
+      - accountId
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         filter:
-          oneOf:
-            - $ref: "#/components/schemas/EmailFilter"
-            - type: "null"
+          $ref: '#/components/schemas/EmailFilter'
+          nullable: true
         sort:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Comparator"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Comparator'
+          nullable: true
         position:
-          $ref: "#/components/schemas/Int"
+          $ref: '#/components/schemas/Int'
           default: 0
         anchor:
-          oneOf:
-            - $ref: "#/components/schemas/Id"
-            - type: "null"
+          $ref: '#/components/schemas/Id'
+          nullable: true
         anchorOffset:
-          $ref: "#/components/schemas/Int"
+          $ref: '#/components/schemas/Int'
           default: 0
         limit:
-          oneOf:
-            - $ref: "#/components/schemas/UnsignedInt"
-            - type: "null"
+          $ref: '#/components/schemas/UnsignedInt'
+          nullable: true
         calculateTotal:
           type: boolean
           default: false
@@ -1908,38 +1636,34 @@ components:
           type: boolean
           default: false
       additionalProperties: true
-
     EmailQueryResponse:
-      $ref: "#/components/schemas/QueryResponse"
-
+      $ref: '#/components/schemas/QueryResponse'
     EmailQueryChangesRequest:
       type: object
-      required: [accountId, sinceQueryState]
+      required:
+      - accountId
+      - sinceQueryState
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         filter:
-          oneOf:
-            - $ref: "#/components/schemas/EmailFilter"
-            - type: "null"
+          $ref: '#/components/schemas/EmailFilter'
+          nullable: true
         sort:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Comparator"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Comparator'
+          nullable: true
         sinceQueryState:
           type: string
         maxChanges:
-          oneOf:
-            - type: integer
-              minimum: 1
-              maximum: 9007199254740991
-            - type: "null"
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          nullable: true
         upToId:
-          oneOf:
-            - $ref: "#/components/schemas/Id"
-            - type: "null"
+          $ref: '#/components/schemas/Id'
+          nullable: true
         calculateTotal:
           type: boolean
           default: false
@@ -1947,302 +1671,292 @@ components:
           type: boolean
           default: false
       additionalProperties: true
-
     EmailQueryChangesResponse:
-      $ref: "#/components/schemas/QueryChangesResponse"
-
+      $ref: '#/components/schemas/QueryChangesResponse'
     EmailCreate:
       type: object
-      description: |
+      description: |-
         An Email to create. `headers` MUST NOT be supplied; set individual
         `header:{name}` properties instead. If `bodyStructure` is supplied,
         `textBody`, `htmlBody`, and `attachments` MUST NOT be supplied.
-      required: [mailboxIds]
+      required:
+      - mailboxIds
       properties:
         mailboxIds:
-          $ref: "#/components/schemas/IdBooleanMap"
+          $ref: '#/components/schemas/IdBooleanMap'
         keywords:
-          $ref: "#/components/schemas/StringBooleanMap"
+          $ref: '#/components/schemas/StringBooleanMap'
         receivedAt:
-          $ref: "#/components/schemas/UTCDate"
+          $ref: '#/components/schemas/UTCDate'
         messageId:
-          oneOf:
-            - type: array
-              items:
-                type: string
-            - type: "null"
+          type: array
+          items:
+            type: string
+          nullable: true
         inReplyTo:
-          oneOf:
-            - type: array
-              items:
-                type: string
-            - type: "null"
+          type: array
+          items:
+            type: string
+          nullable: true
         references:
-          oneOf:
-            - type: array
-              items:
-                type: string
-            - type: "null"
+          type: array
+          items:
+            type: string
+          nullable: true
         sender:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         from:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         to:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         cc:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         bcc:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         replyTo:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         subject:
-          type: [string, "null"]
+          type: string
+          nullable: true
         sentAt:
-          oneOf:
-            - $ref: "#/components/schemas/Date"
-            - type: "null"
+          $ref: '#/components/schemas/Date'
+          nullable: true
         bodyStructure:
-          $ref: "#/components/schemas/EmailBodyPart"
+          $ref: '#/components/schemas/EmailBodyPart'
         bodyValues:
           type: object
           additionalProperties:
-            $ref: "#/components/schemas/EmailBodyValue"
+            $ref: '#/components/schemas/EmailBodyValue'
         textBody:
           type: array
           items:
-            $ref: "#/components/schemas/EmailBodyPart"
+            $ref: '#/components/schemas/EmailBodyPart'
         htmlBody:
           type: array
           items:
-            $ref: "#/components/schemas/EmailBodyPart"
+            $ref: '#/components/schemas/EmailBodyPart'
         attachments:
           type: array
           items:
-            $ref: "#/components/schemas/EmailBodyPart"
+            $ref: '#/components/schemas/EmailBodyPart'
       additionalProperties: true
-
     EmailUpdate:
-      $ref: "#/components/schemas/PatchObject"
-
+      $ref: '#/components/schemas/PatchObject'
     EmailSetRequest:
       type: object
-      required: [accountId]
-      properties:
-        accountId:
-          $ref: "#/components/schemas/Id"
-        ifInState:
-          type: [string, "null"]
-        create:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/EmailCreate"
-            - type: "null"
-        update:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/EmailUpdate"
-            - type: "null"
-        destroy:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
-      additionalProperties: true
-
-    EmailSetResponse:
-      type: object
       required:
-        - accountId
-        - oldState
-        - newState
-        - created
-        - updated
-        - destroyed
-        - notCreated
-        - notUpdated
-        - notDestroyed
+      - accountId
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
-        oldState:
-          type: [string, "null"]
-        newState:
-          type: string
-        created:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/Email"
-            - type: "null"
-        updated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                oneOf:
-                  - $ref: "#/components/schemas/Email"
-                  - type: "null"
-            - type: "null"
-        destroyed:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
-        notCreated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
-        notUpdated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
-        notDestroyed:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
-      additionalProperties: true
-
-    EmailCopy:
-      type: object
-      required: [id]
-      properties:
-        id:
-          $ref: "#/components/schemas/Id"
-        mailboxIds:
-          $ref: "#/components/schemas/IdBooleanMap"
-        keywords:
-          $ref: "#/components/schemas/StringBooleanMap"
-        receivedAt:
-          $ref: "#/components/schemas/UTCDate"
-      additionalProperties: false
-
-    EmailCopyRequest:
-      type: object
-      required: [fromAccountId, accountId, create]
-      properties:
-        fromAccountId:
-          $ref: "#/components/schemas/Id"
-        ifFromInState:
-          type: [string, "null"]
-        accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         ifInState:
-          type: [string, "null"]
+          type: string
+          nullable: true
         create:
           type: object
           additionalProperties:
-            $ref: "#/components/schemas/EmailCopy"
+            $ref: '#/components/schemas/EmailCreate'
+          nullable: true
+        update:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/EmailUpdate'
+          nullable: true
+        destroy:
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
+      additionalProperties: true
+    EmailSetResponse:
+      type: object
+      required:
+      - accountId
+      - oldState
+      - newState
+      - created
+      - updated
+      - destroyed
+      - notCreated
+      - notUpdated
+      - notDestroyed
+      properties:
+        accountId:
+          $ref: '#/components/schemas/Id'
+        oldState:
+          type: string
+          nullable: true
+        newState:
+          type: string
+        created:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Email'
+          nullable: true
+        updated:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Email'
+            nullable: true
+          nullable: true
+        destroyed:
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
+        notCreated:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
+        notUpdated:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
+        notDestroyed:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
+      additionalProperties: true
+    EmailCopy:
+      type: object
+      required:
+      - id
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        mailboxIds:
+          $ref: '#/components/schemas/IdBooleanMap'
+        keywords:
+          $ref: '#/components/schemas/StringBooleanMap'
+        receivedAt:
+          $ref: '#/components/schemas/UTCDate'
+      additionalProperties: false
+    EmailCopyRequest:
+      type: object
+      required:
+      - fromAccountId
+      - accountId
+      - create
+      properties:
+        fromAccountId:
+          $ref: '#/components/schemas/Id'
+        ifFromInState:
+          type: string
+          nullable: true
+        accountId:
+          $ref: '#/components/schemas/Id'
+        ifInState:
+          type: string
+          nullable: true
+        create:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/EmailCopy'
         onSuccessDestroyOriginal:
           type: boolean
           default: false
         destroyFromIfInState:
-          type: [string, "null"]
+          type: string
+          nullable: true
       additionalProperties: true
-
     EmailCopyResponse:
-      $ref: "#/components/schemas/CopyResponse"
-
+      $ref: '#/components/schemas/CopyResponse'
     EmailImport:
       type: object
-      required: [blobId, mailboxIds]
+      required:
+      - blobId
+      - mailboxIds
       properties:
         blobId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         mailboxIds:
-          $ref: "#/components/schemas/IdBooleanMap"
+          $ref: '#/components/schemas/IdBooleanMap'
         keywords:
-          $ref: "#/components/schemas/StringBooleanMap"
+          $ref: '#/components/schemas/StringBooleanMap'
         receivedAt:
-          $ref: "#/components/schemas/UTCDate"
+          $ref: '#/components/schemas/UTCDate'
       additionalProperties: false
-
     EmailImportRequest:
       type: object
-      required: [accountId, emails]
+      required:
+      - accountId
+      - emails
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         ifInState:
-          type: [string, "null"]
+          type: string
+          nullable: true
         emails:
           type: object
           additionalProperties:
-            $ref: "#/components/schemas/EmailImport"
+            $ref: '#/components/schemas/EmailImport'
       additionalProperties: true
-
     EmailImportResponse:
       type: object
-      required: [accountId, oldState, newState, created, notCreated]
+      required:
+      - accountId
+      - oldState
+      - newState
+      - created
+      - notCreated
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         oldState:
-          type: [string, "null"]
+          type: string
+          nullable: true
         newState:
           type: string
         created:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/Email"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Email'
+          nullable: true
         notCreated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
       additionalProperties: true
-
     EmailParseRequest:
       type: object
-      required: [accountId, blobIds]
+      required:
+      - accountId
+      - blobIds
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         blobIds:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         properties:
-          oneOf:
-            - type: array
-              items:
-                type: string
-            - type: "null"
+          type: array
+          items:
+            type: string
+          nullable: true
         bodyProperties:
           type: array
           items:
@@ -2257,113 +1971,111 @@ components:
           type: boolean
           default: false
         maxBodyValueBytes:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
           default: 0
       additionalProperties: true
-
     EmailParseResponse:
       type: object
-      required: [accountId, parsed, notParsable, notFound]
+      required:
+      - accountId
+      - parsed
+      - notParsable
+      - notFound
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         parsed:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/Email"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Email'
+          nullable: true
         notParsable:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
         notFound:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
       additionalProperties: true
-
-    # ============================================================
-    # SearchSnippet (RFC 8621 Section 5)
-    # ============================================================
-
     SearchSnippet:
       type: object
-      description: "A SearchSnippet has no id property and no state"
-      required: [emailId, subject, preview]
+      description: A SearchSnippet has no id property and no state
+      required:
+      - emailId
+      - subject
+      - preview
       properties:
         emailId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         subject:
-          type: [string, "null"]
+          type: string
+          nullable: true
         preview:
-          type: [string, "null"]
+          type: string
+          nullable: true
       additionalProperties: false
-
     SearchSnippetGetRequest:
       type: object
-      required: [accountId, emailIds]
+      required:
+      - accountId
+      - emailIds
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         filter:
-          oneOf:
-            - $ref: "#/components/schemas/EmailFilter"
-            - type: "null"
+          $ref: '#/components/schemas/EmailFilter'
+          nullable: true
         emailIds:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
       additionalProperties: true
-
     SearchSnippetGetResponse:
       type: object
-      required: [accountId, list, notFound]
+      required:
+      - accountId
+      - list
+      - notFound
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         list:
           type: array
           items:
-            $ref: "#/components/schemas/SearchSnippet"
+            $ref: '#/components/schemas/SearchSnippet'
         notFound:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
       additionalProperties: true
-
-    # ============================================================
-    # Identity (RFC 8621 Section 6)
-    # ============================================================
-
     Identity:
       type: object
-      required: [id, name, email, mayDelete]
+      required:
+      - id
+      - name
+      - email
+      - mayDelete
       properties:
         id:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         name:
           type: string
         email:
           type: string
         replyTo:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         bcc:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         textSignature:
           type: string
         htmlSignature:
@@ -2371,1060 +2083,1034 @@ components:
         mayDelete:
           type: boolean
       additionalProperties: true
-
     IdentityCreate:
       type: object
-      required: [email]
+      required:
+      - email
       properties:
         name:
           type: string
-          default: ""
+          default: ''
         email:
           type: string
         replyTo:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         bcc:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/EmailAddress"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+          nullable: true
         textSignature:
           type: string
-          default: ""
+          default: ''
         htmlSignature:
           type: string
-          default: ""
+          default: ''
       additionalProperties: false
-
     IdentityUpdate:
-      $ref: "#/components/schemas/PatchObject"
-
+      $ref: '#/components/schemas/PatchObject'
     IdentityGetRequest:
-      $ref: "#/components/schemas/GetRequest"
-
+      $ref: '#/components/schemas/GetRequest'
     IdentityGetResponse:
       type: object
-      required: [accountId, state, list, notFound]
+      required:
+      - accountId
+      - state
+      - list
+      - notFound
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         state:
           type: string
         list:
           type: array
           items:
-            $ref: "#/components/schemas/Identity"
+            $ref: '#/components/schemas/Identity'
         notFound:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
       additionalProperties: true
-
     IdentityChangesRequest:
-      $ref: "#/components/schemas/ChangesRequest"
-
+      $ref: '#/components/schemas/ChangesRequest'
     IdentityChangesResponse:
-      $ref: "#/components/schemas/ChangesResponse"
-
+      $ref: '#/components/schemas/ChangesResponse'
     IdentitySetRequest:
       type: object
-      required: [accountId]
+      required:
+      - accountId
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         ifInState:
-          type: [string, "null"]
+          type: string
+          nullable: true
         create:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/IdentityCreate"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/IdentityCreate'
+          nullable: true
         update:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/IdentityUpdate"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/IdentityUpdate'
+          nullable: true
         destroy:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
       additionalProperties: true
-
     IdentitySetResponse:
       type: object
       required:
-        - accountId
-        - oldState
-        - newState
-        - created
-        - updated
-        - destroyed
-        - notCreated
-        - notUpdated
-        - notDestroyed
+      - accountId
+      - oldState
+      - newState
+      - created
+      - updated
+      - destroyed
+      - notCreated
+      - notUpdated
+      - notDestroyed
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         oldState:
-          type: [string, "null"]
+          type: string
+          nullable: true
         newState:
           type: string
         created:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/Identity"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Identity'
+          nullable: true
         updated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                oneOf:
-                  - $ref: "#/components/schemas/Identity"
-                  - type: "null"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Identity'
+            nullable: true
+          nullable: true
         destroyed:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
         notCreated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
         notUpdated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
         notDestroyed:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
       additionalProperties: true
-
-    # ============================================================
-    # EmailSubmission (RFC 8621 Section 7)
-    # ============================================================
-
     Address:
       type: object
-      required: [email]
+      required:
+      - email
       properties:
         email:
           type: string
         parameters:
-          oneOf:
-            - type: object
-              additionalProperties:
-                type: [string, "null"]
-            - type: "null"
+          type: object
+          additionalProperties:
+            type: string
+            nullable: true
+          nullable: true
       additionalProperties: false
-
     Envelope:
       type: object
-      required: [mailFrom, rcptTo]
+      required:
+      - mailFrom
+      - rcptTo
       properties:
         mailFrom:
-          $ref: "#/components/schemas/Address"
+          $ref: '#/components/schemas/Address'
         rcptTo:
           type: array
           items:
-            $ref: "#/components/schemas/Address"
+            $ref: '#/components/schemas/Address'
       additionalProperties: false
-
     DeliveryStatus:
       type: object
-      required: [smtpReply, delivered, displayed]
+      required:
+      - smtpReply
+      - delivered
+      - displayed
       properties:
         smtpReply:
           type: string
         delivered:
           type: string
-          enum: [queued, yes, no, unknown]
+          enum:
+          - queued
+          - 'true'
+          - 'false'
+          - unknown
         displayed:
           type: string
-          enum: [unknown, yes]
+          enum:
+          - unknown
+          - 'true'
       additionalProperties: false
-
     EmailSubmission:
       type: object
-      required: [id]
+      required:
+      - id
       properties:
         id:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         identityId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         emailId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         threadId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         envelope:
-          oneOf:
-            - $ref: "#/components/schemas/Envelope"
-            - type: "null"
+          $ref: '#/components/schemas/Envelope'
+          nullable: true
         sendAt:
-          $ref: "#/components/schemas/UTCDate"
+          $ref: '#/components/schemas/UTCDate'
         undoStatus:
           type: string
-          enum: [pending, final, canceled]
+          enum:
+          - pending
+          - final
+          - canceled
         deliveryStatus:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/DeliveryStatus"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DeliveryStatus'
+          nullable: true
         dsnBlobIds:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         mdnBlobIds:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
       additionalProperties: true
-
     EmailSubmissionCreate:
       type: object
-      required: [identityId, emailId]
+      required:
+      - identityId
+      - emailId
       properties:
         identityId:
-          $ref: "#/components/schemas/IdOrCreationId"
+          $ref: '#/components/schemas/IdOrCreationId'
         emailId:
-          $ref: "#/components/schemas/IdOrCreationId"
+          $ref: '#/components/schemas/IdOrCreationId'
         envelope:
-          oneOf:
-            - $ref: "#/components/schemas/Envelope"
-            - type: "null"
+          $ref: '#/components/schemas/Envelope'
+          nullable: true
         sendAt:
-          $ref: "#/components/schemas/UTCDate"
+          $ref: '#/components/schemas/UTCDate'
       additionalProperties: false
-
     EmailSubmissionUpdate:
       type: object
       properties:
         sendAt:
-          $ref: "#/components/schemas/UTCDate"
+          $ref: '#/components/schemas/UTCDate'
         undoStatus:
           type: string
-          enum: [canceled]
+          enum:
+          - canceled
       additionalProperties: false
-
     EmailSubmissionFilterCondition:
       type: object
       properties:
         identityIds:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         emailIds:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         threadIds:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
         undoStatus:
           type: string
-          enum: [pending, final, canceled]
+          enum:
+          - pending
+          - final
+          - canceled
         before:
-          $ref: "#/components/schemas/UTCDate"
+          $ref: '#/components/schemas/UTCDate'
         after:
-          $ref: "#/components/schemas/UTCDate"
+          $ref: '#/components/schemas/UTCDate'
       additionalProperties: false
-
     EmailSubmissionFilterOperator:
       type: object
-      required: [operator, conditions]
+      required:
+      - operator
+      - conditions
       properties:
         operator:
           type: string
-          enum: [AND, OR, NOT]
+          enum:
+          - AND
+          - OR
+          - NOT
         conditions:
           type: array
           items:
-            $ref: "#/components/schemas/EmailSubmissionFilter"
+            $ref: '#/components/schemas/EmailSubmissionFilter'
       additionalProperties: false
-
     EmailSubmissionFilter:
       oneOf:
-        - $ref: "#/components/schemas/EmailSubmissionFilterOperator"
-        - $ref: "#/components/schemas/EmailSubmissionFilterCondition"
-
+      - $ref: '#/components/schemas/EmailSubmissionFilterOperator'
+      - $ref: '#/components/schemas/EmailSubmissionFilterCondition'
     EmailSubmissionGetRequest:
-      $ref: "#/components/schemas/GetRequest"
-
+      $ref: '#/components/schemas/GetRequest'
     EmailSubmissionGetResponse:
       type: object
-      required: [accountId, state, list, notFound]
+      required:
+      - accountId
+      - state
+      - list
+      - notFound
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         state:
           type: string
         list:
           type: array
           items:
-            $ref: "#/components/schemas/EmailSubmission"
+            $ref: '#/components/schemas/EmailSubmission'
         notFound:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
       additionalProperties: true
-
     EmailSubmissionChangesRequest:
-      $ref: "#/components/schemas/ChangesRequest"
-
+      $ref: '#/components/schemas/ChangesRequest'
     EmailSubmissionChangesResponse:
-      $ref: "#/components/schemas/ChangesResponse"
-
+      $ref: '#/components/schemas/ChangesResponse'
     EmailSubmissionQueryRequest:
       type: object
-      required: [accountId]
+      required:
+      - accountId
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         filter:
-          oneOf:
-            - $ref: "#/components/schemas/EmailSubmissionFilter"
-            - type: "null"
+          $ref: '#/components/schemas/EmailSubmissionFilter'
+          nullable: true
         sort:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Comparator"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Comparator'
+          nullable: true
         position:
-          $ref: "#/components/schemas/Int"
+          $ref: '#/components/schemas/Int'
           default: 0
         anchor:
-          oneOf:
-            - $ref: "#/components/schemas/Id"
-            - type: "null"
+          $ref: '#/components/schemas/Id'
+          nullable: true
         anchorOffset:
-          $ref: "#/components/schemas/Int"
+          $ref: '#/components/schemas/Int'
           default: 0
         limit:
-          oneOf:
-            - $ref: "#/components/schemas/UnsignedInt"
-            - type: "null"
+          $ref: '#/components/schemas/UnsignedInt'
+          nullable: true
         calculateTotal:
           type: boolean
           default: false
       additionalProperties: true
-
     EmailSubmissionQueryResponse:
-      $ref: "#/components/schemas/QueryResponse"
-
+      $ref: '#/components/schemas/QueryResponse'
     EmailSubmissionQueryChangesRequest:
       type: object
-      required: [accountId, sinceQueryState]
+      required:
+      - accountId
+      - sinceQueryState
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         filter:
-          oneOf:
-            - $ref: "#/components/schemas/EmailSubmissionFilter"
-            - type: "null"
+          $ref: '#/components/schemas/EmailSubmissionFilter'
+          nullable: true
         sort:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Comparator"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Comparator'
+          nullable: true
         sinceQueryState:
           type: string
         maxChanges:
-          oneOf:
-            - type: integer
-              minimum: 1
-              maximum: 9007199254740991
-            - type: "null"
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          nullable: true
         upToId:
-          oneOf:
-            - $ref: "#/components/schemas/Id"
-            - type: "null"
+          $ref: '#/components/schemas/Id'
+          nullable: true
         calculateTotal:
           type: boolean
           default: false
       additionalProperties: true
-
     EmailSubmissionQueryChangesResponse:
-      $ref: "#/components/schemas/QueryChangesResponse"
-
+      $ref: '#/components/schemas/QueryChangesResponse'
     EmailSubmissionSetRequest:
       type: object
-      required: [accountId]
+      required:
+      - accountId
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         ifInState:
-          type: [string, "null"]
+          type: string
+          nullable: true
         create:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/EmailSubmissionCreate"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/EmailSubmissionCreate'
+          nullable: true
         update:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/EmailSubmissionUpdate"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/EmailSubmissionUpdate'
+          nullable: true
         destroy:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
         onSuccessUpdateEmail:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/PatchObject"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/PatchObject'
+          nullable: true
         onSuccessDestroyEmail:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/IdOrCreationId"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/IdOrCreationId'
+          nullable: true
       additionalProperties: true
-
     EmailSubmissionSetResponse:
       type: object
       required:
-        - accountId
-        - oldState
-        - newState
-        - created
-        - updated
-        - destroyed
-        - notCreated
-        - notUpdated
-        - notDestroyed
+      - accountId
+      - oldState
+      - newState
+      - created
+      - updated
+      - destroyed
+      - notCreated
+      - notUpdated
+      - notDestroyed
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         oldState:
-          type: [string, "null"]
+          type: string
+          nullable: true
         newState:
           type: string
         created:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/EmailSubmission"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/EmailSubmission'
+          nullable: true
         updated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                oneOf:
-                  - $ref: "#/components/schemas/EmailSubmission"
-                  - type: "null"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/EmailSubmission'
+            nullable: true
+          nullable: true
         destroyed:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
         notCreated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
         notUpdated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
         notDestroyed:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
       additionalProperties: true
-
-    # ============================================================
-    # VacationResponse (RFC 8621 Section 8)
-    # ============================================================
-
     VacationResponse:
       type: object
-      required: [id, isEnabled, fromDate, toDate, subject, textBody, htmlBody]
+      required:
+      - id
+      - isEnabled
+      - fromDate
+      - toDate
+      - subject
+      - textBody
+      - htmlBody
       properties:
         id:
           type: string
-          const: "singleton"
+          enum:
+          - singleton
         isEnabled:
           type: boolean
         fromDate:
-          oneOf:
-            - $ref: "#/components/schemas/UTCDate"
-            - type: "null"
+          $ref: '#/components/schemas/UTCDate'
+          nullable: true
         toDate:
-          oneOf:
-            - $ref: "#/components/schemas/UTCDate"
-            - type: "null"
+          $ref: '#/components/schemas/UTCDate'
+          nullable: true
         subject:
-          type: [string, "null"]
+          type: string
+          nullable: true
         textBody:
-          type: [string, "null"]
+          type: string
+          nullable: true
         htmlBody:
-          type: [string, "null"]
+          type: string
+          nullable: true
       additionalProperties: false
-
     VacationResponseCreate:
       type: object
       properties:
         isEnabled:
           type: boolean
         fromDate:
-          oneOf:
-            - $ref: "#/components/schemas/UTCDate"
-            - type: "null"
+          $ref: '#/components/schemas/UTCDate'
+          nullable: true
         toDate:
-          oneOf:
-            - $ref: "#/components/schemas/UTCDate"
-            - type: "null"
+          $ref: '#/components/schemas/UTCDate'
+          nullable: true
         subject:
-          type: [string, "null"]
+          type: string
+          nullable: true
         textBody:
-          type: [string, "null"]
+          type: string
+          nullable: true
         htmlBody:
-          type: [string, "null"]
+          type: string
+          nullable: true
       additionalProperties: false
-
     VacationResponseUpdate:
       type: object
       properties:
         isEnabled:
           type: boolean
         fromDate:
-          oneOf:
-            - $ref: "#/components/schemas/UTCDate"
-            - type: "null"
+          $ref: '#/components/schemas/UTCDate'
+          nullable: true
         toDate:
-          oneOf:
-            - $ref: "#/components/schemas/UTCDate"
-            - type: "null"
+          $ref: '#/components/schemas/UTCDate'
+          nullable: true
         subject:
-          type: [string, "null"]
+          type: string
+          nullable: true
         textBody:
-          type: [string, "null"]
+          type: string
+          nullable: true
         htmlBody:
-          type: [string, "null"]
+          type: string
+          nullable: true
       additionalProperties: false
-
     VacationResponseGetRequest:
-      $ref: "#/components/schemas/GetRequest"
-
+      $ref: '#/components/schemas/GetRequest'
     VacationResponseGetResponse:
       type: object
-      required: [accountId, state, list, notFound]
+      required:
+      - accountId
+      - state
+      - list
+      - notFound
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         state:
           type: string
         list:
           type: array
           items:
-            $ref: "#/components/schemas/VacationResponse"
+            $ref: '#/components/schemas/VacationResponse'
         notFound:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
       additionalProperties: true
-
     VacationResponseSetRequest:
       type: object
-      required: [accountId]
+      required:
+      - accountId
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         ifInState:
-          type: [string, "null"]
+          type: string
+          nullable: true
         create:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/VacationResponseCreate"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/VacationResponseCreate'
+          nullable: true
         update:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/VacationResponseUpdate"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/VacationResponseUpdate'
+          nullable: true
         destroy:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
       additionalProperties: true
-
     VacationResponseSetResponse:
       type: object
       required:
-        - accountId
-        - oldState
-        - newState
-        - created
-        - updated
-        - destroyed
-        - notCreated
-        - notUpdated
-        - notDestroyed
+      - accountId
+      - oldState
+      - newState
+      - created
+      - updated
+      - destroyed
+      - notCreated
+      - notUpdated
+      - notDestroyed
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         oldState:
-          type: [string, "null"]
+          type: string
+          nullable: true
         newState:
           type: string
         created:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/VacationResponse"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/VacationResponse'
+          nullable: true
         updated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                oneOf:
-                  - $ref: "#/components/schemas/VacationResponse"
-                  - type: "null"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/VacationResponse'
+            nullable: true
+          nullable: true
         destroyed:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
         notCreated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
         notUpdated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
         notDestroyed:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
       additionalProperties: true
-
-    # ============================================================
-    # Binary (RFC 8620 Section 6)
-    # ============================================================
-
     UploadResponse:
       type: object
-      required: [accountId, blobId, type, size]
+      required:
+      - accountId
+      - blobId
+      - type
+      - size
       properties:
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         blobId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         type:
           type: string
         size:
-          $ref: "#/components/schemas/UnsignedInt"
+          $ref: '#/components/schemas/UnsignedInt'
       additionalProperties: false
-
     BlobCopyRequest:
       type: object
-      required: [fromAccountId, accountId, blobIds]
+      required:
+      - fromAccountId
+      - accountId
+      - blobIds
       properties:
         fromAccountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         blobIds:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
       additionalProperties: false
-
     BlobCopyResponse:
       type: object
-      required: [fromAccountId, accountId, copied, notCopied]
+      required:
+      - fromAccountId
+      - accountId
+      - copied
+      - notCopied
       properties:
         fromAccountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         accountId:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         copied:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Id'
+          nullable: true
         notCopied:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
       additionalProperties: true
-
-    # ============================================================
-    # Push (RFC 8620 Section 7)
-    # ============================================================
-
     PushKeys:
       type: object
-      required: [p256dh, auth]
+      required:
+      - p256dh
+      - auth
       properties:
         p256dh:
           type: string
-          description: "P-256 ECDH public key, URL-safe base64"
+          description: P-256 ECDH public key, URL-safe base64
         auth:
           type: string
-          description: "Authentication secret, URL-safe base64"
+          description: Authentication secret, URL-safe base64
       additionalProperties: false
-
     PushSubscription:
       type: object
-      description: |
+      description: |-
         A push subscription. `url` and `keys` are omitted by
         `PushSubscription/get` and must not be returned unless explicitly
         requested (which the server rejects with `forbidden`).
-      required: [id, deviceClientId, verificationCode, expires, types]
+      required:
+      - id
+      - deviceClientId
+      - verificationCode
+      - expires
+      - types
       properties:
         id:
-          $ref: "#/components/schemas/Id"
+          $ref: '#/components/schemas/Id'
         deviceClientId:
           type: string
         url:
           type: string
           format: uri
-          description: "HTTPS URL to which the server POSTs push messages"
+          description: HTTPS URL to which the server POSTs push messages
+          pattern: ^https://
         keys:
-          oneOf:
-            - $ref: "#/components/schemas/PushKeys"
-            - type: "null"
+          $ref: '#/components/schemas/PushKeys'
+          nullable: true
         verificationCode:
-          type: [string, "null"]
+          type: string
+          nullable: true
         expires:
-          oneOf:
-            - $ref: "#/components/schemas/UTCDate"
-            - type: "null"
+          $ref: '#/components/schemas/UTCDate'
+          nullable: true
         types:
-          oneOf:
-            - type: array
-              items:
-                type: string
-            - type: "null"
+          type: array
+          items:
+            type: string
+          nullable: true
       additionalProperties: false
-
     PushSubscriptionCreate:
       type: object
-      required: [deviceClientId, url]
+      required:
+      - deviceClientId
+      - url
       properties:
         deviceClientId:
           type: string
         url:
           type: string
           format: uri
+          pattern: ^https://
         keys:
-          oneOf:
-            - $ref: "#/components/schemas/PushKeys"
-            - type: "null"
+          $ref: '#/components/schemas/PushKeys'
+          nullable: true
         expires:
-          oneOf:
-            - $ref: "#/components/schemas/UTCDate"
-            - type: "null"
+          $ref: '#/components/schemas/UTCDate'
+          nullable: true
         types:
-          oneOf:
-            - type: array
-              items:
-                type: string
-            - type: "null"
+          type: array
+          items:
+            type: string
+          nullable: true
       additionalProperties: false
-
     PushSubscriptionUpdate:
       type: object
       properties:
         verificationCode:
           type: string
         expires:
-          $ref: "#/components/schemas/UTCDate"
+          $ref: '#/components/schemas/UTCDate'
       additionalProperties: false
-
     PushSubscriptionGetRequest:
       type: object
       properties:
         ids:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
         properties:
-          oneOf:
-            - type: array
-              items:
-                type: string
-            - type: "null"
+          type: array
+          items:
+            type: string
+          nullable: true
       additionalProperties: true
-
     PushSubscriptionGetResponse:
       type: object
-      required: [list, notFound]
+      required:
+      - list
+      - notFound
       properties:
         list:
           type: array
           items:
-            $ref: "#/components/schemas/PushSubscription"
+            $ref: '#/components/schemas/PushSubscription'
         notFound:
           type: array
           items:
-            $ref: "#/components/schemas/Id"
+            $ref: '#/components/schemas/Id'
       additionalProperties: true
-
     PushSubscriptionSetRequest:
       type: object
       properties:
         create:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/PushSubscriptionCreate"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/PushSubscriptionCreate'
+          nullable: true
         update:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/PushSubscriptionUpdate"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/PushSubscriptionUpdate'
+          nullable: true
         destroy:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
       additionalProperties: true
-
     PushSubscriptionSetResponse:
       type: object
       required:
-        - created
-        - updated
-        - destroyed
-        - notCreated
-        - notUpdated
-        - notDestroyed
+      - created
+      - updated
+      - destroyed
+      - notCreated
+      - notUpdated
+      - notDestroyed
       properties:
         created:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/PushSubscription"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/PushSubscription'
+          nullable: true
         updated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                oneOf:
-                  - $ref: "#/components/schemas/PushSubscription"
-                  - type: "null"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/PushSubscription'
+            nullable: true
+          nullable: true
         destroyed:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/Id"
-            - type: "null"
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          nullable: true
         notCreated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
         notUpdated:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
         notDestroyed:
-          oneOf:
-            - type: object
-              additionalProperties:
-                $ref: "#/components/schemas/SetError"
-            - type: "null"
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SetError'
+          nullable: true
       additionalProperties: true
-
     StateChange:
       type: object
-      description: "Push notification payload sent on the EventSource connection"
-      required: ["@type", changed]
+      description: |-
+        The object pushed as the data of a `state` event on the Event
+        Source connection (RFC 8620 Section 7.1).
+      required:
+      - '@type'
+      - changed
       properties:
-        "@type":
+        '@type':
           type: string
-          const: "StateChange"
+          enum:
+          - StateChange
+          description: MUST be the string "StateChange"
         changed:
           type: object
-          description: "Map of type name to the new state string"
+          description: |-
+            Map of account id to the types that changed for that
+            account since the last StateChange object
+          propertyNames:
+            $ref: '#/components/schemas/Id'
           additionalProperties:
-            type: string
+            $ref: '#/components/schemas/TypeState'
       additionalProperties: false
-
-# ============================================================
-# Method-to-schema mapping
-# ============================================================
-
+    TypeState:
+      type: object
+      description: |-
+        A map of type name (for example `Email`) to the `state` string
+        that would currently be returned by a `Foo/get` call for that
+        type in this account.
+      additionalProperties:
+        type: string
 x-jmap-methods:
-  - name: Core/echo
-    capability: "urn:ietf:params:jmap:core"
-    request: "#/components/schemas/CoreEchoRequest"
-    response: "#/components/schemas/CoreEchoResponse"
-  - name: Blob/copy
-    capability: "urn:ietf:params:jmap:core"
-    request: "#/components/schemas/BlobCopyRequest"
-    response: "#/components/schemas/BlobCopyResponse"
-  - name: Mailbox/get
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/MailboxGetRequest"
-    response: "#/components/schemas/MailboxGetResponse"
-  - name: Mailbox/changes
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/MailboxChangesRequest"
-    response: "#/components/schemas/MailboxChangesResponse"
-  - name: Mailbox/query
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/MailboxQueryRequest"
-    response: "#/components/schemas/MailboxQueryResponse"
-  - name: Mailbox/queryChanges
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/MailboxQueryChangesRequest"
-    response: "#/components/schemas/MailboxQueryChangesResponse"
-  - name: Mailbox/set
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/MailboxSetRequest"
-    response: "#/components/schemas/MailboxSetResponse"
-  - name: Thread/get
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/ThreadGetRequest"
-    response: "#/components/schemas/ThreadGetResponse"
-  - name: Thread/changes
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/ThreadChangesRequest"
-    response: "#/components/schemas/ThreadChangesResponse"
-  - name: Email/get
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/EmailGetRequest"
-    response: "#/components/schemas/EmailGetResponse"
-  - name: Email/changes
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/EmailChangesRequest"
-    response: "#/components/schemas/EmailChangesResponse"
-  - name: Email/query
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/EmailQueryRequest"
-    response: "#/components/schemas/EmailQueryResponse"
-  - name: Email/queryChanges
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/EmailQueryChangesRequest"
-    response: "#/components/schemas/EmailQueryChangesResponse"
-  - name: Email/set
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/EmailSetRequest"
-    response: "#/components/schemas/EmailSetResponse"
-  - name: Email/copy
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/EmailCopyRequest"
-    response: "#/components/schemas/EmailCopyResponse"
-  - name: Email/import
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/EmailImportRequest"
-    response: "#/components/schemas/EmailImportResponse"
-  - name: Email/parse
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/EmailParseRequest"
-    response: "#/components/schemas/EmailParseResponse"
-  - name: SearchSnippet/get
-    capability: "urn:ietf:params:jmap:mail"
-    request: "#/components/schemas/SearchSnippetGetRequest"
-    response: "#/components/schemas/SearchSnippetGetResponse"
-  - name: Identity/get
-    capability: "urn:ietf:params:jmap:submission"
-    request: "#/components/schemas/IdentityGetRequest"
-    response: "#/components/schemas/IdentityGetResponse"
-  - name: Identity/changes
-    capability: "urn:ietf:params:jmap:submission"
-    request: "#/components/schemas/IdentityChangesRequest"
-    response: "#/components/schemas/IdentityChangesResponse"
-  - name: Identity/set
-    capability: "urn:ietf:params:jmap:submission"
-    request: "#/components/schemas/IdentitySetRequest"
-    response: "#/components/schemas/IdentitySetResponse"
-  - name: EmailSubmission/get
-    capability: "urn:ietf:params:jmap:submission"
-    request: "#/components/schemas/EmailSubmissionGetRequest"
-    response: "#/components/schemas/EmailSubmissionGetResponse"
-  - name: EmailSubmission/changes
-    capability: "urn:ietf:params:jmap:submission"
-    request: "#/components/schemas/EmailSubmissionChangesRequest"
-    response: "#/components/schemas/EmailSubmissionChangesResponse"
-  - name: EmailSubmission/query
-    capability: "urn:ietf:params:jmap:submission"
-    request: "#/components/schemas/EmailSubmissionQueryRequest"
-    response: "#/components/schemas/EmailSubmissionQueryResponse"
-  - name: EmailSubmission/queryChanges
-    capability: "urn:ietf:params:jmap:submission"
-    request: "#/components/schemas/EmailSubmissionQueryChangesRequest"
-    response: "#/components/schemas/EmailSubmissionQueryChangesResponse"
-  - name: EmailSubmission/set
-    capability: "urn:ietf:params:jmap:submission"
-    request: "#/components/schemas/EmailSubmissionSetRequest"
-    response: "#/components/schemas/EmailSubmissionSetResponse"
-  - name: VacationResponse/get
-    capability: "urn:ietf:params:jmap:vacationresponse"
-    request: "#/components/schemas/VacationResponseGetRequest"
-    response: "#/components/schemas/VacationResponseGetResponse"
-  - name: VacationResponse/set
-    capability: "urn:ietf:params:jmap:vacationresponse"
-    request: "#/components/schemas/VacationResponseSetRequest"
-    response: "#/components/schemas/VacationResponseSetResponse"
-  - name: PushSubscription/get
-    capability: "urn:ietf:params:jmap:core"
-    request: "#/components/schemas/PushSubscriptionGetRequest"
-    response: "#/components/schemas/PushSubscriptionGetResponse"
-  - name: PushSubscription/set
-    capability: "urn:ietf:params:jmap:core"
-    request: "#/components/schemas/PushSubscriptionSetRequest"
-    response: "#/components/schemas/PushSubscriptionSetResponse"
+- name: Core/echo
+  capability: urn:ietf:params:jmap:core
+  request: '#/components/schemas/CoreEchoRequest'
+  response: '#/components/schemas/CoreEchoResponse'
+- name: Blob/copy
+  capability: urn:ietf:params:jmap:core
+  request: '#/components/schemas/BlobCopyRequest'
+  response: '#/components/schemas/BlobCopyResponse'
+- name: Mailbox/get
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/MailboxGetRequest'
+  response: '#/components/schemas/MailboxGetResponse'
+- name: Mailbox/changes
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/MailboxChangesRequest'
+  response: '#/components/schemas/MailboxChangesResponse'
+- name: Mailbox/query
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/MailboxQueryRequest'
+  response: '#/components/schemas/MailboxQueryResponse'
+- name: Mailbox/queryChanges
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/MailboxQueryChangesRequest'
+  response: '#/components/schemas/MailboxQueryChangesResponse'
+- name: Mailbox/set
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/MailboxSetRequest'
+  response: '#/components/schemas/MailboxSetResponse'
+- name: Thread/get
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/ThreadGetRequest'
+  response: '#/components/schemas/ThreadGetResponse'
+- name: Thread/changes
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/ThreadChangesRequest'
+  response: '#/components/schemas/ThreadChangesResponse'
+- name: Email/get
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/EmailGetRequest'
+  response: '#/components/schemas/EmailGetResponse'
+- name: Email/changes
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/EmailChangesRequest'
+  response: '#/components/schemas/EmailChangesResponse'
+- name: Email/query
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/EmailQueryRequest'
+  response: '#/components/schemas/EmailQueryResponse'
+- name: Email/queryChanges
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/EmailQueryChangesRequest'
+  response: '#/components/schemas/EmailQueryChangesResponse'
+- name: Email/set
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/EmailSetRequest'
+  response: '#/components/schemas/EmailSetResponse'
+- name: Email/copy
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/EmailCopyRequest'
+  response: '#/components/schemas/EmailCopyResponse'
+- name: Email/import
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/EmailImportRequest'
+  response: '#/components/schemas/EmailImportResponse'
+- name: Email/parse
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/EmailParseRequest'
+  response: '#/components/schemas/EmailParseResponse'
+- name: SearchSnippet/get
+  capability: urn:ietf:params:jmap:mail
+  request: '#/components/schemas/SearchSnippetGetRequest'
+  response: '#/components/schemas/SearchSnippetGetResponse'
+- name: Identity/get
+  capability: urn:ietf:params:jmap:submission
+  request: '#/components/schemas/IdentityGetRequest'
+  response: '#/components/schemas/IdentityGetResponse'
+- name: Identity/changes
+  capability: urn:ietf:params:jmap:submission
+  request: '#/components/schemas/IdentityChangesRequest'
+  response: '#/components/schemas/IdentityChangesResponse'
+- name: Identity/set
+  capability: urn:ietf:params:jmap:submission
+  request: '#/components/schemas/IdentitySetRequest'
+  response: '#/components/schemas/IdentitySetResponse'
+- name: EmailSubmission/get
+  capability: urn:ietf:params:jmap:submission
+  request: '#/components/schemas/EmailSubmissionGetRequest'
+  response: '#/components/schemas/EmailSubmissionGetResponse'
+- name: EmailSubmission/changes
+  capability: urn:ietf:params:jmap:submission
+  request: '#/components/schemas/EmailSubmissionChangesRequest'
+  response: '#/components/schemas/EmailSubmissionChangesResponse'
+- name: EmailSubmission/query
+  capability: urn:ietf:params:jmap:submission
+  request: '#/components/schemas/EmailSubmissionQueryRequest'
+  response: '#/components/schemas/EmailSubmissionQueryResponse'
+- name: EmailSubmission/queryChanges
+  capability: urn:ietf:params:jmap:submission
+  request: '#/components/schemas/EmailSubmissionQueryChangesRequest'
+  response: '#/components/schemas/EmailSubmissionQueryChangesResponse'
+- name: EmailSubmission/set
+  capability: urn:ietf:params:jmap:submission
+  request: '#/components/schemas/EmailSubmissionSetRequest'
+  response: '#/components/schemas/EmailSubmissionSetResponse'
+- name: VacationResponse/get
+  capability: urn:ietf:params:jmap:vacationresponse
+  request: '#/components/schemas/VacationResponseGetRequest'
+  response: '#/components/schemas/VacationResponseGetResponse'
+- name: VacationResponse/set
+  capability: urn:ietf:params:jmap:vacationresponse
+  request: '#/components/schemas/VacationResponseSetRequest'
+  response: '#/components/schemas/VacationResponseSetResponse'
+- name: PushSubscription/get
+  capability: urn:ietf:params:jmap:core
+  request: '#/components/schemas/PushSubscriptionGetRequest'
+  response: '#/components/schemas/PushSubscriptionGetResponse'
+- name: PushSubscription/set
+  capability: urn:ietf:params:jmap:core
+  request: '#/components/schemas/PushSubscriptionSetRequest'
+  response: '#/components/schemas/PushSubscriptionSetResponse'

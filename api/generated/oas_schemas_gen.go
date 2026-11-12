@@ -517,12 +517,12 @@ func (s *JmapResponseCreatedIds) init() JmapResponseCreatedIds {
 
 // Ref: #/components/schemas/MailCapability
 type MailCapability struct {
-	MaxMailboxesPerEmail       NilInt         `json:"maxMailboxesPerEmail"`
-	MaxMailboxDepth            NilUnsignedInt `json:"maxMailboxDepth"`
-	MaxSizeMailboxName         int            `json:"maxSizeMailboxName"`
-	MaxSizeAttachmentsPerEmail UnsignedInt    `json:"maxSizeAttachmentsPerEmail"`
-	EmailQuerySortOptions      []string       `json:"emailQuerySortOptions"`
-	MayCreateTopLevelMailbox   bool           `json:"mayCreateTopLevelMailbox"`
+	MaxMailboxesPerEmail       NilInt      `json:"maxMailboxesPerEmail"`
+	MaxMailboxDepth            UnsignedInt `json:"maxMailboxDepth"`
+	MaxSizeMailboxName         int         `json:"maxSizeMailboxName"`
+	MaxSizeAttachmentsPerEmail UnsignedInt `json:"maxSizeAttachmentsPerEmail"`
+	EmailQuerySortOptions      []string    `json:"emailQuerySortOptions"`
+	MayCreateTopLevelMailbox   bool        `json:"mayCreateTopLevelMailbox"`
 	AdditionalProps            MailCapabilityAdditional
 }
 
@@ -532,7 +532,7 @@ func (s *MailCapability) GetMaxMailboxesPerEmail() NilInt {
 }
 
 // GetMaxMailboxDepth returns the value of MaxMailboxDepth.
-func (s *MailCapability) GetMaxMailboxDepth() NilUnsignedInt {
+func (s *MailCapability) GetMaxMailboxDepth() UnsignedInt {
 	return s.MaxMailboxDepth
 }
 
@@ -567,7 +567,7 @@ func (s *MailCapability) SetMaxMailboxesPerEmail(val NilInt) {
 }
 
 // SetMaxMailboxDepth sets the value of MaxMailboxDepth.
-func (s *MailCapability) SetMaxMailboxDepth(val NilUnsignedInt) {
+func (s *MailCapability) SetMaxMailboxDepth(val UnsignedInt) {
 	s.MaxMailboxDepth = val
 }
 
@@ -646,51 +646,6 @@ func (o NilInt) Get() (v int, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o NilInt) Or(d int) int {
-	if v, ok := o.Get(); ok {
-		return v
-	}
-	return d
-}
-
-// NewNilUnsignedInt returns new NilUnsignedInt with value set to v.
-func NewNilUnsignedInt(v UnsignedInt) NilUnsignedInt {
-	return NilUnsignedInt{
-		Value: v,
-	}
-}
-
-// NilUnsignedInt is nullable UnsignedInt.
-type NilUnsignedInt struct {
-	Value UnsignedInt
-	Null  bool
-}
-
-// SetTo sets value to v.
-func (o *NilUnsignedInt) SetTo(v UnsignedInt) {
-	o.Null = false
-	o.Value = v
-}
-
-// IsNull returns true if value is Null.
-func (o NilUnsignedInt) IsNull() bool { return o.Null }
-
-// SetToNull sets value to null.
-func (o *NilUnsignedInt) SetToNull() {
-	o.Null = true
-	var v UnsignedInt
-	o.Value = v
-}
-
-// Get returns value and boolean that denotes whether value was set.
-func (o NilUnsignedInt) Get() (v UnsignedInt, ok bool) {
-	if o.Null {
-		return v, false
-	}
-	return o.Value, true
-}
-
-// Or returns value if set, or given parameter if does not.
-func (o NilUnsignedInt) Or(d UnsignedInt) UnsignedInt {
 	if v, ok := o.Get(); ok {
 		return v
 	}

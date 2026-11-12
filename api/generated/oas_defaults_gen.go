@@ -38,6 +38,10 @@ func (s *CoreCapability) setDefaults() {
 func (s *MailCapability) setDefaults() {
 	{
 		val := int(0)
+		s.MaxMailboxDepth = UnsignedInt(val)
+	}
+	{
+		val := int(0)
 		s.MaxSizeAttachmentsPerEmail = UnsignedInt(val)
 	}
 }
