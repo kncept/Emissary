@@ -23,6 +23,15 @@ Commands:
 EOF
 }
 
+# Generate JMAP Go types and stubs from api/jmap.yaml using ogen
+generate_jmap() {
+	(
+		cd mailer
+		# Ensure ogen is available
+		go tool ogen -target ../api/generated ../api/jmap.yaml
+	)
+}
+
 # Build the frontend and place the output where the //go:embed
 # directive expects it. Vite builds to mailer/gui/frontend/dist (see
 # frontend/vite.config.ts); the mailer/gui package embeds it from there.
@@ -55,6 +64,7 @@ build_lambda() {
 }
 
 build() {
+	generate_jmap
 	build_frontend
 	build_backend
 	build_lambda
@@ -62,6 +72,7 @@ build() {
 
 test() {
 	# The //go:embed directives require the built frontend to be present
+	generate_jmap
 	build_frontend
 
 	echo "=== Running Go tests ==="

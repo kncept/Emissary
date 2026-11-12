@@ -16,6 +16,7 @@ import (
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/gui"
+	"github.com/kncept/Emissary/mailer/jmap"
 	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/sender"
 	"github.com/kncept/Emissary/mailer/storage"
@@ -191,7 +192,19 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, metaStore metadata.MetadataStore, mailSender sender.Sender) http.Handler {
 	mux := http.NewServeMux()
 
-	// API routes (authenticated)
+	// JMAP routes (RFC 8620/8621)
+	dispatcher := jmap.NewDispatcher(&jmap.UnimplementedHandler{})
+	mux.HandleFunc("GET /.well-known/jmap", func(w http.ResponseWriter, r *http.Request) {
+		handleJMAPSession(w, r, "state123")
+	})
+	mux.HandleFunc("POST /api/", func(w http.ResponseWriter, r *http.Request) {
+		handleJMAPAPIRequest(w, r, dispatcher)
+	})
+	mux.HandleFunc("POST /upload/", handleJMAPUpload)
+	mux.HandleFunc("GET /download/", handleJMAPDownload)
+	mux.HandleFunc("GET /eventsource/", handleJMAPPush)
+
+	// API routes (authenticated) - legacy Emissary API
 	mux.Handle("GET /api/emails", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleListEmails(w, r, emailStore, metaStore)
 	})))
@@ -807,4 +820,79 @@ func getContentType(path string) string {
 		return "image/x-icon"
 	}
 	return "application/octet-stream"
+}
+
+// JMAP handler functions
+
+// handleJMAPSession returns the JMAP Session object (RFC 8620 Section 2)
+func handleJMAPSession(w http.ResponseWriter, r *http.Request, sessionState string) {
+	session := map[string]any{
+		"capabilities": map[string]any{
+			"urn:ietf:params:jmap:core":          map[string]any{},
+			"urn:ietf:params:jmap:mail":          map[string]any{},
+			"urn:ietf:params:jmap:submission":    map[string]any{},
+			"urn:ietf:params:jmap:vacationresponse": map[string]any{},
+		},
+		"accounts":        map[string]any{},
+		"primaryAccounts": map[string]any{},
+		"username":        "user@example.com",
+		"apiUrl":          "/api/",
+		"downloadUrl":     "/download/{accountId}/{blobId}/{name}",
+		"uploadUrl":       "/upload/{accountId}/",
+		"eventSourceUrl":  "/eventsource/",
+		"state":           sessionState,
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(session)
+}
+
+// handleJMAPAPIRequest handles batch JMAP method calls (RFC 8620 Section 3)
+func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jmap.Dispatcher) {
+	var req jmap.Request
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJMAPError(w, "invalidRequest", "Invalid JSON request")
+		return
+	}
+
+	// For now, use a default account ID
+	// In a real implementation, this would be extracted from authentication
+	accountID := "default"
+
+	resp, err := dispatcher.DispatchRequest(r.Context(), accountID, &req)
+	if err != nil {
+		writeJMAPError(w, "serverError", err.Error())
+		return
+	}
+
+	// Set session state
+	resp.SessionState = "state123"
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleJMAPUpload handles binary upload (RFC 8620 Section 6) - stub
+func handleJMAPUpload(w http.ResponseWriter, r *http.Request) {
+	writeJMAPError(w, "unimplemented", "Binary upload not implemented")
+}
+
+// handleJMAPDownload handles binary download (RFC 8620 Section 6) - stub
+func handleJMAPDownload(w http.ResponseWriter, r *http.Request) {
+	writeJMAPError(w, "unimplemented", "Binary download not implemented")
+}
+
+// handleJMAPPush handles EventSource push (RFC 8620 Section 7) - stub
+func handleJMAPPush(w http.ResponseWriter, r *http.Request) {
+	writeJMAPError(w, "unimplemented", "Push not implemented")
+}
+
+func writeJMAPError(w http.ResponseWriter, typ, detail string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK) // JMAP returns 200 with error in response body
+	json.NewEncoder(w).Encode(map[string]any{
+		"@type":    "error",
+		"type":     typ,
+		"detail":   detail,
+	})
 }
