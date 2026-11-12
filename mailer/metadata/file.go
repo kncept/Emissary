@@ -87,29 +87,11 @@ func (f *FileMetadata) Get(ctx context.Context, id string) (EmailMetadata, error
 	return m, nil
 }
 
-func (f *FileMetadata) SetRead(ctx context.Context, id string, read bool) error {
+func (f *FileMetadata) Save(ctx context.Context, metadata EmailMetadata) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	m, ok := f.data[id]
-	if !ok {
-		m = EmailMetadata{ID: id}
-	}
-	m.Read = read
-	f.data[id] = m
-	return f.saveLocked()
-}
-
-func (f *FileMetadata) SetFlagged(ctx context.Context, id string, flagged bool) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	m, ok := f.data[id]
-	if !ok {
-		m = EmailMetadata{ID: id}
-	}
-	m.Flagged = flagged
-	f.data[id] = m
+	f.data[metadata.ID] = metadata
 	return f.saveLocked()
 }
 
@@ -130,20 +112,4 @@ func (f *FileMetadata) List(ctx context.Context) ([]EmailMetadata, error) {
 		result = append(result, v)
 	}
 	return result, nil
-}
-
-func (f *FileMetadata) IsRead(ctx context.Context, id string) (bool, error) {
-	metadata, err := f.Get(ctx, id)
-	if err != nil {
-		return false, err
-	}
-	return metadata.Read, nil
-}
-
-func (f *FileMetadata) MarkRead(ctx context.Context, id string) error {
-	return f.SetRead(ctx, id, true)
-}
-
-func (f *FileMetadata) MarkUnread(ctx context.Context, id string) error {
-	return f.SetRead(ctx, id, false)
 }

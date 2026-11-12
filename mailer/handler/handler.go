@@ -540,7 +540,14 @@ func handleMarkRead(w http.ResponseWriter, r *http.Request, emailStore storage.S
 		return
 	}
 
-	if err := metaStore.SetRead(ctx, id, req.Read); err != nil {
+	metadata, err := metaStore.Get(ctx, id)
+	if err != nil {
+		logRequestError(r, "get metadata "+strconv.Quote(id), err)
+		writeError(w, http.StatusInternalServerError, "failed to get metadata")
+		return
+	}
+	metadata.Read = req.Read
+	if err := metaStore.Save(ctx, metadata); err != nil {
 		logRequestError(r, "update read status "+strconv.Quote(id), err)
 		writeError(w, http.StatusInternalServerError, "failed to update read status")
 		return
@@ -567,7 +574,14 @@ func handleMarkFlagged(w http.ResponseWriter, r *http.Request, emailStore storag
 		return
 	}
 
-	if err := metaStore.SetFlagged(ctx, id, req.Flagged); err != nil {
+	metadata, err := metaStore.Get(ctx, id)
+	if err != nil {
+		logRequestError(r, "get metadata "+strconv.Quote(id), err)
+		writeError(w, http.StatusInternalServerError, "failed to get metadata")
+		return
+	}
+	metadata.Flagged = req.Flagged
+	if err := metaStore.Save(ctx, metadata); err != nil {
 		logRequestError(r, "update flag status "+strconv.Quote(id), err)
 		writeError(w, http.StatusInternalServerError, "failed to update flag status")
 		return

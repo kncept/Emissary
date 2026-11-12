@@ -26,7 +26,7 @@ type Config struct {
 	Auth     *auth.Authenticator
 	Storage  storage.Storage
 	Sender   sender.Sender
-	Metadata metadata.Metadata
+	Metadata metadata.MetadataStore
 	GUI      fs.FS
 	Logger   *log.Logger
 }
@@ -35,7 +35,7 @@ type handler struct {
 	auth     *auth.Authenticator
 	storage  storage.Storage
 	sender   sender.Sender
-	metadata metadata.Metadata
+	metadata metadata.MetadataStore
 	gui      fs.FS
 	logger   *log.Logger
 }
@@ -134,12 +134,12 @@ func (h *handler) listEmails(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, message := range messages {
-		read, err := h.metadata.IsRead(r.Context(), message.ID)
+		meta, err := h.metadata.Get(r.Context(), message.ID)
 		if err != nil {
 			h.logger.Printf("read metadata for %q: %v", message.ID, err)
 			continue
 		}
-		message.Read = read
+		message.Read = meta.Read
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"emails": messages})
@@ -157,16 +157,30 @@ func (h *handler) getEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.metadata.MarkRead(r.Context(), message.ID); err != nil {
-		h.logger.Printf("mark email read: %v", err)
+	meta, err := h.metadata.Get(r.Context(), message.ID)
+	if err != nil {
+		h.logger.Printf("get email metadata: %v", err)
 	} else {
-		message.Read = true
+		meta.Read = true
+		if err := h.metadata.Save(r.Context(), meta); err != nil {
+			h.logger.Printf("mark email read: %v", err)
+		} else {
+			message.Read = true
+		}
 	}
 	writeJSON(w, http.StatusOK, message)
 }
 
 func (h *handler) markRead(w http.ResponseWriter, r *http.Request) {
-	if err := h.metadata.MarkRead(r.Context(), r.PathValue("id")); err != nil {
+	id := r.PathValue("id")
+	meta, err := h.metadata.Get(r.Context(), id)
+	if err != nil {
+		h.logger.Printf("get email metadata: %v", err)
+		writeError(w, http.StatusBadGateway, "could not update email")
+		return
+	}
+	meta.Read = true
+	if err := h.metadata.Save(r.Context(), meta); err != nil {
 		h.logger.Printf("mark email read: %v", err)
 		writeError(w, http.StatusBadGateway, "could not update email")
 		return
@@ -175,7 +189,15 @@ func (h *handler) markRead(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) markUnread(w http.ResponseWriter, r *http.Request) {
-	if err := h.metadata.MarkUnread(r.Context(), r.PathValue("id")); err != nil {
+	id := r.PathValue("id")
+	meta, err := h.metadata.Get(r.Context(), id)
+	if err != nil {
+		h.logger.Printf("get email metadata: %v", err)
+		writeError(w, http.StatusBadGateway, "could not update email")
+		return
+	}
+	meta.Read = false
+	if err := h.metadata.Save(r.Context(), meta); err != nil {
 		h.logger.Printf("mark email unread: %v", err)
 		writeError(w, http.StatusBadGateway, "could not update email")
 		return

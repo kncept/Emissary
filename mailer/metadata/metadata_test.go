@@ -12,38 +12,40 @@ func TestMemoryMetadata(t *testing.T) {
 	ctx := context.Background()
 
 	// Initially unread
-	read, err := m.IsRead(ctx, "email-1")
+	meta, err := m.Get(ctx, "email-1")
 	if err != nil {
-		t.Fatalf("IsRead() error = %v", err)
+		t.Fatalf("Get() error = %v", err)
 	}
-	if read {
-		t.Error("IsRead() should return false for new email")
+	if meta.Read {
+		t.Error("Get() should return false for new email")
 	}
 
 	// Mark read
-	if err := m.MarkRead(ctx, "email-1"); err != nil {
-		t.Fatalf("MarkRead() error = %v", err)
+	meta.Read = true
+	if err := m.Save(ctx, meta); err != nil {
+		t.Fatalf("Save() error = %v", err)
 	}
 
-	read, err = m.IsRead(ctx, "email-1")
+	meta, err = m.Get(ctx, "email-1")
 	if err != nil {
-		t.Fatalf("IsRead() error = %v", err)
+		t.Fatalf("Get() error = %v", err)
 	}
-	if !read {
-		t.Error("IsRead() should return true after MarkRead")
+	if !meta.Read {
+		t.Error("Get() should return true after Save")
 	}
 
 	// Mark unread
-	if err := m.MarkUnread(ctx, "email-1"); err != nil {
-		t.Fatalf("MarkUnread() error = %v", err)
+	meta.Read = false
+	if err := m.Save(ctx, meta); err != nil {
+		t.Fatalf("Save() error = %v", err)
 	}
 
-	read, err = m.IsRead(ctx, "email-1")
+	meta, err = m.Get(ctx, "email-1")
 	if err != nil {
-		t.Fatalf("IsRead() error = %v", err)
+		t.Fatalf("Get() error = %v", err)
 	}
-	if read {
-		t.Error("IsRead() should return false after MarkUnread")
+	if meta.Read {
+		t.Error("Get() should return false after Save unread")
 	}
 }
 
@@ -54,14 +56,16 @@ func TestMemoryMetadata_Concurrent(t *testing.T) {
 
 	for i := 0; i < 50; i++ {
 		go func(id string) {
-			m.MarkRead(ctx, id)
+			meta, _ := m.Get(ctx, id)
+			meta.Read = true
+			m.Save(ctx, meta)
 			done <- true
 		}("email-" + string(rune('0'+i%10)))
 	}
 
 	for i := 0; i < 50; i++ {
 		go func(id string) {
-			m.IsRead(ctx, id)
+			m.Get(ctx, id)
 			done <- true
 		}("email-" + string(rune('0'+i%10)))
 	}
@@ -75,8 +79,9 @@ func TestMemoryMetadata_Delete(t *testing.T) {
 	m := NewMemoryMetadata()
 	ctx := context.Background()
 
-	if err := m.MarkRead(ctx, "email-1"); err != nil {
-		t.Fatalf("MarkRead() error = %v", err)
+	meta := EmailMetadata{ID: "email-1", Read: true}
+	if err := m.Save(ctx, meta); err != nil {
+		t.Fatalf("Save() error = %v", err)
 	}
 	if err := m.Delete(ctx, "email-1"); err != nil {
 		t.Fatalf("Delete() error = %v", err)
@@ -113,8 +118,9 @@ func TestFileMetadata_Delete(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	if err := m.MarkRead(ctx, "email-1"); err != nil {
-		t.Fatalf("MarkRead() error = %v", err)
+	meta := EmailMetadata{ID: "email-1", Read: true}
+	if err := m.Save(ctx, meta); err != nil {
+		t.Fatalf("Save() error = %v", err)
 	}
 	if err := m.Delete(ctx, "email-1"); err != nil {
 		t.Fatalf("Delete() error = %v", err)
@@ -151,25 +157,26 @@ func TestFileMetadata(t *testing.T) {
 	ctx := context.Background()
 
 	// Initially unread
-	read, err := m.IsRead(ctx, "email-1")
+	meta, err := m.Get(ctx, "email-1")
 	if err != nil {
-		t.Fatalf("IsRead() error = %v", err)
+		t.Fatalf("Get() error = %v", err)
 	}
-	if read {
-		t.Error("IsRead() should return false for new email")
+	if meta.Read {
+		t.Error("Get() should return false for new email")
 	}
 
 	// Mark read
-	if err := m.MarkRead(ctx, "email-1"); err != nil {
-		t.Fatalf("MarkRead() error = %v", err)
+	meta.Read = true
+	if err := m.Save(ctx, meta); err != nil {
+		t.Fatalf("Save() error = %v", err)
 	}
 
-	read, err = m.IsRead(ctx, "email-1")
+	meta, err = m.Get(ctx, "email-1")
 	if err != nil {
-		t.Fatalf("IsRead() error = %v", err)
+		t.Fatalf("Get() error = %v", err)
 	}
-	if !read {
-		t.Error("IsRead() should return true after MarkRead")
+	if !meta.Read {
+		t.Error("Get() should return true after Save")
 	}
 
 	// Create new instance to test persistence
@@ -178,25 +185,26 @@ func TestFileMetadata(t *testing.T) {
 		t.Fatalf("NewFileMetadata() error = %v", err)
 	}
 
-	read, err = m2.IsRead(ctx, "email-1")
+	meta, err = m2.Get(ctx, "email-1")
 	if err != nil {
-		t.Fatalf("IsRead() error = %v", err)
+		t.Fatalf("Get() error = %v", err)
 	}
-	if !read {
-		t.Error("IsRead() should persist across instances")
+	if !meta.Read {
+		t.Error("Get() should persist across instances")
 	}
 
 	// Mark unread
-	if err := m2.MarkUnread(ctx, "email-1"); err != nil {
-		t.Fatalf("MarkUnread() error = %v", err)
+	meta.Read = false
+	if err := m2.Save(ctx, meta); err != nil {
+		t.Fatalf("Save() error = %v", err)
 	}
 
-	read, err = m2.IsRead(ctx, "email-1")
+	meta, err = m2.Get(ctx, "email-1")
 	if err != nil {
-		t.Fatalf("IsRead() error = %v", err)
+		t.Fatalf("Get() error = %v", err)
 	}
-	if read {
-		t.Error("IsRead() should return false after MarkUnread")
+	if meta.Read {
+		t.Error("Get() should return false after Save unread")
 	}
 }
 
@@ -212,12 +220,12 @@ func TestFileMetadata_EmptyFile(t *testing.T) {
 		t.Fatalf("NewFileMetadata() error = %v", err)
 	}
 
-	read, err := m.IsRead(context.Background(), "email-1")
+	meta, err := m.Get(context.Background(), "email-1")
 	if err != nil {
-		t.Fatalf("IsRead() error = %v", err)
+		t.Fatalf("Get() error = %v", err)
 	}
-	if read {
-		t.Error("IsRead() should return false for new email in empty file")
+	if meta.Read {
+		t.Error("Get() should return false for new email in empty file")
 	}
 }
 
@@ -243,8 +251,8 @@ func TestFileMetadata_CreatesDirectory(t *testing.T) {
 		t.Fatalf("NewFileMetadata() error = %v", err)
 	}
 
-	if err := m.MarkRead(context.Background(), "email-1"); err != nil {
-		t.Fatalf("MarkRead() error = %v", err)
+	if err := m.Save(context.Background(), EmailMetadata{ID: "email-1", Read: true}); err != nil {
+		t.Fatalf("Save() error = %v", err)
 	}
 
 	// Verify file was created
@@ -264,8 +272,9 @@ func TestFileMetadata_AtomicWrite(t *testing.T) {
 
 	// Write multiple times rapidly
 	for i := 0; i < 100; i++ {
-		if err := m.MarkRead(context.Background(), "email-"+string(rune('0'+i%10))); err != nil {
-			t.Fatalf("MarkRead() error = %v", err)
+		id := "email-" + string(rune('0'+i%10))
+		if err := m.Save(context.Background(), EmailMetadata{ID: id, Read: true}); err != nil {
+			t.Fatalf("Save() error = %v", err)
 		}
 	}
 

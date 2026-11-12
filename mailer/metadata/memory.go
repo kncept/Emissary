@@ -29,29 +29,11 @@ func (m *MemoryMetadata) Get(ctx context.Context, id string) (EmailMetadata, err
 	return metadata, nil
 }
 
-func (m *MemoryMetadata) SetRead(ctx context.Context, id string, read bool) error {
+func (m *MemoryMetadata) Save(ctx context.Context, metadata EmailMetadata) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	metadata, ok := m.data[id]
-	if !ok {
-		metadata = EmailMetadata{ID: id}
-	}
-	metadata.Read = read
-	m.data[id] = metadata
-	return nil
-}
-
-func (m *MemoryMetadata) SetFlagged(ctx context.Context, id string, flagged bool) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	metadata, ok := m.data[id]
-	if !ok {
-		metadata = EmailMetadata{ID: id}
-	}
-	metadata.Flagged = flagged
-	m.data[id] = metadata
+	m.data[metadata.ID] = metadata
 	return nil
 }
 
@@ -72,20 +54,4 @@ func (m *MemoryMetadata) List(ctx context.Context) ([]EmailMetadata, error) {
 		result = append(result, v)
 	}
 	return result, nil
-}
-
-func (m *MemoryMetadata) IsRead(ctx context.Context, id string) (bool, error) {
-	metadata, err := m.Get(ctx, id)
-	if err != nil {
-		return false, err
-	}
-	return metadata.Read, nil
-}
-
-func (m *MemoryMetadata) MarkRead(ctx context.Context, id string) error {
-	return m.SetRead(ctx, id, true)
-}
-
-func (m *MemoryMetadata) MarkUnread(ctx context.Context, id string) error {
-	return m.SetRead(ctx, id, false)
 }

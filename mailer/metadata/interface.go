@@ -13,11 +13,19 @@ type EmailMetadata struct {
 }
 
 type MetadataStore interface {
+	// Name returns the name of the metadata store implementation.
+	Name() string
+
+	// Get retrieves the metadata for the given email ID.
 	Get(ctx context.Context, id string) (EmailMetadata, error)
-	SetRead(ctx context.Context, id string, read bool) error
-	SetFlagged(ctx context.Context, id string, flagged bool) error
+
+	// Save stores the complete metadata for the given email ID.
+	Save(ctx context.Context, metadata EmailMetadata) error
+
 	// Delete discards all state for the given id. Deleting an already
 	// absent id is not an error.
 	Delete(ctx context.Context, id string) error
+
+	// List returns all stored metadata entries.
 	List(ctx context.Context) ([]EmailMetadata, error)
 }

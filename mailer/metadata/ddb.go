@@ -49,21 +49,7 @@ func (d *DdbMetadata) Get(ctx context.Context, id string) (EmailMetadata, error)
 	return metadata, nil
 }
 
-func (d *DdbMetadata) SetRead(ctx context.Context, id string, read bool) error {
-	metadata, err := d.Get(ctx, id)
-	if err != nil {
-		return err
-	}
-	metadata.Read = read
-	return d.put(ctx, metadata)
-}
-
-func (d *DdbMetadata) SetFlagged(ctx context.Context, id string, flagged bool) error {
-	metadata, err := d.Get(ctx, id)
-	if err != nil {
-		return err
-	}
-	metadata.Flagged = flagged
+func (d *DdbMetadata) Save(ctx context.Context, metadata EmailMetadata) error {
 	return d.put(ctx, metadata)
 }
 
@@ -109,3 +95,5 @@ func (d *DdbMetadata) List(ctx context.Context) ([]EmailMetadata, error) {
 	}
 	return result, nil
 }
+
+func (d *DdbMetadata) Name() string { return "ddb" }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/email"
+	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/storage"
 )
 
@@ -65,21 +66,32 @@ func (m *mockSender) From() string { return m.from }
 func (m *mockSender) Send(ctx context.Context, msg *email.UserEmail) error { return m.err }
 
 type mockMetadata struct {
-	readMap map[string]bool
-	err     error
+	readMap    map[string]bool
+	flaggedMap map[string]bool
+	err        error
 }
 
 func (m *mockMetadata) Name() string { return "MockMetadata" }
-func (m *mockMetadata) IsRead(ctx context.Context, id string) (bool, error) {
-	return m.readMap[id], m.err
+func (m *mockMetadata) Get(ctx context.Context, id string) (metadata.EmailMetadata, error) {
+	return metadata.EmailMetadata{ID: id, Read: m.readMap[id], Flagged: m.flaggedMap[id]}, m.err
 }
-func (m *mockMetadata) MarkRead(ctx context.Context, id string) error {
-	m.readMap[id] = true
+func (m *mockMetadata) Save(ctx context.Context, meta metadata.EmailMetadata) error {
+	m.readMap[meta.ID] = meta.Read
+	m.flaggedMap[meta.ID] = meta.Flagged
 	return m.err
 }
-func (m *mockMetadata) MarkUnread(ctx context.Context, id string) error {
+func (m *mockMetadata) Delete(ctx context.Context, id string) error {
 	delete(m.readMap, id)
+	delete(m.flaggedMap, id)
 	return m.err
+}
+func (m *mockMetadata) List(ctx context.Context) ([]metadata.EmailMetadata, error) {
+	var result []metadata.EmailMetadata
+	for id, read := range m.readMap {
+		flagged := m.flaggedMap[id]
+		result = append(result, metadata.EmailMetadata{ID: id, Read: read, Flagged: flagged})
+	}
+	return result, m.err
 }
 
 func newTestHandler() *handler {
@@ -88,7 +100,7 @@ func newTestHandler() *handler {
 		auth:     authenticator,
 		storage:  &mockStorage{emails: []*email.UserEmail{}},
 		sender:   &mockSender{from: "sender@example.com"},
-		metadata: &mockMetadata{readMap: make(map[string]bool)},
+		metadata: &mockMetadata{readMap: make(map[string]bool), flaggedMap: make(map[string]bool)},
 		logger:   log.New(io.Discard, "", 0),
 	}
 }
@@ -97,7 +109,7 @@ func TestHealthEndpoint(t *testing.T) {
 	h := newTestHandler()
 	h.storage = &mockStorage{}
 	h.sender = &mockSender{}
-	h.metadata = &mockMetadata{}
+	h.metadata = &mockMetadata{readMap: make(map[string]bool), flaggedMap: make(map[string]bool)}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	w := httptest.NewRecorder()
@@ -317,7 +329,7 @@ func TestGetEmail_NotFound(t *testing.T) {
 
 func TestMarkRead(t *testing.T) {
 	h := newTestHandler()
-	h.metadata = &mockMetadata{readMap: make(map[string]bool)}
+	h.metadata = &mockMetadata{readMap: make(map[string]bool), flaggedMap: make(map[string]bool)}
 
 	token, _, _ := h.auth.Issue("user")
 	req := httptest.NewRequest(http.MethodPost, "/api/emails/1/read", nil)
@@ -340,7 +352,7 @@ func TestMarkRead(t *testing.T) {
 
 func TestMarkUnread(t *testing.T) {
 	h := newTestHandler()
-	h.metadata = &mockMetadata{readMap: map[string]bool{"1": true}}
+	h.metadata = &mockMetadata{readMap: map[string]bool{"1": true}, flaggedMap: make(map[string]bool)}
 
 	token, _, _ := h.auth.Issue("user")
 	req := httptest.NewRequest(http.MethodPost, "/api/emails/1/unread", nil)
