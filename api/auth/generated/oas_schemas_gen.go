@@ -26,6 +26,10 @@ type LoginBadRequest Error
 
 func (*LoginBadRequest) loginRes() {}
 
+type LoginForbidden Error
+
+func (*LoginForbidden) loginRes() {}
+
 // Ref: #/components/schemas/LoginRequest
 type LoginRequest struct {
 	// The user's login name (email address).

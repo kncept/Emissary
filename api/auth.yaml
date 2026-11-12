@@ -51,6 +51,10 @@ paths:
         configured user manager (the built-in administrator first,
         then the selected backend) and returns a pair of signed JWTs:
         an access token (9 hours) and a refresh token (30 days).
+        When the backend is Emissary-mastered (it manages its own
+        users; see docs/USERS.md), the password is checked against
+        the user's stored salted password, and a disabled user is
+        rejected with 403.
       operationId: login
       security: []
       requestBody:
@@ -74,6 +78,12 @@ paths:
                 $ref: '#/components/schemas/Error'
         '401':
           description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Valid credentials, but the user is disabled
           content:
             application/json:
               schema:

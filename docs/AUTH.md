@@ -44,7 +44,8 @@ A successful login creates a new session and returns the token pair:
 ```
 
 `expiresAt` is the access token's `exp` claim. Invalid credentials
-return `401`.
+return `401`; a disabled user (see [USERS.md](USERS.md)) is rejected
+with `403`, even with a correct password.
 
 ## The token pair
 

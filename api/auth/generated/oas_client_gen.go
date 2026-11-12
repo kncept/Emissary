@@ -31,7 +31,9 @@ type Invoker interface {
 	//
 	// Form-based login. Authenticates the user against the configured user manager (the built-in
 	// administrator first, then the selected backend) and returns a pair of signed JWTs: an access token
-	// (9 hours) and a refresh token (30 days).
+	// (9 hours) and a refresh token (30 days). When the backend is Emissary-mastered (it manages its own
+	// users; see docs/USERS.md), the password is checked against the user's stored salted password, and a
+	// disabled user is rejected with 403.
 	//
 	// POST /api/auth/login
 	Login(ctx context.Context, request *LoginRequest) (LoginRes, error)
@@ -89,7 +91,9 @@ func (c *Client) requestURL(ctx context.Context) *url.URL {
 //
 // Form-based login. Authenticates the user against the configured user manager (the built-in
 // administrator first, then the selected backend) and returns a pair of signed JWTs: an access token
-// (9 hours) and a refresh token (30 days).
+// (9 hours) and a refresh token (30 days). When the backend is Emissary-mastered (it manages its own
+// users; see docs/USERS.md), the password is checked against the user's stored salted password, and a
+// disabled user is rejected with 403.
 //
 // POST /api/auth/login
 func (c *Client) Login(ctx context.Context, request *LoginRequest) (LoginRes, error) {
