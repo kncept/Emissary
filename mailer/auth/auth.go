@@ -46,7 +46,7 @@ type jwtClaims = Claims
 // Authenticator validates users through a pluggable user manager and issues
 // HS256 JWTs.
 type Authenticator struct {
-	users    usermanager.Manager
+	users    usermanager.UserManager
 	secret   []byte
 	ttl      time.Duration
 	now      func() time.Time
@@ -65,7 +65,7 @@ func New(username, password, secret string, ttl time.Duration, audience, issuer 
 }
 
 // NewWithUserManager creates an authenticator backed by users.
-func NewWithUserManager(users usermanager.Manager, secret string, ttl time.Duration, audience, issuer string) *Authenticator {
+func NewWithUserManager(users usermanager.UserManager, secret string, ttl time.Duration, audience, issuer string) *Authenticator {
 	if ttl <= 0 {
 		ttl = defaultTokenTTL
 	}
@@ -83,7 +83,7 @@ func NewWithUserManager(users usermanager.Manager, secret string, ttl time.Durat
 }
 
 // UserManager returns the configured user manager.
-func (a *Authenticator) UserManager() usermanager.Manager {
+func (a *Authenticator) UserManager() usermanager.UserManager {
 	return a.users
 }
 
@@ -103,11 +103,11 @@ func (a *Authenticator) AuthenticateUser(ctx context.Context, username, password
 // Issue creates a signed token for the configured user. It is retained for
 // callers that only know the subject; IssueUser should be preferred.
 func (a *Authenticator) Issue(username string) (string, time.Time, error) {
-	return a.IssueUser(&usermanager.User{
-		ID:       username,
-		Username: username,
-		Admin:    a.users.IsAdmin(username),
-	})
+	user, err := a.users.Lookup(context.Background(), username)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return a.IssueUser(user)
 }
 
 // IssueUser creates a signed token for user.

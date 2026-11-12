@@ -70,7 +70,7 @@ type HandlerConfig struct {
 
 	// User manager configuration. UserManager may be supplied directly for
 	// tests; otherwise it is built from the fields below.
-	UserManager      usermanager.Manager
+	UserManager      usermanager.UserManager
 	UserManagerType  string
 	UserDomain       string
 	UserTable        string

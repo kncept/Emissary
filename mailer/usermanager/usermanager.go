@@ -33,6 +33,11 @@ type User struct {
 	Admin bool
 }
 
+// IsAdmin returns whether this user is an administrator.
+func (u *User) IsAdmin() bool {
+	return u.Admin
+}
+
 // Config selects and configures a user manager backend.
 type Config struct {
 	// Type is one of "none", "any", "ddb" or "ldap".
@@ -59,18 +64,18 @@ type Config struct {
 	LDAPCacheTTL     string
 }
 
-// Manager authenticates a set of users. Implementations must be safe for
+// UserManager authenticates and looks up users. Implementations must be safe for
 // concurrent use.
-type Manager interface {
+type UserManager interface {
 	Name() string
 	Authenticate(ctx context.Context, username, password string) (*User, error)
-	IsAdmin(username string) bool
+	Lookup(ctx context.Context, username string) (*User, error)
 }
 
 // New builds the manager selected by cfg.Type. An empty type is equivalent to
 // "none" (administrator only), which preserves the original single-user
 // behaviour.
-func New(cfg Config) (Manager, error) {
+func New(cfg Config) (UserManager, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Type)) {
 	case "", "none":
 		return NewNone(cfg), nil
@@ -134,7 +139,7 @@ type NoneManager struct {
 	admin adminAuth
 }
 
-var _ Manager = (*NoneManager)(nil)
+var _ UserManager = (*NoneManager)(nil)
 
 func NewNone(cfg Config) *NoneManager {
 	return &NoneManager{admin: newAdminAuth(cfg)}
@@ -149,7 +154,16 @@ func (m *NoneManager) Authenticate(_ context.Context, username, password string)
 	return nil, ErrInvalidCredentials
 }
 
-func (m *NoneManager) IsAdmin(username string) bool { return m.admin.isAdmin(username) }
+func (m *NoneManager) Lookup(_ context.Context, username string) (*User, error) {
+	if m.admin.isAdmin(username) {
+		return &User{
+			ID:       m.admin.username,
+			Username: m.admin.username,
+			Admin:    true,
+		}, nil
+	}
+	return nil, ErrInvalidCredentials
+}
 
 // AnyManager allows any valid address in the receiving domain to log in with
 // any password. It is intended for development and trusted deployments.
@@ -158,7 +172,7 @@ type AnyManager struct {
 	domain string
 }
 
-var _ Manager = (*AnyManager)(nil)
+var _ UserManager = (*AnyManager)(nil)
 
 func NewAny(cfg Config) (*AnyManager, error) {
 	domain := normalizeDomain(cfg.Domain)
@@ -189,7 +203,28 @@ func (m *AnyManager) Authenticate(_ context.Context, username, password string) 
 	return &User{ID: address, Username: address, Email: address}, nil
 }
 
-func (m *AnyManager) IsAdmin(username string) bool { return m.admin.isAdmin(username) }
+func (m *AnyManager) Lookup(_ context.Context, username string) (*User, error) {
+	if m.admin.isAdmin(username) {
+		user := &User{
+			ID:       m.admin.username,
+			Username: m.admin.username,
+			Admin:    true,
+		}
+		if isEmail(m.admin.username) {
+			user.Email = strings.ToLower(m.admin.username)
+		}
+		return user, nil
+	}
+
+	address, ok := normalizeAddress(username)
+	if !ok || !strings.HasSuffix(address, "@"+m.domain) {
+		return nil, ErrInvalidCredentials
+	}
+	if strings.Count(address, "@") != 1 {
+		return nil, ErrInvalidCredentials
+	}
+	return &User{ID: address, Username: address, Email: address}, nil
+}
 
 // DdbManager will provide in-application user management backed by DynamoDB.
 // The type is registered now so deployments can select it, but the storage
@@ -200,7 +235,7 @@ type DdbManager struct {
 	region string
 }
 
-var _ Manager = (*DdbManager)(nil)
+var _ UserManager = (*DdbManager)(nil)
 
 func NewDdb(cfg Config) *DdbManager {
 	return &DdbManager{
@@ -219,7 +254,16 @@ func (m *DdbManager) Authenticate(_ context.Context, username, password string) 
 	panic("unimplemented")
 }
 
-func (m *DdbManager) IsAdmin(username string) bool { return m.admin.isAdmin(username) }
+func (m *DdbManager) Lookup(_ context.Context, username string) (*User, error) {
+	if m.admin.isAdmin(username) {
+		return &User{
+			ID:       m.admin.username,
+			Username: m.admin.username,
+			Admin:    true,
+		}, nil
+	}
+	panic("unimplemented")
+}
 
 // LdapManager will proxy authentication to an LDAP server. The type is
 // registered now so deployments can select it, but the proxy is not part of
@@ -229,7 +273,7 @@ type LdapManager struct {
 	cfg   Config
 }
 
-var _ Manager = (*LdapManager)(nil)
+var _ UserManager = (*LdapManager)(nil)
 
 func NewLdap(cfg Config) *LdapManager {
 	return &LdapManager{admin: newAdminAuth(cfg), cfg: cfg}
@@ -244,7 +288,16 @@ func (m *LdapManager) Authenticate(_ context.Context, username, password string)
 	panic("unimplemented")
 }
 
-func (m *LdapManager) IsAdmin(username string) bool { return m.admin.isAdmin(username) }
+func (m *LdapManager) Lookup(_ context.Context, username string) (*User, error) {
+	if m.admin.isAdmin(username) {
+		return &User{
+			ID:       m.admin.username,
+			Username: m.admin.username,
+			Admin:    true,
+		}, nil
+	}
+	panic("unimplemented")
+}
 
 func normalizeDomain(domain string) string {
 	return strings.ToLower(strings.Trim(strings.TrimSpace(domain), "@"))
