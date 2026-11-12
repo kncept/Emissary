@@ -44,6 +44,10 @@ RUN echo "${USERNAME}:${USERNAME}" | chpasswd
 USER ${USERNAME}
 WORKDIR /home/${USERNAME}
 
+# Install ogen (JMAP code generator) and oapi-codegen
+RUN go install github.com/ogen-go/ogen/cmd/ogen@latest && \
+    go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
+
 # Install Node.js via nvm (LTS)
 RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
 RUN /bin/bash -c ". .nvm/nvm.sh && nvm install --lts"
