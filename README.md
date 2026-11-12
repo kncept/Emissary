@@ -11,6 +11,7 @@ It can be set up as a lambda, run natively or embedded in a dockerfile.
 - [Design](docs/DESIGN.md) — what Emissary is, its goals and technology choices
 - [Architecture](docs/ARCHITECTURE.md) — how the components fit together and the mail/auth flows
 - [Authentication](docs/AUTH.md) — login and the access/refresh token pair
+- [Users](docs/USERS.md) — in-application user management (the `ddb` backend)
 - [Configuration](docs/CONFIGURATION.md) — every environment variable
 - [API](docs/API.md) — the HTTP API reference
 - [Deployment](docs/DEPLOYMENT.md) — the CDK stacks and deploy workflow
