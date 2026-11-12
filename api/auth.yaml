@@ -6,6 +6,13 @@ info:
     Authentication endpoints for Emissary. The token design is
     described in docs/AUTH.md.
 
+    Every operation in this document lives under the reserved URL
+    prefix `/api/auth/`. The prefix is owned exclusively by this
+    document: it never defines operations outside the prefix, and no
+    operation in any other document (notably `api/jmap.yaml`) may use
+    a path under the prefix. This guarantees the two documents never
+    overlap. See "Specs and path ownership" in docs/API.md.
+
     Login is form-based (username and password); support for other
     login types will be added later, as required. A successful login
     returns a pair of signed JWTs:

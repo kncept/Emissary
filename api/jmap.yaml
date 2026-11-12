@@ -17,6 +17,13 @@ info:
     - the request and response arguments for every method required by a
       minimal RFC 8621 mail implementation.
 
+    This document defines no authentication operations. All auth
+    operations (login, refresh, and any future auth endpoints) are
+    defined in `api/auth.yaml` under the reserved URL prefix
+    `/api/auth/`; no path in this document may fall under that prefix,
+    so the two documents never overlap. See "Specs and path ownership"
+    in docs/API.md.
+
     Method argument schemas are linked to their method names in the
     `x-jmap-methods` extension at the end of this document. A method call is
     the three-element `Invocation` tuple `[name, arguments, methodCallId]`.

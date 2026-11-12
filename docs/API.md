@@ -4,6 +4,26 @@ All endpoints are served by `cmd/frontend` on the same origin and port
 as the webmail client. The API lives under the `/api` prefix; unknown
 `/api` paths return `404`, and every other path serves the SPA.
 
+## Specs and path ownership
+
+The wire contract is defined by two OpenAPI documents, and they must
+never overlap:
+
+- [`api/auth.yaml`](../api/auth.yaml) — authentication. **Every
+  operation lives under the reserved URL prefix `/api/auth/`.** The
+  prefix is owned exclusively by this document: it never defines
+  operations outside the prefix, and no other document may define a
+  path under it.
+- [`api/jmap.yaml`](../api/jmap.yaml) — JMAP (RFC 8620/8621): the
+  session resource, the batched API endpoint, binary upload/download
+  and the EventSource connection. It defines **no** auth operations;
+  none of its paths may fall under `/api/auth/`.
+
+The rule is enforced by `api/spec_test.go` (run by `./run.sh test`):
+every path in `auth.yaml` must start with `/api/auth/`, no path in
+`jmap.yaml` may fall under it, and the two documents must never share
+a (method, path) operation.
+
 ## Conventions
 
 - Requests and responses are JSON. Bodies are capped at 1 MiB.

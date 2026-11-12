@@ -78,6 +78,15 @@ test() {
 	generate_api
 	build_frontend
 
+	# The spec tests enforce the path-ownership rule between auth.yaml
+	# and jmap.yaml (see "Specs and path ownership" in docs/API.md).
+	echo "=== Running API spec tests ==="
+	(
+		cd api
+		go test -buildvcs=false ./...
+	)
+
+	echo ""
 	echo "=== Running Go tests ==="
 	(
 		cd mailer
