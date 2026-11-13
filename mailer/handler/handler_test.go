@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/storage"
@@ -79,7 +80,7 @@ func login(t *testing.T, h http.Handler, username, password string) (int, string
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode login response: %v (body %s)", err, w.Body.String())
 	}
-	token, _ := response["token"].(string)
+	token, _ := response["accessToken"].(string)
 	return w.Code, token, response
 }
 
@@ -165,12 +166,19 @@ func TestAdminCanFilterAndSeeAllUsers(t *testing.T) {
 	addEmail(store, "sent", "bob@example.com", "carol@example.com")
 	addEmail(store, "unrelated", "carol@example.com", "dave@example.com")
 
-	status, token, response := login(t, h, "admin", "secret")
+	status, token, _ := login(t, h, "admin", "secret")
 	if status != http.StatusOK {
 		t.Fatalf("admin login status = %d, want %d", status, http.StatusOK)
 	}
-	if response["admin"] != true {
-		t.Errorf("admin flag = %v, want true", response["admin"])
+
+	// Verify the token has admin claim
+	authenticator := auth.New("admin", "secret", "secret", time.Hour, "", "")
+	claims, err := authenticator.ValidateClaims(token)
+	if err != nil {
+		t.Fatalf("validate admin token: %v", err)
+	}
+	if !claims.Admin {
+		t.Errorf("admin flag = %v, want true", claims.Admin)
 	}
 
 	ids := responseIDs(t, request(t, h, http.MethodGet, "/api/emails", "", token))

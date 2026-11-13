@@ -435,6 +435,7 @@ func TestConfig_Validate_AllValid(t *testing.T) {
 		Storage:  StorageConfig{Type: "memory"},
 		Sender:   SenderConfig{Type: "log"},
 		Metadata: MetadataConfig{Type: "memory"},
+		Session:  SessionConfig{Type: "memory"},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate() error = %v, want nil", err)

@@ -6,16 +6,13 @@ import (
 
 	usersapi "github.com/kncept/Emissary/api/users/generated"
 	"github.com/kncept/Emissary/mailer/auth"
-	"github.com/kncept/Emissary/mailer/usermanager"
 )
 
-// usersHandler implements the OpenAPI users handler interface.
 type usersHandler struct {
 	manager EmissaryAuthManager
 	auth    *auth.Authenticator
 }
 
-// NewUsersHandler creates a new users handler.
 func NewUsersHandler(manager EmissaryAuthManager, authenticator *auth.Authenticator) *usersHandler {
 	return &usersHandler{
 		manager: manager,
@@ -23,7 +20,6 @@ func NewUsersHandler(manager EmissaryAuthManager, authenticator *auth.Authentica
 	}
 }
 
-// ListUsers returns a cursor-based page of users.
 func (h *usersHandler) ListUsers(ctx context.Context, params usersapi.ListUsersParams) (usersapi.ListUsersRes, error) {
 	claims := currentClaimsFromContext(ctx)
 	if claims == nil || !claims.EmissaryUserManagement {
@@ -71,7 +67,6 @@ func (h *usersHandler) ListUsers(ctx context.Context, params usersapi.ListUsersP
 	return response, nil
 }
 
-// CreateUser creates a new user.
 func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserRequest) (usersapi.CreateUserRes, error) {
 	claims := currentClaimsFromContext(ctx)
 	if claims == nil || !claims.EmissaryUserManagement {
@@ -100,23 +95,19 @@ func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserR
 		rules = []string{}
 	}
 
-	// TODO: Salt and hash the password
-	// For now, we store it as-is (will be fixed when DdbManager is implemented)
 	user := &EmissaryUser{
-		User: &usermanager.User{
-			ID:       req.Email,
-			Username: req.Email,
-			Email:    req.Email,
-			Admin:    admin,
-		},
+		ID:       req.Email,
+		Username: req.Email,
+		Email:    req.Email,
+		Admin:    admin,
+
 		Enabled:        enabled,
-		SaltedPassword: req.Password, // TODO: hash
+		SaltedPassword: req.Password,
 		Rules:          rules,
 	}
 
 	if err := h.manager.Create(ctx, user); err != nil {
 		log.Printf("create user: %v", err)
-		// Check if it's a duplicate
 		return &usersapi.CreateUserConflict{Error: "user already exists"}, nil
 	}
 
@@ -128,7 +119,6 @@ func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserR
 	}, nil
 }
 
-// GetUser returns a user by email.
 func (h *usersHandler) GetUser(ctx context.Context, params usersapi.GetUserParams) (usersapi.GetUserRes, error) {
 	claims := currentClaimsFromContext(ctx)
 	if claims == nil || !claims.EmissaryUserManagement {
@@ -149,7 +139,6 @@ func (h *usersHandler) GetUser(ctx context.Context, params usersapi.GetUserParam
 	}, nil
 }
 
-// UpdateUser updates an existing user.
 func (h *usersHandler) UpdateUser(ctx context.Context, req *usersapi.UpdateUserRequest, params usersapi.UpdateUserParams) (usersapi.UpdateUserRes, error) {
 	claims := currentClaimsFromContext(ctx)
 	if claims == nil || !claims.EmissaryUserManagement {
@@ -185,7 +174,6 @@ func (h *usersHandler) UpdateUser(ctx context.Context, req *usersapi.UpdateUserR
 	}, nil
 }
 
-// DeleteUser deletes a user by email.
 func (h *usersHandler) DeleteUser(ctx context.Context, params usersapi.DeleteUserParams) (usersapi.DeleteUserRes, error) {
 	claims := currentClaimsFromContext(ctx)
 	if claims == nil || !claims.EmissaryUserManagement {
@@ -200,14 +188,12 @@ func (h *usersHandler) DeleteUser(ctx context.Context, params usersapi.DeleteUse
 	return &usersapi.DeleteUserResponse{Success: true}, nil
 }
 
-// ChangePassword changes a user's password.
 func (h *usersHandler) ChangePassword(ctx context.Context, req *usersapi.ChangePasswordRequest, params usersapi.ChangePasswordParams) (usersapi.ChangePasswordRes, error) {
 	claims := currentClaimsFromContext(ctx)
 	if claims == nil {
 		return &usersapi.ChangePasswordUnauthorized{Error: "authentication required"}, nil
 	}
 
-	// Check if the user is changing their own password or is an admin with EmissaryUserManagement
 	isOwnAccount := claims.Subject == params.Email
 	isAdmin := claims.EmissaryUserManagement
 
@@ -215,29 +201,23 @@ func (h *usersHandler) ChangePassword(ctx context.Context, req *usersapi.ChangeP
 		return &usersapi.ChangePasswordForbidden{Error: "insufficient permissions"}, nil
 	}
 
-	// Get the user to verify old password
 	user, err := h.manager.Get(ctx, params.Email)
 	if err != nil {
 		log.Printf("get user for password change: %v", err)
 		return &usersapi.ChangePasswordNotFound{Error: "user not found"}, nil
 	}
 
-	// Verify old password if provided (required for own account, optional for admin)
 	oldPassword := req.OldPassword.Value
 	if req.OldPassword.IsSet() || isOwnAccount {
 		if !req.OldPassword.IsSet() {
 			return &usersapi.ChangePasswordBadRequest{Error: "old password is required"}, nil
 		}
-		// TODO: Properly verify salted password
-		// For now, simple string comparison (will be fixed when DdbManager is implemented)
 		if user.SaltedPassword != oldPassword {
 			return &usersapi.ChangePasswordConflict{Error: "old password is incorrect"}, nil
 		}
 	}
 
-	// Update the password
-	// TODO: Salt and hash the password
-	user.SaltedPassword = req.NewPassword // TODO: hash
+	user.SaltedPassword = req.NewPassword
 
 	if err := h.manager.Save(ctx, user); err != nil {
 		log.Printf("save user after password change: %v", err)
@@ -247,7 +227,6 @@ func (h *usersHandler) ChangePassword(ctx context.Context, req *usersapi.ChangeP
 	return &usersapi.ChangePasswordResponse{Success: true}, nil
 }
 
-// currentClaimsFromContext extracts the claims from the request context.
 func currentClaimsFromContext(ctx context.Context) *auth.Claims {
 	claims, _ := ctx.Value(claimsContextKey{}).(*auth.Claims)
 	return claims

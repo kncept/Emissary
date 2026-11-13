@@ -34,6 +34,9 @@ func main() {
 		MetadataPath:   cfg.Metadata.FilePath,
 		MetadataTable:  cfg.Metadata.DdbTable,
 		MetadataRegion: cfg.Metadata.Region,
+		SessionType:    cfg.Session.Type,
+		SessionTable:   cfg.Session.DdbTable,
+		SessionRegion:  cfg.Session.Region,
 		JWTAudience:    cfg.Server.JWTAudience,
 		JWTIssuer:      cfg.Server.JWTIssuer,
 

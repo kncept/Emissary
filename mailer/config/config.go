@@ -80,6 +80,13 @@ type MetadataConfig struct {
 	Region   string // AWS region for DDB
 }
 
+// SessionConfig holds session storage configuration for refresh tokens.
+type SessionConfig struct {
+	Type     string // "memory", "ddb", "dynamodb"
+	DdbTable string
+	Region   string // AWS region for DDB
+}
+
 // Validate checks that the metadata configuration is complete and consistent.
 func (c *MetadataConfig) Validate() error {
 	var errs []error
@@ -90,6 +97,20 @@ func (c *MetadataConfig) Validate() error {
 	}
 	if (c.Type == "ddb" || c.Type == "dynamodb") && c.DdbTable == "" {
 		errs = append(errs, errors.New("metadata=ddb requires a table (set DDB_TABLE)"))
+	}
+	return errors.Join(errs...)
+}
+
+// Validate checks that the session configuration is complete and consistent.
+func (c *SessionConfig) Validate() error {
+	var errs []error
+	switch c.Type {
+	case "memory", "ddb", "dynamodb":
+	default:
+		errs = append(errs, fmt.Errorf("unknown session type %q (want memory, ddb or dynamodb)", c.Type))
+	}
+	if (c.Type == "ddb" || c.Type == "dynamodb") && c.DdbTable == "" {
+		errs = append(errs, errors.New("session=ddb requires a table (set SESSION_TABLE)"))
 	}
 	return errors.Join(errs...)
 }
@@ -138,6 +159,7 @@ type Config struct {
 	Storage     StorageConfig
 	Sender      SenderConfig
 	Metadata    MetadataConfig
+	Session     SessionConfig
 	UserManager UserManagerConfig
 
 	// AWSRegion is the default AWS region used when a specific service
@@ -153,6 +175,7 @@ func (c *Config) Validate() error {
 		c.Storage.Validate(),
 		c.Sender.Validate(),
 		c.Metadata.Validate(),
+		c.Session.Validate(),
 		c.UserManager.Validate(),
 	)
 }
@@ -185,6 +208,11 @@ func Load(ctx context.Context) (*Config, error) {
 			DdbTable: firstEnv(ctx, "DDB_TABLE"),
 			FilePath: firstEnv(ctx, "METADATA_FILE"),
 			Region:   firstEnv(ctx, "METADATA_REGION"),
+		},
+		Session: SessionConfig{
+			Type:     strings.ToLower(strings.TrimSpace(firstEnv(ctx, "SESSION"))),
+			DdbTable: firstEnv(ctx, "SESSION_TABLE"),
+			Region:   firstEnv(ctx, "SESSION_REGION"),
 		},
 		UserManager: UserManagerConfig{
 			Type:             strings.ToLower(strings.TrimSpace(firstEnv(ctx, "USER_MANAGER"))),
@@ -251,6 +279,14 @@ func Load(ctx context.Context) (*Config, error) {
 	}
 	if cfg.UserManager.Region == "" {
 		cfg.UserManager.Region = cfg.AWSRegion
+	}
+
+	// Session defaults
+	if cfg.Session.Type == "" {
+		cfg.Session.Type = "memory"
+	}
+	if cfg.Session.Region == "" {
+		cfg.Session.Region = cfg.AWSRegion
 	}
 
 	if err := cfg.Validate(); err != nil {

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kncept/Emissary/mailer/session"
 	"github.com/kncept/Emissary/mailer/usermanager"
 )
 
@@ -20,7 +22,12 @@ var (
 	ErrExpiredToken       = errors.New("token expired")
 )
 
-const defaultTokenTTL = 24 * time.Hour
+const (
+	defaultTokenTTL       = 24 * time.Hour
+	accessTokenTTL        = 9 * time.Hour
+	refreshTokenTTL       = 30 * 24 * time.Hour
+	sessionIDBytes        = 16
+)
 
 type jwtHeader struct {
 	Algorithm string `json:"alg"`
@@ -35,6 +42,7 @@ type Claims struct {
 	SID                    string `json:"sid,omitempty"`
 	Admin                  bool   `json:"admin,omitempty"`
 	EmissaryUserManagement bool   `json:"EmissaryUserManagement,omitempty"`
+	Issue                  int    `json:"issue,omitempty"`
 	IssuedAt               int64  `json:"iat"`
 	ExpiresAt              int64  `json:"exp"`
 	Audience               string `json:"aud,omitempty"`
@@ -47,12 +55,13 @@ type jwtClaims = Claims
 // Authenticator validates users through a pluggable user manager and issues
 // HS256 JWTs.
 type Authenticator struct {
-	users    usermanager.UserManager
-	secret   []byte
-	ttl      time.Duration
-	now      func() time.Time
-	audience string
-	issuer   string
+	users       usermanager.UserManager
+	sessionStore session.SessionStore
+	secret      []byte
+	ttl         time.Duration // legacy, not used for new tokens
+	now         func() time.Time
+	audience    string
+	issuer      string
 }
 
 // New preserves the original single-account constructor. It is equivalent to
@@ -62,30 +71,39 @@ func New(username, password, secret string, ttl time.Duration, audience, issuer 
 		AdminUsername: username,
 		AdminPassword: password,
 	})
-	return NewWithUserManager(users, secret, ttl, audience, issuer)
+	return NewWithUserManager(users, nil, secret, ttl, audience, issuer)
 }
 
 // NewWithUserManager creates an authenticator backed by users.
-func NewWithUserManager(users usermanager.UserManager, secret string, ttl time.Duration, audience, issuer string) *Authenticator {
+func NewWithUserManager(users usermanager.UserManager, sessionStore session.SessionStore, secret string, ttl time.Duration, audience, issuer string) *Authenticator {
 	if ttl <= 0 {
 		ttl = defaultTokenTTL
 	}
 	if users == nil {
 		users = usermanager.NewNone(usermanager.Config{})
 	}
+	if sessionStore == nil {
+		sessionStore = session.NewMemorySessionStore()
+	}
 	return &Authenticator{
-		users:    users,
-		secret:   []byte(secret),
-		ttl:      ttl,
-		now:      time.Now,
-		audience: audience,
-		issuer:   issuer,
+		users:         users,
+		sessionStore:  sessionStore,
+		secret:        []byte(secret),
+		ttl:           ttl,
+		now:           time.Now,
+		audience:      audience,
+		issuer:        issuer,
 	}
 }
 
 // UserManager returns the configured user manager.
 func (a *Authenticator) UserManager() usermanager.UserManager {
 	return a.users
+}
+
+// SessionStore returns the configured session store.
+func (a *Authenticator) SessionStore() session.SessionStore {
+	return a.sessionStore
 }
 
 // Authenticate reports whether the credentials are valid. It is retained for
@@ -102,58 +120,167 @@ func (a *Authenticator) AuthenticateUser(ctx context.Context, username, password
 }
 
 // Issue creates a signed token for the configured user. It is retained for
-// callers that only know the subject; IssueUser should be preferred.
+// callers that only know the subject; issueTokens should be preferred.
 func (a *Authenticator) Issue(username string) (string, time.Time, error) {
 	user, err := a.users.Lookup(context.Background(), username)
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	return a.IssueUser(user)
-}
-
-// IssueUser creates a signed token for user.
-func (a *Authenticator) IssueUser(user *usermanager.User) (string, time.Time, error) {
-	now := a.now().UTC()
-	expiresAt := now.Add(a.ttl)
-
-	header, err := json.Marshal(jwtHeader{Algorithm: "HS256", Type: "JWT"})
+	result, err := a.issueTokens(context.Background(), user)
 	if err != nil {
 		return "", time.Time{}, err
 	}
+	return result.AccessToken, result.ExpiresAt, nil
+}
 
-	// Check if the user manager is Emissary-mastered and supports user management
+// LoginResult contains the tokens issued on successful login.
+type LoginResult struct {
+	AccessToken  string
+	RefreshToken string
+	TokenType    string
+	ExpiresAt    time.Time
+}
+
+// Login authenticates the user and issues an access token and refresh token.
+func (a *Authenticator) Login(ctx context.Context, username, password string) (*LoginResult, error) {
+	user, err := a.users.Authenticate(ctx, username, password)
+	if err != nil {
+		return nil, ErrInvalidCredentials
+	}
+
+	return a.issueTokens(ctx, user)
+}
+
+// Refresh validates the refresh token and issues new access and refresh tokens.
+func (a *Authenticator) Refresh(ctx context.Context, refreshToken string) (*LoginResult, error) {
+	claims, err := a.ValidateRefreshToken(refreshToken)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the session from the store
+	sess, err := a.sessionStore.Get(ctx, claims.SID)
+	if err != nil {
+		return nil, ErrInvalidToken
+	}
+
+	// Verify the issue number matches
+	if claims.Issue != sess.Issue {
+		return nil, ErrInvalidToken
+	}
+
+	// Verify the subject matches
+	if claims.Subject != sess.UserEmail {
+		return nil, ErrInvalidToken
+	}
+
+	// Look up the user
+	user, err := a.users.Lookup(ctx, claims.Subject)
+	if err != nil {
+		return nil, ErrInvalidToken
+	}
+
+	// Increment the issue number
+	newIssue := sess.Issue + 1
+	if err := a.sessionStore.UpdateIssue(ctx, sess.ID, sess.Issue, newIssue); err != nil {
+		return nil, ErrInvalidToken
+	}
+
+	// Update session with new issue
+	sess.Issue = newIssue
+
+	return a.issueTokens(ctx, user)
+}
+
+// issueTokens creates a new session (or updates existing) and issues both tokens.
+func (a *Authenticator) issueTokens(ctx context.Context, user *usermanager.User) (*LoginResult, error) {
+	now := a.now().UTC()
+
+	// Generate session ID
+	sidBytes := make([]byte, sessionIDBytes)
+	if _, err := rand.Read(sidBytes); err != nil {
+		return nil, err
+	}
+	sid := base64.RawURLEncoding.EncodeToString(sidBytes)
+
+	// Check if user manager is Emissary-mastered
 	var emissaryUserMgmt bool
 	if mgr, ok := a.users.(interface {
 		List(ctx context.Context, cursor string, pageSize int) (users []*usermanager.User, nextCursor string, err error)
 	}); ok {
-		_ = mgr // EmissaryAuthManager is implemented
-		// For now, grant to admins. A real implementation would check user's rules.
+		_ = mgr
 		emissaryUserMgmt = user.Admin
 	}
 
-	claims := Claims{
+	// Create or update session
+	sess := &session.Session{
+		ID:        sid,
+		UserEmail: user.ID,
+		Issue:     1,
+		CreatedAt: now,
+		ExpiresAt: now.Add(refreshTokenTTL),
+	}
+	if err := a.sessionStore.Create(ctx, sess); err != nil {
+		return nil, err
+	}
+
+	// Issue access token (9 hours)
+	accessExpiresAt := now.Add(accessTokenTTL)
+	accessToken, err := a.signToken(Claims{
 		Subject:                user.ID,
-		SID:                    user.ID,
+		SID:                    sid,
 		Admin:                  user.Admin,
 		EmissaryUserManagement: emissaryUserMgmt,
 		IssuedAt:               now.Unix(),
-		ExpiresAt:              expiresAt.Unix(),
-	}
-	if a.audience != "" {
-		claims.Audience = a.audience
-	}
-	if a.issuer != "" {
-		claims.Issuer = a.issuer
-	}
-	claimsData, err := json.Marshal(claims)
+		ExpiresAt:              accessExpiresAt.Unix(),
+		Audience:               a.audience,
+		Issuer:                 a.issuer,
+	})
 	if err != nil {
-		return "", time.Time{}, err
+		return nil, err
 	}
 
-	encoding := base64.RawURLEncoding
-	signingInput := encoding.EncodeToString(header) + "." + encoding.EncodeToString(claimsData)
-	signature := a.sign(signingInput)
-	return signingInput + "." + encoding.EncodeToString(signature), expiresAt, nil
+	// Issue refresh token (30 days) with issue number
+	refreshExpiresAt := now.Add(refreshTokenTTL)
+	refreshToken, err := a.signToken(Claims{
+		Subject:   user.ID,
+		SID:       sid,
+		Issue:     1,
+		IssuedAt:  now.Unix(),
+		ExpiresAt: refreshExpiresAt.Unix(),
+		Audience:  a.audience,
+		Issuer:    a.issuer,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &LoginResult{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		TokenType:    "Bearer",
+		ExpiresAt:    accessExpiresAt,
+	}, nil
+}
+
+// ValidateRefreshToken validates a refresh token and returns its claims.
+func (a *Authenticator) ValidateRefreshToken(token string) (*Claims, error) {
+	claims, err := a.validateToken(token)
+	if err != nil {
+		return nil, err
+	}
+
+	// Refresh tokens must have an issue number
+	if claims.Issue == 0 {
+		return nil, ErrInvalidToken
+	}
+
+	// Refresh tokens must have a session ID
+	if claims.SID == "" {
+		return nil, ErrInvalidToken
+	}
+
+	return claims, nil
 }
 
 // Validate verifies a token and returns its subject. It is retained for
@@ -166,8 +293,22 @@ func (a *Authenticator) Validate(token string) (string, error) {
 	return claims.Subject, nil
 }
 
-// ValidateClaims verifies a token and returns all of its claims.
+// ValidateClaims verifies an access token and returns all of its claims.
 func (a *Authenticator) ValidateClaims(token string) (*Claims, error) {
+	claims, err := a.validateToken(token)
+	if err != nil {
+		return nil, err
+	}
+
+	// Access tokens should not have an issue number
+	if claims.Issue != 0 {
+		return nil, ErrInvalidToken
+	}
+
+	return claims, nil
+}
+
+func (a *Authenticator) validateToken(token string) (*Claims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, ErrInvalidToken
@@ -226,6 +367,22 @@ func (a *Authenticator) ValidateClaims(token string) (*Claims, error) {
 	}
 
 	return &claims, nil
+}
+
+func (a *Authenticator) signToken(claims Claims) (string, error) {
+	header, err := json.Marshal(jwtHeader{Algorithm: "HS256", Type: "JWT"})
+	if err != nil {
+		return "", err
+	}
+	claimsData, err := json.Marshal(claims)
+	if err != nil {
+		return "", err
+	}
+
+	encoding := base64.RawURLEncoding
+	signingInput := encoding.EncodeToString(header) + "." + encoding.EncodeToString(claimsData)
+	signature := a.sign(signingInput)
+	return signingInput + "." + encoding.EncodeToString(signature), nil
 }
 
 func (a *Authenticator) sign(input string) []byte {

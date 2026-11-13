@@ -66,9 +66,9 @@ func TestLogin_IssuesJWT(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	token, _ := resp["token"].(string)
-	if token == "" {
-		t.Fatal("expected a non-empty token in the response")
+	accessToken, _ := resp["accessToken"].(string)
+	if accessToken == "" {
+		t.Fatal("expected a non-empty accessToken in the response")
 	}
 	if resp["tokenType"] != "Bearer" {
 		t.Errorf("tokenType = %v, want %q", resp["tokenType"], "Bearer")
@@ -76,7 +76,7 @@ func TestLogin_IssuesJWT(t *testing.T) {
 	if _, ok := resp["success"]; ok {
 		t.Error("login response should not contain a legacy success flag")
 	}
-	if _, err := authenticator.Validate(token); err != nil {
+	if _, err := authenticator.Validate(accessToken); err != nil {
 		t.Errorf("issued token does not validate: %v", err)
 	}
 }
