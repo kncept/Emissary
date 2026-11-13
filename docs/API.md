@@ -6,7 +6,7 @@ as the webmail client. The API lives under the `/api` prefix; unknown
 
 ## Specs and path ownership
 
-The wire contract is defined by two OpenAPI documents, and they must
+The wire contract is defined by three OpenAPI documents, and they must
 never overlap:
 
 - [`api/auth.yaml`](../api/auth.yaml) — authentication. **Every
@@ -14,15 +14,22 @@ never overlap:
   prefix is owned exclusively by this document: it never defines
   operations outside the prefix, and no other document may define a
   path under it.
+- [`api/users.yaml`](../api/users.yaml) — user management (admin only).
+  **Every operation lives under the reserved URL prefix `/api/user/`.**
+  The prefix is owned exclusively by this document: it never defines
+  operations outside the prefix, and no other document may define a
+  path under it. These endpoints require the `EmissaryUserManagement`
+  JWT claim and an Emissary-mastered user manager (the `ddb` backend).
 - [`api/jmap.yaml`](../api/jmap.yaml) — JMAP (RFC 8620/8621): the
   session resource, the batched API endpoint, binary upload/download
   and the EventSource connection. It defines **no** auth operations;
-  none of its paths may fall under `/api/auth/`.
+  none of its paths may fall under `/api/auth/` or `/api/user/`.
 
 The rule is enforced by `api/spec_test.go` (run by `./run.sh test`):
-every path in `auth.yaml` must start with `/api/auth/`, no path in
-`jmap.yaml` may fall under it, and the two documents must never share
-a (method, path) operation.
+every path in `auth.yaml` must start with `/api/auth/`, every path in
+`users.yaml` must start with `/api/user/`, no path in `jmap.yaml` may
+fall under either prefix, and the three documents must never share a
+(method, path) operation.
 
 ## Conventions
 
@@ -44,12 +51,22 @@ a (method, path) operation.
 | `POST` | `/api/auth/login` | — | Exchange credentials for a JWT. |
 | `GET` | `/api/auth/check` | — | Report whether the presented token is valid. |
 | `POST` | `/api/auth/logout` | Bearer | Client-side token discard hook. |
+| `GET` | `/api/user/` | Bearer\* | List all users (paginated). |
+| `POST` | `/api/user/` | Bearer\* | Create a new user. |
+| `GET` | `/api/user/{email}` | Bearer\* | Get a user by email. |
+| `PATCH` | `/api/user/{email}` | Bearer\* | Update a user. |
+| `DELETE` | `/api/user/{email}` | Bearer\* | Delete a user. |
+| `POST` | `/api/user/{email}/password` | Bearer† | Change a user's password. |
 | `GET` | `/api/emails` | Bearer | List visible messages (admins may filter). |
 | `GET` | `/api/emails/{id}` | Bearer | Fetch a single message. |
 | `POST` | `/api/emails/{id}/read` | Bearer | Set the read flag. |
 | `POST` | `/api/emails/{id}/flag` | Bearer | Set the flagged flag. |
 | `DELETE` | `/api/emails/{id}` | Bearer | Delete a message. |
 | `POST` | `/api/emails/send` | Bearer | Send a message via the configured sender. |
+
+\* Requires `EmissaryUserManagement` JWT claim and Emissary-mastered user manager (the `ddb` backend).
+
+† Any authenticated user can change their own password. Administrators with `EmissaryUserManagement` can change any user's password. Requires Emissary-mastered user manager (`ddb` backend).
 
 ## `POST /api/auth/login`
 

@@ -29,15 +29,16 @@ type jwtHeader struct {
 
 // Claims is the verified content of an Emissary JWT. Subject is the user id;
 // Admin is present (and true) only for the built-in administrator.
+// EmissaryUserManagement indicates the user can manage other users (requires Emissary-mastered backend).
 type Claims struct {
-	Subject string `json:"sub"`
-	// SID mirrors the subject for clients that refer to the user id as "sid".
-	SID       string `json:"sid,omitempty"`
-	Admin     bool   `json:"admin,omitempty"`
-	IssuedAt  int64  `json:"iat"`
-	ExpiresAt int64  `json:"exp"`
-	Audience  string `json:"aud,omitempty"`
-	Issuer    string `json:"iss,omitempty"`
+	Subject                string `json:"sub"`
+	SID                    string `json:"sid,omitempty"`
+	Admin                  bool   `json:"admin,omitempty"`
+	EmissaryUserManagement bool   `json:"EmissaryUserManagement,omitempty"`
+	IssuedAt               int64  `json:"iat"`
+	ExpiresAt              int64  `json:"exp"`
+	Audience               string `json:"aud,omitempty"`
+	Issuer                 string `json:"iss,omitempty"`
 }
 
 // jwtClaims is kept as an alias for compatibility with older callers.
@@ -119,12 +120,24 @@ func (a *Authenticator) IssueUser(user *usermanager.User) (string, time.Time, er
 	if err != nil {
 		return "", time.Time{}, err
 	}
+
+	// Check if the user manager is Emissary-mastered and supports user management
+	var emissaryUserMgmt bool
+	if mgr, ok := a.users.(interface {
+		List(ctx context.Context, cursor string, pageSize int) (users []*usermanager.User, nextCursor string, err error)
+	}); ok {
+		_ = mgr // EmissaryAuthManager is implemented
+		// For now, grant to admins. A real implementation would check user's rules.
+		emissaryUserMgmt = user.Admin
+	}
+
 	claims := Claims{
-		Subject:   user.ID,
-		SID:       user.ID,
-		Admin:     user.Admin,
-		IssuedAt:  now.Unix(),
-		ExpiresAt: expiresAt.Unix(),
+		Subject:                user.ID,
+		SID:                    user.ID,
+		Admin:                  user.Admin,
+		EmissaryUserManagement: emissaryUserMgmt,
+		IssuedAt:               now.Unix(),
+		ExpiresAt:              expiresAt.Unix(),
 	}
 	if a.audience != "" {
 		claims.Audience = a.audience

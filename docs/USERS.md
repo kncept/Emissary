@@ -47,6 +47,7 @@ type EmissaryAuthManager interface {
 	Save(ctx context.Context, user *EmissaryUser) error
 	Get(ctx context.Context, email string) (*EmissaryUser, error)
 	Delete(ctx context.Context, email string) error
+	ChangePassword(ctx context.Context, email, oldPassword, newPassword string) error
 }
 ```
 
@@ -59,6 +60,35 @@ The management operations deal with `*EmissaryUser` values:
 | `Save` | Save changes to an existing user. |
 | `Get` | Fetch a user by email address. |
 | `Delete` | Delete a user by email address. |
+| `ChangePassword` | Change a user's password. Requires the old password for verification. |
+
+## Change Password
+
+Any authenticated user can change their own password via `POST /api/user/{email}/password`. The endpoint requires the current password (for verification) and the new password.
+
+Administrators with the `EmissaryUserManagement` claim can change any user's password. When an admin changes another user's password, the `oldPassword` field is optional (but if provided, it is verified).
+
+The endpoint is only available when the configured user manager implements `EmissaryAuthManager` (i.e., the `ddb` backend). Otherwise, it returns `403 Forbidden`.
+
+Request body:
+```json
+{
+  "oldPassword": "current password",
+  "newPassword": "new password"
+}
+```
+
+Response (`200`):
+```json
+{ "success": true }
+```
+
+Errors:
+- `400` — Missing or invalid fields
+- `401` — Authentication required
+- `403` — Insufficient permissions (not the account owner, not an admin with EmissaryUserManagement, or backend doesn't support password change)
+- `404` — User not found
+- `409` — Old password is incorrect
 
 ## The user
 
@@ -96,11 +126,6 @@ will be addressed separately.
 
 ## Status
 
-Nothing in this document is implemented. The `ddb` user manager is
-registered and selectable but panics, `api/users.yaml` does not exist
-yet, and no backend implements `EmissaryAuthManager`.
+The user management API is implemented in `api/users.yaml` and `mailer/handler/users.go`. The `ddb` user manager is registered and selectable but the storage implementation is not complete; the management operations panic when used with the `ddb` backend. The `any`, `ldap`, and `none` backends do not implement `EmissaryAuthManager` and therefore do not support user management operations (including password change).
 
-See [AUTH.md](AUTH.md) for login, refresh and the token claims,
-[API.md](API.md) for the endpoints as implemented, and
-[CONFIGURATION.md](CONFIGURATION.md) for `USER_MANAGER` and the
-backend settings.
+See [AUTH.md](AUTH.md) for login, refresh and the token claims, [API.md](API.md) for the endpoints as implemented, and [CONFIGURATION.md](CONFIGURATION.md) for `USER_MANAGER` and the backend settings.

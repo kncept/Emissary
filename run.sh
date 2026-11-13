@@ -23,15 +23,15 @@ Commands:
 EOF
 }
 
-# Generate Go types and stubs from the OpenAPI specs using ogen. Both specs
-# are always generated together so the two generated trees
-# (api/jmap/generated and api/auth/generated) stay in sync.
+# Generate Go types and stubs from the OpenAPI specs using ogen. All specs
+# are always generated together so the generated trees stay in sync.
 generate_api() {
 	(
 		cd mailer
 		# Ensure ogen is available
 		go tool ogen -target ../api/jmap/generated ../api/jmap.yaml
 		go tool ogen -target ../api/auth/generated ../api/auth.yaml
+		go tool ogen -target ../api/users/generated ../api/users.yaml
 	)
 }
 

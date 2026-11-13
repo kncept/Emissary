@@ -1,0 +1,499 @@
+openapi: 3.1.0
+info:
+  title: Emissary User Management API
+  version: 1.0.0
+  description: |-
+    User management endpoints for Emissary. These endpoints are available
+    only when the authenticated user carries the `EmissaryUserManagement`
+    permission (a JWT claim) and the configured user manager is
+    Emissary-mastered (the `ddb` backend).
+
+    Every operation in this document lives under the reserved URL prefix
+    `/api/user/`. The prefix is owned exclusively by this document: it never
+    defines operations outside the prefix, and no operation in any other
+    document (notably `api/auth.yaml` and `api/jmap.yaml`) may use a path
+    under the prefix. This guarantees the documents never overlap. See
+    "Specs and path ownership" in docs/API.md.
+
+    Error conventions (status codes, `{"error": "<message>"}` bodies,
+    generic messages) are shared with the rest of the API — see
+    docs/API.md.
+servers:
+- url: https://{host}
+  description: Emissary mail server host
+  variables:
+    host:
+      default: mail.example.com
+tags:
+- name: Users
+  description: User management operations (admin only)
+paths:
+  /api/user/:
+    get:
+      tags:
+      - Users
+      summary: List all users
+      description: |-
+        Returns a cursor-based page of users. The page size defaults to
+        20 and may be limited by the `pageSize` query parameter. The
+        response includes a `nextCursor` for pagination; when empty or
+        absent, there are no more pages.
+      operationId: listUsers
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: cursor
+        in: query
+        description: Cursor for pagination (from a previous response)
+        schema:
+          type: string
+      - name: pageSize
+        in: query
+        description: Maximum number of users to return (default 20)
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+      responses:
+        '200':
+          description: A page of users
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsersListResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient permissions (requires EmissaryUserManagement claim and Emissary-mastered user manager)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags:
+      - Users
+      summary: Create a new user
+      description: |-
+        Creates a new user account. The email address is the user's stable
+        identifier and login name. The password will be salted and stored.
+      operationId: createUser
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: Invalid request (missing or invalid fields)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: User already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/user/{email}:
+    get:
+      tags:
+      - Users
+      summary: Get a user by email address
+      description: |-
+        Returns the user with the given email address. The salted password
+        is never returned.
+      operationId: getUser
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: email
+        in: path
+        required: true
+        description: The user's email address (login name)
+        schema:
+          type: string
+          format: email
+      responses:
+        '200':
+          description: The user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      tags:
+      - Users
+      summary: Update a user
+      description: |-
+        Updates an existing user. Only the provided fields are changed.
+        The email address (ID) cannot be changed. The salted password
+        cannot be updated via this endpoint (use a dedicated password
+        change flow instead).
+      operationId: updateUser
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: email
+        in: path
+        required: true
+        description: The user's email address (login name)
+        schema:
+          type: string
+          format: email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: User updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags:
+      - Users
+      summary: Delete a user
+      description: |-
+        Deletes the user with the given email address. This action is
+        irreversible.
+      operationId: deleteUser
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: email
+        in: path
+        required: true
+        description: The user's email address (login name)
+        schema:
+          type: string
+          format: email
+      responses:
+        '200':
+          description: User deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteUserResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/user/{email}/password:
+    post:
+      tags:
+      - Users
+      summary: Change a user's password
+      description: |-
+        Changes the password for the user with the given email address.
+        
+        **Authorization rules:**
+        - Any authenticated user can change their own password (the `email` path
+          parameter must match the authenticated user's email). The `oldPassword`
+          field is required and verified.
+        - Administrators with the `EmissaryUserManagement` claim can change any
+          user's password. When an admin changes another user's password, the
+          `oldPassword` field is optional (but if provided, it is verified).
+        
+        This endpoint is only available when the configured user manager
+        implements `EmissaryAuthManager` (i.e., the `ddb` backend). Otherwise,
+        it returns `403 Forbidden`.
+      operationId: changePassword
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: email
+        in: path
+        required: true
+        description: The user's email address (login name)
+        schema:
+          type: string
+          format: email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '200':
+          description: Password changed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangePasswordResponse'
+        '400':
+          description: Invalid request (missing or invalid fields)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient permissions (not the account owner, not an admin with EmissaryUserManagement, or backend doesn't support password change)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Old password is incorrect
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: The access token from login or refresh (requires EmissaryUserManagement claim)
+  schemas:
+    User:
+      type: object
+      description: A user account (EmissaryUser without the salted password)
+      required:
+      - email
+      - enabled
+      - admin
+      - rules
+      properties:
+        email:
+          type: string
+          format: email
+          description: The user's email address (stable identifier, login name)
+        enabled:
+          type: boolean
+          description: When false, the user is kept but cannot log in
+        admin:
+          type: boolean
+          description: Whether the user has administrator privileges
+        rules:
+          type: array
+          description: System rules applied to mail for this user (e.g., "bounce", "delete")
+          items:
+            type: string
+      additionalProperties: false
+    CreateUserRequest:
+      type: object
+      required:
+      - email
+      - password
+      properties:
+        email:
+          type: string
+          format: email
+          description: The user's email address (login name)
+        password:
+          type: string
+          format: password
+          minLength: 1
+          description: The user's initial password (will be salted and stored)
+        enabled:
+          type: boolean
+          default: true
+          description: Whether the user can log in
+        admin:
+          type: boolean
+          default: false
+          description: Whether the user has administrator privileges
+        rules:
+          type: array
+          description: System rules for mail handling
+          items:
+            type: string
+          default: []
+      additionalProperties: false
+    UpdateUserRequest:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          description: Whether the user can log in
+        admin:
+          type: boolean
+          description: Whether the user has administrator privileges
+        rules:
+          type: array
+          description: System rules for mail handling
+          items:
+            type: string
+      additionalProperties: false
+    UserResponse:
+      type: object
+      description: A user account (without the salted password)
+      required:
+      - email
+      - enabled
+      - admin
+      - rules
+      properties:
+        email:
+          type: string
+          format: email
+          description: The user's email address (stable identifier, login name)
+        enabled:
+          type: boolean
+          description: When false, the user is kept but cannot log in
+        admin:
+          type: boolean
+          description: Whether the user has administrator privileges
+        rules:
+          type: array
+          description: System rules applied to mail for this user
+          items:
+            type: string
+      additionalProperties: false
+    UsersListResponse:
+      type: object
+      required:
+      - users
+      properties:
+        users:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+          description: The users in this page
+        nextCursor:
+          type: string
+          description: Cursor for the next page; empty or absent if no more pages
+      additionalProperties: false
+    DeleteUserResponse:
+      type: object
+      required:
+      - success
+      properties:
+        success:
+          type: boolean
+          default: true
+      additionalProperties: false
+    ChangePasswordRequest:
+      type: object
+      required:
+      - newPassword
+      properties:
+        oldPassword:
+          type: string
+          format: password
+          description: The current password (required when changing own password; optional for admin changing another user's password)
+        newPassword:
+          type: string
+          format: password
+          minLength: 1
+          description: The new password (will be salted and stored)
+      additionalProperties: false
+    ChangePasswordResponse:
+      type: object
+      required:
+      - success
+      properties:
+        success:
+          type: boolean
+          default: true
+      additionalProperties: false
+    Error:
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          type: string
+          description: A generic error message
+      additionalProperties: false

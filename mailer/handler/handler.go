@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	usersapi "github.com/kncept/Emissary/api/users/generated"
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/gui"
@@ -184,12 +185,12 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 		}
 	}
 
-	return newHandler(authenticator, emailStore, metaStore, mailSender), nil
+	return newHandler(authenticator, emailStore, metaStore, mailSender, users), nil
 }
 
 // newHandler wires the API routes, the auth middleware and the embedded
 // frontend into a single http.Handler.
-func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, metaStore metadata.MetadataStore, mailSender sender.Sender) http.Handler {
+func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, metaStore metadata.MetadataStore, mailSender sender.Sender, userManager usermanager.UserManager) http.Handler {
 	mux := http.NewServeMux()
 
 	// JMAP routes (RFC 8620/8621) - all require JWT authentication
@@ -203,6 +204,18 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 	mux.Handle("POST /upload/", requireAuth(authenticator, http.HandlerFunc(handleJMAPUpload)))
 	mux.Handle("GET /download/", requireAuth(authenticator, http.HandlerFunc(handleJMAPDownload)))
 	mux.Handle("GET /eventsource/", requireAuth(authenticator, http.HandlerFunc(handleJMAPPush)))
+
+	// Users API routes (authenticated, requires EmissaryUserManagement claim)
+	// Only mount if the user manager implements EmissaryAuthManager (Emissary-mastered backend)
+	if mgr, ok := userManager.(EmissaryAuthManager); ok {
+		usersHandler := NewUsersHandler(mgr, authenticator)
+		usersServer, err := usersapi.NewServer(usersHandler, usersSecurityHandler{authenticator})
+		if err != nil {
+			log.Printf("failed to create users server: %v", err)
+		} else {
+			mux.Handle("/api/user/", usersServer)
+		}
+	}
 
 	// API routes (authenticated) - legacy Emissary API
 	mux.Handle("GET /api/emails", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -282,6 +295,53 @@ func requireAuth(authenticator *auth.Authenticator, next http.Handler) http.Hand
 		ctx := context.WithValue(r.Context(), claimsContextKey{}, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// usersSecurityHandler implements usersapi.SecurityHandler for the users API.
+type usersSecurityHandler struct {
+	authenticator *auth.Authenticator
+}
+
+func (h usersSecurityHandler) HandleBearerAuth(ctx context.Context, operationName usersapi.OperationName, t usersapi.BearerAuth) (context.Context, error) {
+	claims, err := h.authenticator.ValidateClaims(t.Token)
+	if err != nil {
+		return nil, err
+	}
+	// The users API requires the EmissaryUserManagement claim
+	if !claims.EmissaryUserManagement {
+		return nil, &authErr{message: "insufficient permissions"}
+	}
+	ctx = context.WithValue(ctx, claimsContextKey{}, claims)
+	return ctx, nil
+}
+
+// EmissaryAuthManager is the interface for Emissary-mastered user managers
+// that support user management operations.
+type EmissaryAuthManager interface {
+	usermanager.UserManager
+
+	List(ctx context.Context, cursor string, pageSize int) (users []*EmissaryUser, nextCursor string, err error)
+	Create(ctx context.Context, user *EmissaryUser) error
+	Save(ctx context.Context, user *EmissaryUser) error
+	Get(ctx context.Context, email string) (*EmissaryUser, error)
+	Delete(ctx context.Context, email string) error
+}
+
+// EmissaryUser represents a user managed by Emissary (extends User).
+type EmissaryUser struct {
+	*usermanager.User
+
+	Enabled        bool     // kept, but cannot log in when false
+	SaltedPassword string   // the user's stored, salted password
+	Rules          []string // system rules, see below
+}
+
+type authErr struct {
+	message string
+}
+
+func (e *authErr) Error() string {
+	return e.message
 }
 
 func currentClaims(r *http.Request) *auth.Claims {
