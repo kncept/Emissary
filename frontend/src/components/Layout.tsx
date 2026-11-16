@@ -14,6 +14,7 @@ export default function Layout({ children, onLogout, canManageUsers = false }: L
   const navItems = [
     { path: '/', label: 'Inbox', icon: '📥' },
     { path: '/compose', label: 'Compose', icon: '✏️' },
+    { path: '/settings', label: 'Settings', icon: '⚙️' },
     ...(canManageUsers ? [{ path: '/users', label: 'Users', icon: '👥' }] : []),
   ];
 
