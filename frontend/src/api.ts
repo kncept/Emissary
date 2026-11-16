@@ -51,10 +51,12 @@ async function refreshAccessToken(): Promise<boolean> {
   return false;
 }
 
-async function authenticatedFetch(url: string, options: RequestInit = {}): Promise<Response> {
+export async function authenticatedFetch(url: string, options: RequestInit = {}): Promise<Response> {
   const token = getToken();
   const headers = new Headers(options.headers);
-  headers.set('Content-Type', 'application/json');
+  if (!headers.has('Content-Type') && options.body !== undefined) {
+    headers.set('Content-Type', 'application/json');
+  }
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
@@ -86,6 +88,75 @@ async function authenticatedFetch(url: string, options: RequestInit = {}): Promi
   }
 
   return response;
+}
+
+export async function getUsers(cursor?: string, pageSize = 20) {
+  const params = new URLSearchParams();
+  if (cursor) params.set('cursor', cursor);
+  if (pageSize) params.set('pageSize', String(pageSize));
+  const qs = params.toString();
+  const response = await authenticatedFetch(`${API_BASE}/user/${qs ? `?${qs}` : ''}`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to load users');
+  }
+  return data as { users: Array<{ email: string; enabled: boolean; admin: boolean; rules: string[] }>; nextCursor?: string };
+}
+
+export async function getUser(email: string) {
+  const response = await authenticatedFetch(`${API_BASE}/user/${encodeURIComponent(email)}`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to load user');
+  }
+  return data as { email: string; enabled: boolean; admin: boolean; rules: string[] };
+}
+
+export async function createUser(body: { email: string; password: string; enabled?: boolean; admin?: boolean; rules?: string[] }) {
+  const response = await authenticatedFetch(`${API_BASE}/user/`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to create user');
+  }
+  return data;
+}
+
+export async function updateUser(email: string, body: { enabled?: boolean; admin?: boolean; rules?: string[] }) {
+  const response = await authenticatedFetch(`${API_BASE}/user/${encodeURIComponent(email)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to update user');
+  }
+  return data;
+}
+
+export async function deleteUser(email: string) {
+  const response = await authenticatedFetch(`${API_BASE}/user/${encodeURIComponent(email)}`, {
+    method: 'DELETE',
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to delete user');
+  }
+  return data;
+}
+
+export async function changeUserPassword(email: string, body: { oldPassword?: string; newPassword: string }) {
+  const response = await authenticatedFetch(`${API_BASE}/user/${encodeURIComponent(email)}/password`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to change password');
+  }
+  return data;
 }
 
 export async function checkAuth(): Promise<AuthState> {
@@ -120,10 +191,12 @@ export async function login(username: string, password: string): Promise<LoginRe
   // Parse username from access token (JWT)
   let usernameFromToken = username;
   let admin = false;
+  let emissaryUserManagement = false;
   try {
     const payload = JSON.parse(atob(tokens.accessToken.split('.')[1]));
     usernameFromToken = payload.sub || username;
     admin = payload.Admin === true || payload.admin === true;
+    emissaryUserManagement = payload.EmissaryUserManagement === true || payload.emissaryUserManagement === true;
   } catch {
     // Ignore parse errors
   }
@@ -135,6 +208,7 @@ export async function login(username: string, password: string): Promise<LoginRe
     username: usernameFromToken,
     email: usernameFromToken,
     admin,
+    emissaryUserManagement,
   };
 }
 

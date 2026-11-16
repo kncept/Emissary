@@ -867,9 +867,10 @@ func handleLogout(w http.ResponseWriter, _ *http.Request) {
 func handleAuthCheck(w http.ResponseWriter, r *http.Request, authenticator *auth.Authenticator) {
 	if claims, ok := bearerClaims(authenticator, r); ok {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"authenticated": true,
-			"username":      claims.Subject,
-			"admin":         claims.Admin,
+			"authenticated":         true,
+			"username":              claims.Subject,
+			"admin":                 claims.Admin,
+			"emissaryUserManagement": claims.EmissaryUserManagement,
 		})
 		return
 	}

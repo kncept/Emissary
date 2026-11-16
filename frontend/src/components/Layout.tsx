@@ -4,15 +4,17 @@ import { useState } from 'react';
 interface LayoutProps {
   children?: React.ReactNode;
   onLogout: () => void;
+  canManageUsers?: boolean;
 }
 
-export default function Layout({ children, onLogout }: LayoutProps) {
+export default function Layout({ children, onLogout, canManageUsers = false }: LayoutProps) {
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const navItems = [
     { path: '/', label: 'Inbox', icon: '📥' },
     { path: '/compose', label: 'Compose', icon: '✏️' },
+    ...(canManageUsers ? [{ path: '/users', label: 'Users', icon: '👥' }] : []),
   ];
 
   return (

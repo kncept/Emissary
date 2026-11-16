@@ -14,6 +14,7 @@ export interface AuthState {
   username?: string;
   email?: string;
   admin?: boolean;
+  emissaryUserManagement?: boolean;
 }
 
 export interface LoginResponse {
@@ -23,6 +24,7 @@ export interface LoginResponse {
   username?: string;
   email?: string;
   admin?: boolean;
+  emissaryUserManagement?: boolean;
   error?: string;
 }
 
