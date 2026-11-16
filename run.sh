@@ -33,6 +33,12 @@ generate_api() {
 		go tool ogen -target ../api/auth/generated ../api/auth.yaml
 		go tool ogen -target ../api/users/generated ../api/users.yaml
 	)
+
+	# Generate TypeScript API client for the frontend
+	(
+		cd frontend
+		npx orval
+	)
 }
 
 # Build the frontend and place the output where the //go:embed

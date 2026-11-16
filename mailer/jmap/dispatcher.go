@@ -6,6 +6,40 @@ import (
 	"fmt"
 )
 
+// UnmarshalJSON implements custom JSON unmarshaling for Invocation.
+// JMAP uses a 3-element array format: [methodName, arguments, clientId]
+func (inv *Invocation) UnmarshalJSON(data []byte) error {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if len(raw) != 3 {
+		return fmt.Errorf("expected 3-element array for Invocation, got %d elements", len(raw))
+	}
+	
+	// Unmarshal method name
+	if err := json.Unmarshal(raw[0], &inv.Name); err != nil {
+		return err
+	}
+	
+	// Unmarshal arguments as map
+	if err := json.Unmarshal(raw[1], &inv.Arguments); err != nil {
+		return err
+	}
+	
+	// Unmarshal client ID
+	if err := json.Unmarshal(raw[2], &inv.ClientID); err != nil {
+		return err
+	}
+	
+	return nil
+}
+
+// MarshalJSON implements custom JSON marshaling for Invocation.
+func (inv Invocation) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]interface{}{inv.Name, inv.Arguments, inv.ClientID})
+}
+
 // Dispatcher handles routing JMAP method calls to the appropriate handler.
 type Dispatcher struct {
 	handler MethodHandler
@@ -76,81 +110,86 @@ func (d *Dispatcher) dispatchCall(ctx context.Context, accountID string, call In
 	args := call.Arguments
 	clientID := call.ClientID
 
+	// Marshal the entire args map to JSON for the handler methods
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return d.errorResponseFromError(methodName, clientID, err), nil
+	}
+
 	var result json.RawMessage
-	var err error
 
 	switch methodName {
 	// Core methods
 	case "Core/echo":
-		result, err = d.handler.CoreEcho(ctx, accountID, args[""])
+		result, err = d.handler.CoreEcho(ctx, accountID, argsJSON)
 
 	// Mailbox methods
 	case "Mailbox/get":
-		result, err = d.handler.MailboxGet(ctx, accountID, args[""])
+		result, err = d.handler.MailboxGet(ctx, accountID, argsJSON)
 	case "Mailbox/set":
-		result, err = d.handler.MailboxSet(ctx, accountID, args[""])
+		result, err = d.handler.MailboxSet(ctx, accountID, argsJSON)
 	case "Mailbox/changes":
-		result, err = d.handler.MailboxChanges(ctx, accountID, args[""])
+		result, err = d.handler.MailboxChanges(ctx, accountID, argsJSON)
 	case "Mailbox/query":
-		result, err = d.handler.MailboxQuery(ctx, accountID, args[""])
+		result, err = d.handler.MailboxQuery(ctx, accountID, argsJSON)
 	case "Mailbox/queryChanges":
-		result, err = d.handler.MailboxQueryChanges(ctx, accountID, args[""])
+		result, err = d.handler.MailboxQueryChanges(ctx, accountID, argsJSON)
 
 	// Thread methods
 	case "Thread/get":
-		result, err = d.handler.ThreadGet(ctx, accountID, args[""])
+		result, err = d.handler.ThreadGet(ctx, accountID, argsJSON)
 	case "Thread/changes":
-		result, err = d.handler.ThreadChanges(ctx, accountID, args[""])
+		result, err = d.handler.ThreadChanges(ctx, accountID, argsJSON)
 
 	// Email methods
 	case "Email/get":
-		result, err = d.handler.EmailGet(ctx, accountID, args[""])
+		result, err = d.handler.EmailGet(ctx, accountID, argsJSON)
 	case "Email/set":
-		result, err = d.handler.EmailSet(ctx, accountID, args[""])
+		result, err = d.handler.EmailSet(ctx, accountID, argsJSON)
 	case "Email/changes":
-		result, err = d.handler.EmailChanges(ctx, accountID, args[""])
+		result, err = d.handler.EmailChanges(ctx, accountID, argsJSON)
 	case "Email/query":
-		result, err = d.handler.EmailQuery(ctx, accountID, args[""])
+		result, err = d.handler.EmailQuery(ctx, accountID, argsJSON)
 	case "Email/queryChanges":
-		result, err = d.handler.EmailQueryChanges(ctx, accountID, args[""])
+		result, err = d.handler.EmailQueryChanges(ctx, accountID, argsJSON)
 	case "Email/copy":
-		result, err = d.handler.EmailCopy(ctx, accountID, args[""])
+		result, err = d.handler.EmailCopy(ctx, accountID, argsJSON)
 	case "Email/import":
-		result, err = d.handler.EmailImport(ctx, accountID, args[""])
+		result, err = d.handler.EmailImport(ctx, accountID, argsJSON)
 	case "Email/parse":
-		result, err = d.handler.EmailParse(ctx, accountID, args[""])
+		result, err = d.handler.EmailParse(ctx, accountID, argsJSON)
 
 	// SearchSnippet methods
 	case "SearchSnippet/get":
-		result, err = d.handler.SearchSnippetGet(ctx, accountID, args[""])
+		result, err = d.handler.SearchSnippetGet(ctx, accountID, argsJSON)
 
 	// Identity methods
 	case "Identity/get":
-		result, err = d.handler.IdentityGet(ctx, accountID, args[""])
+		result, err = d.handler.IdentityGet(ctx, accountID, argsJSON)
 	case "Identity/set":
-		result, err = d.handler.IdentitySet(ctx, accountID, args[""])
+		result, err = d.handler.IdentitySet(ctx, accountID, argsJSON)
 	case "Identity/changes":
-		result, err = d.handler.IdentityChanges(ctx, accountID, args[""])
+		result, err = d.handler.IdentityChanges(ctx, accountID, argsJSON)
 
 	// EmailSubmission methods
 	case "EmailSubmission/get":
-		result, err = d.handler.EmailSubmissionGet(ctx, accountID, args[""])
+		result, err = d.handler.EmailSubmissionGet(ctx, accountID, argsJSON)
 	case "EmailSubmission/set":
-		result, err = d.handler.EmailSubmissionSet(ctx, accountID, args[""])
+		result, err = d.handler.EmailSubmissionSet(ctx, accountID, argsJSON)
 	case "EmailSubmission/changes":
-		result, err = d.handler.EmailSubmissionChanges(ctx, accountID, args[""])
+		result, err = d.handler.EmailSubmissionChanges(ctx, accountID, argsJSON)
 	case "EmailSubmission/query":
-		result, err = d.handler.EmailSubmissionQuery(ctx, accountID, args[""])
+		result, err = d.handler.EmailSubmissionQuery(ctx, accountID, argsJSON)
 	case "EmailSubmission/queryChanges":
-		result, err = d.handler.EmailSubmissionQueryChanges(ctx, accountID, args[""])
+		result, err = d.handler.EmailSubmissionQueryChanges(ctx, accountID, argsJSON)
 
 	// VacationResponse methods
 	case "VacationResponse/get":
-		result, err = d.handler.VacationResponseGet(ctx, accountID, args[""])
+		result, err = d.handler.VacationResponseGet(ctx, accountID, argsJSON)
 	case "VacationResponse/set":
-		result, err = d.handler.VacationResponseSet(ctx, accountID, args[""])
+		result, err = d.handler.VacationResponseSet(ctx, accountID, argsJSON)
 	case "VacationResponse/changes":
-		result, err = d.handler.VacationResponseChanges(ctx, accountID, args[""])
+		result, err = d.handler.VacationResponseChanges(ctx, accountID, argsJSON)
 
 	// PushSubscription methods
 	case "PushSubscription/get":

@@ -273,6 +273,13 @@ func parseEmail(key, raw string) Email {
 	return email
 }
 
+// AddEmail implements the Storage interface.
+// S3Storage is primarily for receiving emails; adding emails is not fully supported.
+// This implementation returns an error indicating the operation is not supported.
+func (s *S3Storage) AddEmail(ctx context.Context, email *email.UserEmail) error {
+	return errors.New("AddEmail not supported on S3Storage")
+}
+
 // DeleteEmail implements the Storage interface. It resolves the id the same
 // way GetEmail does and deletes every matching object, so it returns
 // ErrNotFound only when no candidate key exists.

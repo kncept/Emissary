@@ -104,7 +104,8 @@ func TestLogin_InvalidJSON(t *testing.T) {
 func TestAuthMiddleware_ValidToken(t *testing.T) {
 	h, authenticator := newTestHandler()
 	token, _, _ := authenticator.Issue("user")
-	w := doRequest(h, http.MethodGet, "/api/emails", "", token)
+	// Test JMAP endpoint which requires auth
+	w := doRequest(h, http.MethodPost, "/api/", `{"using":["urn:ietf:params:jmap:mail"],"methodCalls":[["Email/query",{"accountId":"user","filter":{"inMailbox":"inbox"}}, "q1"]]}`, token)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -113,7 +114,7 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 
 func TestAuthMiddleware_InvalidToken(t *testing.T) {
 	h, _ := newTestHandler()
-	w := doRequest(h, http.MethodGet, "/api/emails", "", "invalid-token")
+	w := doRequest(h, http.MethodPost, "/api/", `{"using":["urn:ietf:params:jmap:mail"],"methodCalls":[["Email/query",{"accountId":"user","filter":{"inMailbox":"inbox"}}, "q1"]]}`, "invalid-token")
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
@@ -122,7 +123,7 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 
 func TestAuthMiddleware_MissingToken(t *testing.T) {
 	h, _ := newTestHandler()
-	w := doRequest(h, http.MethodGet, "/api/emails", "", "")
+	w := doRequest(h, http.MethodPost, "/api/", `{"using":["urn:ietf:params:jmap:mail"],"methodCalls":[["Email/query",{"accountId":"user","filter":{"inMailbox":"inbox"}}, "q1"]]}`, "")
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
@@ -164,5 +165,53 @@ func TestAuthCheck_NoToken(t *testing.T) {
 	}
 	if resp.Authenticated {
 		t.Error("expected authenticated=false when no token is sent")
+	}
+}
+
+func TestLoginThenAuthCheck(t *testing.T) {
+	h, _ := newTestHandler()
+
+	// Login (NoneManager only allows admin user)
+	w := doRequest(h, http.MethodPost, "/api/auth/login",
+		`{"username":"user","password":"pass"}`, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("login status = %d, want %d (body %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var loginResp struct {
+		AccessToken  string `json:"accessToken"`
+		RefreshToken string `json:"refreshToken"`
+		TokenType    string `json:"tokenType"`
+		ExpiresAt    string `json:"expiresAt"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &loginResp); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+	if loginResp.AccessToken == "" {
+		t.Fatal("expected non-empty accessToken")
+	}
+
+	// Use the returned token to call /api/auth/check
+	w = doRequest(h, http.MethodGet, "/api/auth/check", "", loginResp.AccessToken)
+	if w.Code != http.StatusOK {
+		t.Fatalf("auth/check status = %d, want %d (body %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var checkResp struct {
+		Authenticated bool   `json:"authenticated"`
+		Username      string `json:"username"`
+		Admin         bool   `json:"admin"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &checkResp); err != nil {
+		t.Fatalf("decode auth/check response: %v", err)
+	}
+	if !checkResp.Authenticated {
+		t.Error("expected authenticated=true")
+	}
+	if checkResp.Username != "user" {
+		t.Errorf("username = %q, want %q", checkResp.Username, "user")
+	}
+	if !checkResp.Admin {
+		t.Error("expected admin=true for admin user (NoneManager only allows admin)")
 	}
 }

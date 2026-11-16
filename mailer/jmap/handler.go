@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
+	"net/mail"
 	"strings"
 	"time"
 
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/metadata"
+	"github.com/kncept/Emissary/mailer/sender"
 	"github.com/kncept/Emissary/mailer/storage"
 	"github.com/kncept/Emissary/mailer/usermanager"
 )
@@ -44,14 +47,16 @@ type Handler struct {
 	storage  storage.Storage
 	metadata metadata.MetadataStore
 	userMgr  usermanager.UserManager
+	sender   sender.Sender
 }
 
 // NewHandler creates a new JMAP method handler.
-func NewHandler(store storage.Storage, meta metadata.MetadataStore, userMgr usermanager.UserManager) *Handler {
+func NewHandler(store storage.Storage, meta metadata.MetadataStore, userMgr usermanager.UserManager, mailSender sender.Sender) *Handler {
 	return &Handler{
 		storage:  store,
 		metadata: meta,
 		userMgr:  userMgr,
+		sender:   mailSender,
 	}
 }
 
@@ -525,12 +530,169 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 		}
 	}
 
-	// Create and Update are not implemented in this version
-	for id := range req.Create {
-		notCreated[id] = map[string]string{"type": "forbidden", "description": "Email creation not supported"}
+	// Handle create
+	for createID, createData := range req.Create {
+		createMap, ok := createData.(map[string]interface{})
+		if !ok {
+			notCreated[createID] = map[string]string{"type": "invalidProperties", "description": "Invalid create data"}
+			continue
+		}
+
+		// Extract email data
+		from := ""
+		if fromArr, ok := createMap["from"].([]interface{}); ok && len(fromArr) > 0 {
+			if f, ok := fromArr[0].(map[string]interface{}); ok {
+				from = f["email"].(string)
+			}
+		}
+
+		var to []email.Address
+		if toArr, ok := createMap["to"].([]interface{}); ok {
+			for _, t := range toArr {
+				if tm, ok := t.(map[string]interface{}); ok {
+					to = append(to, email.Address{Address: tm["email"].(string)})
+				}
+			}
+		}
+
+		var cc []email.Address
+		if ccArr, ok := createMap["cc"].([]interface{}); ok {
+			for _, c := range ccArr {
+				if cm, ok := c.(map[string]interface{}); ok {
+					cc = append(cc, email.Address{Address: cm["email"].(string)})
+				}
+			}
+		}
+
+		var bcc []email.Address
+		if bccArr, ok := createMap["bcc"].([]interface{}); ok {
+			for _, b := range bccArr {
+				if bm, ok := b.(map[string]interface{}); ok {
+					bcc = append(bcc, email.Address{Address: bm["email"].(string)})
+				}
+			}
+		}
+
+		subject := ""
+		if s, ok := createMap["subject"].(string); ok {
+			subject = s
+		}
+
+		var text string
+		var textBodySize int
+		if tbArr, ok := createMap["textBody"].([]interface{}); ok && len(tbArr) > 0 {
+			if tb, ok := tbArr[0].(map[string]interface{}); ok {
+				textBodySize = int(tb["size"].(float64))
+			}
+		}
+		if bvMap, ok := createMap["bodyValues"].(map[string]interface{}); ok {
+			for _, v := range bvMap {
+				if bv, ok := v.(map[string]interface{}); ok {
+					if val, ok := bv["value"].(string); ok {
+						text = val
+						break
+					}
+				}
+			}
+		}
+
+		// Generate a new ID for the email
+		newID := generateEmailID()
+
+		mailboxIDs := map[string]bool{}
+		if mbMap, ok := createMap["mailboxIds"].(map[string]interface{}); ok {
+			for k, v := range mbMap {
+				if b, ok := v.(bool); ok && b {
+					mailboxIDs[k] = true
+				}
+			}
+		}
+		if len(mailboxIDs) == 0 {
+			mailboxIDs["inbox"] = true
+		}
+
+		keywords := map[string]bool{}
+		if kwMap, ok := createMap["keywords"].(map[string]interface{}); ok {
+			for k, v := range kwMap {
+				if b, ok := v.(bool); ok && b {
+					keywords[k] = true
+				}
+			}
+		}
+
+		var inReplyTo []string
+	if irArr, ok := createMap["inReplyTo"].([]interface{}); ok {
+		for _, v := range irArr {
+			if s, ok := v.(string); ok {
+				inReplyTo = append(inReplyTo, s)
+			}
+		}
 	}
+	
+	var references []string
+	if refArr, ok := createMap["references"].([]interface{}); ok {
+		for _, v := range refArr {
+			if s, ok := v.(string); ok {
+				references = append(references, s)
+			}
+		}
+	}
+	
+	// Create the email
+	now := time.Now().UTC()
+	newEmail := &email.UserEmail{
+		ID:          newID,
+		From:        email.Address{Address: from},
+		To:          to,
+		Cc:          cc,
+		Bcc:         bcc,
+		Subject:     subject,
+		Date:        now,
+		Text:        text,
+		Size:        int64(textBodySize),
+		InReplyTo:   inReplyTo,
+		References:  references,
+	}
+
+		if err := h.storage.AddEmail(ctx, newEmail); err != nil {
+			notCreated[createID] = map[string]string{"type": "serverFail", "description": "Failed to save email: " + err.Error()}
+			continue
+		}
+
+		// Initialize metadata
+		if err := h.metadata.Save(ctx, metadata.EmailMetadata{
+			ID:      newID,
+			Read:    keywords["$seen"],
+			Flagged: keywords["$flagged"],
+		}); err != nil {
+			notCreated[createID] = map[string]string{"type": "serverFail", "description": "Failed to save metadata: " + err.Error()}
+			continue
+		}
+
+		created[createID] = map[string]interface{}{
+			"id": newID,
+		}
+	}
+
+	// Update is not implemented
 	for id := range req.Update {
 		notUpdated[id] = map[string]string{"type": "forbidden", "description": "Email update not supported"}
+	}
+
+	// Handle destroy
+	for _, id := range req.Destroy {
+		err := h.storage.DeleteEmail(ctx, id)
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				notDestroyed[id] = map[string]string{"type": "notFound", "description": "Email not found"}
+			} else {
+				notDestroyed[id] = map[string]string{"type": "serverFail", "description": err.Error()}
+			}
+		} else {
+			// Also delete metadata
+			h.metadata.Delete(ctx, id)
+			destroyed = append(destroyed, id)
+		}
 	}
 
 	resp := map[string]interface{}{
@@ -781,7 +943,179 @@ func (h *Handler) EmailSubmissionGet(ctx context.Context, accountID string, args
 }
 
 func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	return nil, fmt.Errorf("EmailSubmission/set not implemented")
+	var req struct {
+		AccountID string `json:"accountId"`
+		Create    map[string]struct {
+			IdentityID string `json:"identityId"`
+			EmailID    string `json:"emailId"`
+			Envelope   *struct {
+				MailFrom struct {
+					Email string `json:"email"`
+				} `json:"mailFrom"`
+				RcptTo []struct {
+					Email string `json:"email"`
+				} `json:"rcptTo"`
+			} `json:"envelope,omitempty"`
+			SendAt *string `json:"sendAt,omitempty"`
+		} `json:"create,omitempty"`
+		OnSuccessUpdateEmail *struct {
+			Keywords map[string]bool `json:"keywords"`
+		} `json:"onSuccessUpdateEmail,omitempty"`
+		OnSuccessDestroyEmail []string `json:"onSuccessDestroyEmail,omitempty"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, err
+	}
+
+	// Check if the user is admin
+	isAdmin := false
+	if user, err := h.userMgr.Lookup(ctx, accountID); err == nil {
+		isAdmin = user.Admin
+	}
+
+	created := make(map[string]interface{})
+	notCreated := make(map[string]interface{})
+
+	// For each submission to create
+	for createID, submission := range req.Create {
+		// Get the email to send
+		emailMsg, err := h.storage.GetEmail(ctx, submission.EmailID)
+		if err != nil {
+			notCreated[createID] = map[string]string{"type": "notFound", "description": "Email not found"}
+			continue
+		}
+
+		// Determine from address
+		var from string
+		if isAdmin {
+			// Admins can use custom from address from envelope
+			if submission.Envelope != nil && submission.Envelope.MailFrom.Email != "" {
+				from = submission.Envelope.MailFrom.Email
+			} else if emailMsg.From.Address != "" {
+				from = emailMsg.From.Address
+			} else {
+				// For replies, try to get the original recipient from the InReplyTo/References
+				var inReplyTo string
+				if len(emailMsg.InReplyTo) > 0 {
+					inReplyTo = emailMsg.InReplyTo[0]
+				} else if len(emailMsg.References) > 0 {
+					inReplyTo = emailMsg.References[0]
+				}
+				if inReplyTo != "" {
+					if original, err := h.storage.GetEmail(ctx, inReplyTo); err == nil && len(original.To) > 0 {
+						from = original.To[0].Address
+					}
+				}
+				if from == "" {
+					from = h.sender.From()
+				}
+			}
+		} else {
+			// Ordinary users must send as themselves
+			from = accountID
+		}
+
+		// Validate from address
+		if from != "" {
+			parsed, err := mail.ParseAddress(from)
+			if err != nil {
+				notCreated[createID] = map[string]string{"type": "invalidProperties", "description": "Invalid from address"}
+				continue
+			}
+			from = parsed.Address
+		}
+		if from == "" {
+			from = h.sender.From()
+		}
+
+		// Determine recipients from the email's headers
+		var toAddresses []email.Address
+		var ccAddresses []email.Address
+		var bccAddresses []email.Address
+		for _, addr := range emailMsg.To {
+			toAddresses = append(toAddresses, addr)
+		}
+		for _, addr := range emailMsg.Cc {
+			ccAddresses = append(ccAddresses, addr)
+		}
+		for _, addr := range emailMsg.Bcc {
+			bccAddresses = append(bccAddresses, addr)
+		}
+
+		// If envelope is provided, validate that all recipients in the email are covered by the envelope's RcptTo
+		if submission.Envelope != nil && len(submission.Envelope.RcptTo) > 0 {
+			envelopeRecipients := make(map[string]bool)
+			for _, rcpt := range submission.Envelope.RcptTo {
+				parsed, err := mail.ParseAddress(rcpt.Email)
+				if err != nil {
+					notCreated[createID] = map[string]string{"type": "invalidRecipients", "description": "Invalid recipient address in envelope"}
+					continue
+				}
+				envelopeRecipients[parsed.Address] = true
+			}
+			// Check that all To, Cc, Bcc recipients are in the envelope
+			for _, addr := range emailMsg.To {
+				if !envelopeRecipients[addr.Address] {
+					notCreated[createID] = map[string]string{"type": "forbidden", "description": "Recipient not in envelope: " + addr.Address}
+					continue
+				}
+			}
+			for _, addr := range emailMsg.Cc {
+				if !envelopeRecipients[addr.Address] {
+					notCreated[createID] = map[string]string{"type": "forbidden", "description": "Recipient not in envelope: " + addr.Address}
+					continue
+				}
+			}
+			for _, addr := range emailMsg.Bcc {
+				if !envelopeRecipients[addr.Address] {
+					notCreated[createID] = map[string]string{"type": "forbidden", "description": "Recipient not in envelope: " + addr.Address}
+					continue
+				}
+			}
+		}
+
+		if len(toAddresses) == 0 && len(ccAddresses) == 0 && len(bccAddresses) == 0 {
+			notCreated[createID] = map[string]string{"type": "noRecipients", "description": "No recipients"}
+			continue
+		}
+
+		// Create the message to send
+		message := &email.UserEmail{
+			From:    email.Address{Address: from},
+			To:      toAddresses,
+			Cc:      ccAddresses,
+			Bcc:     bccAddresses,
+			Subject: emailMsg.Subject,
+			Date:    time.Now().UTC(),
+			Text:    emailMsg.Text,
+		}
+
+		// Send the email
+		if err := h.sender.Send(ctx, message); err != nil {
+			notCreated[createID] = map[string]string{"type": "serverFail", "description": "Failed to send email: " + err.Error()}
+			continue
+		}
+
+		// Success - create the submission object
+		created[createID] = map[string]interface{}{
+			"id":         submission.EmailID, // Use the email ID as submission ID
+			"identityId": submission.IdentityID,
+			"emailId":    submission.EmailID,
+			"envelope": map[string]interface{}{
+				"mailFrom": map[string]string{"email": from},
+				"rcptTo":   toAddresses,
+			},
+		}
+	}
+
+	resp := map[string]interface{}{
+		"accountId": req.AccountID,
+		"oldState":  h.getState(ctx),
+		"newState":  h.getState(ctx),
+		"created":   created,
+		"notCreated": notCreated,
+	}
+	return json.Marshal(resp)
 }
 
 func (h *Handler) EmailSubmissionChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
@@ -1227,4 +1561,11 @@ func (h *Handler) matchesFilter(e *email.UserEmail, filter *EmailFilter) bool {
 
 func stringPtr(s string) *string {
 	return &s
+}
+
+func generateEmailID() string {
+	// Generate a simple unique ID using timestamp and random bytes
+	b := make([]byte, 8)
+	rand.Read(b)
+	return fmt.Sprintf("%x%d", b, time.Now().UnixNano())
 }

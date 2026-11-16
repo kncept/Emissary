@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { formatDistanceToNow, parseISO } from 'date-fns';
-import { getEmails, deleteEmail } from '../api';
-import type { Email } from '../types';
+import { getEmails, deleteEmail } from '../api.ts';
+import type { Email } from '../types.ts';
 
 interface EmailListProps {
   admin?: boolean;

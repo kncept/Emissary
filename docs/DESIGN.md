@@ -77,6 +77,7 @@ administrator. Authorization is enforced in the API handler:
 | --- | --- | --- |
 | Backend | Go, single module (`mailer/`) | One static binary, strong stdlib HTTP + MIME/mail parsing, easy Lambda custom runtime. |
 | Frontend | React 19 + Vite + TypeScript SPA | Small client; built ahead of time and embedded into the Go binary with `//go:embed` so the app is one artifact with no separate static hosting. |
+| API contract | OpenAPI 3.1 specs (`api/*.yaml`) + generated stubs | Single source of truth; `ogen` generates Go server/client interfaces, OpenAPI-to-TypeScript generates typed frontend client. Eliminates drift between server and client. |
 | Inbound transport | SES receipt rules → S3 | No server to run; raw messages are durable and cheap; the receipt rule's S3 action needs no consumer Lambda. |
 | Outbound transport | SES `SendEmail` (v2 API) | Same verified identity as inbound; no SMTP client to maintain. |
 | Message state | DynamoDB | Read/flag state must survive Lambda cold starts; a one-column table is the cheapest AWS answer. Local alternatives: memory or a JSON file. |

@@ -9,14 +9,20 @@
 
 ## Build
 
-`./run.sh build` runs three steps:
+`./run.sh build` runs four steps:
 
-1. **Frontend**: `npm ci && npm run build` in `frontend/`. Vite
+1. **Generate API interfaces**: `generate_api` (see below) produces
+   Go server/client stubs from the OpenAPI specs for the backend and
+   TypeScript types + a typed API client for the frontend. This step
+   runs first so both sides compile against the same contract.
+2. **Frontend**: `npm ci && npm run build` in `frontend/`. Vite
    compiles the SPA into `mailer/gui/frontend/dist` (the output
-   directory is set in `frontend/vite.config.ts`).
-2. **Backends**: `go build` of `cmd/frontend` and `cmd/sns-receiver`
-   into `.build/`.
-3. **Lambda binary**: `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build
+   directory is set in `frontend/vite.config.ts`). The frontend build
+   consumes the generated TypeScript API client.
+3. **Backends**: `go build` of `cmd/frontend` and `cmd/sns-receiver`
+   into `.build/`. The Go code uses the generated server interfaces
+   from step 1.
+4. **Lambda binary**: `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build
    -o bootstrap` inside `mailer/cmd/frontend`. The CDK app deploys
    exactly this file as the custom-runtime handler, so it must stay
    next to the package. `./run.sh build:lambda` runs just this step.
@@ -24,6 +30,30 @@
 The frontend must be built **before** any `go build`/`go test` of the
 `mailer` module: `//go:embed all:frontend/dist` in `mailer/gui` fails
 when `dist/` is missing.
+
+### API interface generation
+
+`run.sh generate_api` (invoked automatically by `build` and `test`)
+runs two generators against the three OpenAPI documents in `api/`:
+
+- **Backend (Go)**: `go tool ogen` targeting `api/auth/generated`,
+  `api/users/generated`, `api/jmap/generated`. Outputs include:
+  - Go types for all request/response schemas
+  - Server interfaces (`Handler` per operation group) that the
+    application implements
+  - Client interfaces for calling other Emissary instances
+  - Request decoders, response encoders, validators, router, middleware
+- **Frontend (TypeScript)**: An OpenAPI-to-TypeScript generator
+  (e.g., `openapi-typescript` + `openapi-fetch` or `orval`) targeting
+  `frontend/src/api/generated`. Outputs include:
+  - TypeScript interfaces for all request/response bodies and params
+  - A fully typed fetch client (`createClient`) with method signatures
+    matching the OpenAPI `operationId`s
+  - Zod schemas or equivalent for runtime validation if desired
+
+The generated frontend client is imported by `frontend/src/api.ts`
+(which becomes a thin re-export or wrapper for auth token handling),
+and the generated types replace the manual `frontend/src/types.ts`.
 
 ## Test
 

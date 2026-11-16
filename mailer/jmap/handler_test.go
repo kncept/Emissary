@@ -8,6 +8,7 @@ import (
 
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/metadata"
+	"github.com/kncept/Emissary/mailer/sender"
 	"github.com/kncept/Emissary/mailer/storage"
 	"github.com/kncept/Emissary/mailer/usermanager"
 )
@@ -40,8 +41,9 @@ func TestHandler_EmailGet(t *testing.T) {
 		AdminUsername: "admin",
 		AdminPassword: "password",
 	})
+	testSender := sender.NewLogSender("test@example.com")
 
-	handler := NewHandler(memStorage, memMeta, userMgr)
+	handler := NewHandler(memStorage, memMeta, userMgr, testSender)
 
 	// Test Email/get
 	args := json.RawMessage(`{"accountId": "test", "ids": ["test1"]}`)
@@ -91,8 +93,9 @@ func TestHandler_MailboxGet(t *testing.T) {
 		AdminUsername: "admin",
 		AdminPassword: "password",
 	})
+	testSender := sender.NewLogSender("test@example.com")
 
-	handler := NewHandler(memStorage, memMeta, userMgr)
+	handler := NewHandler(memStorage, memMeta, userMgr, testSender)
 
 	args := json.RawMessage(`{"accountId": "test"}`)
 	result, err := handler.MailboxGet(ctx, "test", args)
@@ -153,8 +156,9 @@ func TestHandler_EmailQuery(t *testing.T) {
 		AdminUsername: "admin",
 		AdminPassword: "password",
 	})
+	testSender := sender.NewLogSender("test@example.com")
 
-	handler := NewHandler(memStorage, memMeta, userMgr)
+	handler := NewHandler(memStorage, memMeta, userMgr, testSender)
 
 	// Test Email/query with limit
 	args := json.RawMessage(`{"accountId": "test", "limit": 3}`)

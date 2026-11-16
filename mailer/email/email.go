@@ -23,17 +23,19 @@ type Address struct {
 // To parse a raw RFC 5322 message into a UserEmail, use ParseWireFormat()
 // followed by WireFormatEmail.ToUserEmail(), or use the convenience function Parse().
 type UserEmail struct {
-	ID      string    `json:"id"`
-	From    Address   `json:"from"`
-	To      []Address `json:"to"`
-	Cc      []Address `json:"cc,omitempty"`
-	Bcc     []Address `json:"bcc,omitempty"`
-	Subject string    `json:"subject"`
-	Date    time.Time `json:"date"`
-	Text    string    `json:"text"`
-	HTML    string    `json:"html,omitempty"`
-	Read    bool      `json:"read"`
-	Size    int64     `json:"size,omitempty"`
+	ID           string    `json:"id"`
+	From         Address   `json:"from"`
+	To           []Address `json:"to"`
+	Cc           []Address `json:"cc,omitempty"`
+	Bcc          []Address `json:"bcc,omitempty"`
+	Subject      string    `json:"subject"`
+	Date         time.Time `json:"date"`
+	Text         string    `json:"text"`
+	HTML         string    `json:"html,omitempty"`
+	Read         bool      `json:"read"`
+	Size         int64     `json:"size,omitempty"`
+	InReplyTo    []string  `json:"inReplyTo,omitempty"`
+	References   []string  `json:"references,omitempty"`
 }
 
 // EncodeID turns a storage key into an opaque, URL-safe identifier.

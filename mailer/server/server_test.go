@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -54,6 +55,22 @@ func (m *mockStorage) DeleteEmail(ctx context.Context, id string) error {
 		}
 	}
 	return storage.ErrNotFound
+}
+
+func (m *mockStorage) AddEmail(ctx context.Context, email *email.UserEmail) error {
+	if m.err != nil {
+		return m.err
+	}
+	if email == nil || email.ID == "" {
+		return errors.New("invalid email")
+	}
+	for _, e := range m.emails {
+		if e.ID == email.ID {
+			return errors.New("email already exists")
+		}
+	}
+	m.emails = append(m.emails, email)
+	return nil
 }
 
 type mockSender struct {

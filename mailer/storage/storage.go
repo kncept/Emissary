@@ -17,6 +17,9 @@ type Storage interface {
 
 	ListAllEmails(ctx context.Context) ([]*email.UserEmail, error)
 	GetEmail(ctx context.Context, id string) (*email.UserEmail, error)
+	// AddEmail adds a new email to the store. Returns ErrNotFound if
+	// an email with the same ID already exists.
+	AddEmail(ctx context.Context, email *email.UserEmail) error
 	// DeleteEmail removes the message with the given id. It returns
 	// ErrNotFound when no such message exists.
 	DeleteEmail(ctx context.Context, id string) error

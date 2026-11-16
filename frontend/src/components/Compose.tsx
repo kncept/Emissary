@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getEmail, sendEmail } from '../api';
+import { getEmail, sendEmail } from '../api.ts';
+import type { Email } from '../types.ts';
 
 interface ComposeProps {
   admin?: boolean;
@@ -26,7 +27,7 @@ export default function Compose({ admin = false, currentUser }: ComposeProps) {
 
     let active = true;
     getEmail(id)
-      .then((original) => {
+      .then((original: Email) => {
         if (!active) return;
         setTo(original.from);
         setSubject(original.subject ? `Re: ${original.subject}` : 'Re:');

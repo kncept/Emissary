@@ -174,6 +174,24 @@ key, so a key prefix would change every id.
 - `email.EncodeID`/`DecodeID` exist to make storage keys URL-safe, but
   the current S3 layout uses raw SES message ids directly as API ids.
 
+## Generated interface stubs
+
+Both the backend and the frontend use interface stubs generated from
+the OpenAPI specifications (`api/auth.yaml`, `api/users.yaml`,
+`api/jmap.yaml`). This ensures the wire contract is the single source
+of truth and eliminates drift between server and client types.
+
+- **Backend (Go)**: `run.sh generate_api` invokes `go tool ogen` to
+  produce Go types, request/response decoders, validators, router
+  middleware, and server/client interface stubs under `api/*/generated/`.
+  The handler implements the generated server interfaces.
+- **Frontend (TypeScript)**: The OpenAPI specs are used to generate
+  TypeScript types and a typed API client (via `openapi-typescript` /
+  `openapi-fetch` or equivalent). The generated client replaces
+  hand-written fetch wrappers and the manual `types.ts` definitions,
+  so the frontend consumes the exact same request/response shapes the
+  backend produces.
+
 ## Deployment shape
 
 Three CDK stacks (see [DEPLOYMENT.md](DEPLOYMENT.md)):

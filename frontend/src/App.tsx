@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
-import type { AuthState } from './types';
-import { checkAuth, logout as apiLogout } from './api';
+import type { AuthState } from './types.ts';
+import { checkAuth, logout as apiLogout } from './api.ts';
 import Login from './components/Login';
 import EmailList from './components/EmailList';
 import EmailView from './components/EmailView';

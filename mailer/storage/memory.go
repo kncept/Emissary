@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 
@@ -23,6 +24,20 @@ func NewMemoryStorage() *MemoryStorage {
 
 func (s *MemoryStorage) Name() string {
 	return "MemoryStorage"
+}
+
+// AddEmail implements the Storage interface.
+func (s *MemoryStorage) AddEmail(_ context.Context, e *email.UserEmail) error {
+	if e == nil || e.ID == "" {
+		return errors.New("invalid email")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.emails[e.ID]; ok {
+		return errors.New("email already exists")
+	}
+	s.emails[e.ID] = clone(e)
+	return nil
 }
 
 // Add inserts an email. It is not part of Storage and exists for local

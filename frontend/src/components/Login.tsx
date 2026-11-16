@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { login } from '../api';
-import type { AuthState } from '../types';
+import { login } from '../api.ts';
+import type { AuthState } from '../types.ts';
 
 interface LoginProps {
   onAuthenticated: (state: AuthState) => void;

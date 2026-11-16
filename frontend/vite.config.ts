@@ -14,4 +14,28 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/.well-known/jmap': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/upload': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/download': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/eventsource': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+    },
+  },
 })

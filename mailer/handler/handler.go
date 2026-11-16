@@ -206,8 +206,8 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, metaStore metadata.MetadataStore, mailSender sender.Sender, userManager usermanager.UserManager) http.Handler {
 	mux := http.NewServeMux()
 
-	// Create JMAP handler
-	jmapHandler := jmap.NewHandler(emailStore, metaStore, userManager)
+	// Create JMAP handler with sender for EmailSubmission
+	jmapHandler := jmap.NewHandler(emailStore, metaStore, userManager, mailSender)
 	dispatcher := jmap.NewDispatcher(jmapHandler)
 
 	mux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, r *http.Request) {
@@ -305,24 +305,6 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 		}
 	}
 
-	mux.Handle("GET /api/emails", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleListEmails(w, r, emailStore, metaStore)
-	})))
-	mux.Handle("GET /api/emails/{id}", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleGetEmail(w, r, emailStore, metaStore)
-	})))
-	mux.Handle("POST /api/emails/{id}/read", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleMarkRead(w, r, emailStore, metaStore)
-	})))
-	mux.Handle("POST /api/emails/{id}/flag", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleMarkFlagged(w, r, emailStore, metaStore)
-	})))
-	mux.Handle("DELETE /api/emails/{id}", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleDeleteEmail(w, r, emailStore, metaStore)
-	})))
-	mux.Handle("POST /api/emails/send", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleSendEmail(w, r, emailStore, mailSender)
-	})))
 	mux.Handle("POST /api/auth/logout", requireAuth(authenticator, http.HandlerFunc(handleLogout)))
 
 	notFound := func(w http.ResponseWriter, _ *http.Request) {

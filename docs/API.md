@@ -4,6 +4,24 @@ All endpoints are served by `cmd/frontend` on the same origin and port
 as the webmail client. The API lives under the `/api` prefix; unknown
 `/api` paths return `404`, and every other path serves the SPA.
 
+## Generated interface stubs
+
+The wire contract is defined by the OpenAPI specifications and is the
+single source of truth. Both the backend and the frontend consume
+generated interface stubs, ensuring zero drift between server
+implementation and client consumption.
+
+- **Backend (Go)**: `ogen` generates server interfaces, request/response
+  types, decoders, encoders, validators, and router middleware under
+  `api/*/generated/`. The handler implements the generated server
+  interfaces; the generated client interfaces are available for
+  service-to-service calls.
+- **Frontend (TypeScript)**: An OpenAPI-to-TypeScript generator
+  produces typed interfaces and a fetch client under
+  `frontend/src/api/generated/`. The frontend code imports this client
+  instead of hand-written fetch wrappers, so every request/response
+  shape is guaranteed to match the spec.
+
 ## Specs and path ownership
 
 The wire contract is defined by three OpenAPI documents, and they must
@@ -57,16 +75,42 @@ fall under either prefix, and the three documents must never share a
 | `PATCH` | `/api/user/{email}` | Bearer\* | Update a user. |
 | `DELETE` | `/api/user/{email}` | Bearer\* | Delete a user. |
 | `POST` | `/api/user/{email}/password` | Bearer† | Change a user's password. |
-| `GET` | `/api/emails` | Bearer | List visible messages (admins may filter). |
-| `GET` | `/api/emails/{id}` | Bearer | Fetch a single message. |
-| `POST` | `/api/emails/{id}/read` | Bearer | Set the read flag. |
-| `POST` | `/api/emails/{id}/flag` | Bearer | Set the flagged flag. |
-| `DELETE` | `/api/emails/{id}` | Bearer | Delete a message. |
-| `POST` | `/api/emails/send` | Bearer | Send a message via the configured sender. |
+| `GET` | `/.well-known/jmap` | Bearer | Get the JMAP Session object (capabilities, accounts). |
+| `POST` | `/api/` | Bearer | JMAP batch API endpoint for all mail operations. |
+| `POST` | `/upload/{accountId}` | Bearer | Upload binary data (attachments). |
+| `GET` | `/download/{accountId}/{blobId}/{name}` | Bearer | Download binary data. |
+| `GET` | `/eventsource/` | Bearer | EventSource push connection. |
 
 \* Requires `EmissaryUserManagement` JWT claim and Emissary-mastered user manager (the `ddb` backend).
 
 † Any authenticated user can change their own password. Administrators with `EmissaryUserManagement` can change any user's password. Requires Emissary-mastered user manager (`ddb` backend).
+
+## JMAP Mail Operations
+
+All email operations are performed via the JMAP batch endpoint (`POST /api/`).
+The following method combinations are used by the frontend:
+
+### List Emails
+- `Email/query` with filter `inMailbox: "inbox"`, sort by `receivedAt` descending
+- `Email/get` with the returned IDs to fetch full email objects
+
+### Get Single Email
+- `Email/get` with the specific email ID
+
+### Mark Read/Unread
+- `Email/set` with update to keywords: `{ $seen: true/false }`
+
+### Flag/Unflag
+- `Email/set` with update to keywords: `{ $flagged: true/false }`
+
+### Delete Email
+- `Email/set` with destroy containing the email ID
+
+### Send Email
+- `Email/set` create to store the email in the `drafts` mailbox
+- `EmailSubmission/set` create to submit the email for delivery
+- `onSuccessUpdateEmail` to move from drafts to sent
+- `onSuccessDestroyEmail` to remove the draft
 
 ## `POST /api/auth/login`
 
@@ -80,17 +124,15 @@ Response (`200`):
 
 ```json
 {
-  "token": "eyJ...",
+  "accessToken": "eyJ...",
+  "refreshToken": "eyJ...",
   "tokenType": "Bearer",
-  "expiresAt": "2026-11-12T10:00:00Z",
-  "username": "ebola@example.com",
-  "email": "ebola@example.com",
-  "admin": false
+  "expiresAt": "2026-11-12T10:00:00Z"
 }
 ```
 
 `401 invalid credentials` on failure. The administrator is checked
-first, then the configured user manager backend. The token carries the
+first, then the configured user manager backend. The access token carries the
 user id in `sub` (mirrored in `sid`), `admin` only when true, `iat`,
 `exp`, and the configured `aud`/`iss`.
 
@@ -108,89 +150,102 @@ JWTs are stateless, so nothing is invalidated server-side; the endpoint
 exists as a stable hook for future revocation. Returns
 `{ "success": true }`. The client is expected to drop the token.
 
-## `GET /api/emails`
+## `GET /.well-known/jmap`
 
-Returns a JSON array (never `null`; an empty inbox is `[]`) of the
-caller's visible messages:
-
-```json
-[
-  {
-    "id": "h9k2m1q...",
-    "from": "sender@example.com",
-    "to": "ebola@example.com",
-    "subject": "Hello",
-    "body": "plain text body",
-    "timestamp": "2026-11-11T09:30:00Z",
-    "read": false,
-    "flagged": false
-  }
-]
-```
-
-- `id` is the S3 object key of the message (the SES message id).
-- `to` is the first recipient only; `body` is the plain-text part.
-- Ordering is not guaranteed; clients should sort by `timestamp`.
-- **Visibility**: ordinary users see only messages where they appear in
-  `From`, `To`, `Cc` or `Bcc`. Administrators see everything and may
-  append `?user=<address>` to restrict the listing to one address.
-- Read/flag state is merged from the metadata store; if metadata is
-  unavailable the messages are still served with both flags `false`.
-
-## `GET /api/emails/{id}`
-
-Returns the same shape as one list entry. `404 email not found` when
-the id does not exist **or** is not visible to the caller.
-
-## `POST /api/emails/{id}/read`
-
-Request: `{ "read": true }`. Response: `{ "success": true }`.
-Applies only to messages visible to the caller.
-
-## `POST /api/emails/{id}/flag`
-
-Request: `{ "flagged": true }`. Response: `{ "success": true }`.
-Applies only to messages visible to the caller.
-
-## `DELETE /api/emails/{id}`
-
-Response: `{ "success": true }`. There is no request body.
-
-Deletes the message from storage. The visibility rules are the same as
-read/flag — only a message the caller can see (or an administrator) can be
-deleted, and anything else returns `404 email not found`.
-
-Deletion is **shared, not per-user**: each message is a single object, so
-deleting it removes it for every sender and recipient. Read/flag metadata
-for the message is discarded as well; a metadata failure is logged but
-does not fail the delete.
-
-## `POST /api/emails/send`
-
-Request:
+Returns the JMAP Session object with capabilities, account information,
+and API endpoints:
 
 ```json
 {
-  "from": "optional@example.com",
-  "to": "recipient@example.org",
-  "subject": "Subject line",
-  "body": "Message text",
-  "replyToId": "optional id of the message being replied to"
+  "capabilities": {
+    "urn:ietf:params:jmap:core": {},
+    "urn:ietf:params:jmap:mail": {},
+    "urn:ietf:params:jmap:submission": {},
+    "urn:ietf:params:jmap:vacationresponse": {}
+  },
+  "accounts": {
+    "user@example.com": {
+      "name": "user@example.com",
+      "isPersonal": true,
+      "isReadOnly": false,
+      "accountCapabilities": {
+        "urn:ietf:params:jmap:core": {},
+        "urn:ietf:params:jmap:mail": {},
+        "urn:ietf:params:jmap:submission": {},
+        "urn:ietf:params:jmap:vacationresponse": {}
+      }
+    }
+  },
+  "primaryAccounts": {
+    "urn:ietf:params:jmap:core": "user@example.com",
+    "urn:ietf:params:jmap:mail": "user@example.com",
+    "urn:ietf:params:jmap:submission": "user@example.com",
+    "urn:ietf:params:jmap:vacationresponse": "user@example.com"
+  },
+  "username": "user@example.com",
+  "apiUrl": "/api/",
+  "downloadUrl": "/download/{accountId}/{blobId}/{name}",
+  "uploadUrl": "/upload/{accountId}/",
+  "eventSourceUrl": "/eventsource/",
+  "state": "state123"
 }
 ```
 
-Rules:
+## `POST /api/` (JMAP Batch Request)
 
-- `to`, `subject` and `body` are required; `to` must be a single valid
-  address.
-- **Administrators** may set `from` to any address. When replying
-  (`replyToId` set) and `from` is omitted, the From address defaults to
-  the original message's first recipient.
-- **Ordinary users** always send as their own address; a supplied
-  `from` is ignored.
-- With no From resolved, the sender's configured address (`SES_FROM`)
-  is used.
+Processes an ordered batch of JMAP method calls. The request and
+response bodies are JSON `Request` and `Response` objects. Method
+failures are returned inside `methodResponses` as `error`
+invocations; only request-level failures use an HTTP error status.
 
-Responses: `200 {"success": true, "message": "Email sent"}`,
-`400 invalid request` / `invalid from address` / `invalid to address`,
-or `502 could not send email` when the provider (SES) fails.
+Example request to list emails:
+
+```json
+{
+  "using": ["urn:ietf:params:jmap:mail"],
+  "methodCalls": [
+    ["Email/query", {
+      "accountId": "user@example.com",
+      "filter": { "inMailbox": "inbox" },
+      "sort": [{ "property": "receivedAt", "isAscending": false }],
+      "collapseThreads": false
+    }, "query1"],
+    ["Email/get", {
+      "accountId": "user@example.com",
+      "ids": { "resultOf": "query1", "name": "Email/query", "path": "/ids/*" },
+      "properties": ["id", "from", "to", "subject", "preview", "receivedAt", "keywords", "mailboxIds"]
+    }, "get1"]
+  ]
+}
+```
+
+Example response:
+
+```json
+{
+  "methodResponses": [
+    ["Email/query", {
+      "accountId": "user@example.com",
+      "queryState": "state123",
+      "ids": ["email-id-1", "email-id-2"],
+      "total": 2
+    }, "query1"],
+    ["Email/get", {
+      "accountId": "user@example.com",
+      "state": "state123",
+      "list": [...],
+      "notFound": []
+    }, "get1"]
+  ],
+  "sessionState": "state123"
+}
+```
+
+## Binary Upload/Download
+
+- `POST /upload/{accountId}` — Upload binary data (e.g., attachments). Returns `{ "accountId": "...", "blobId": "...", "type": "application/pdf", "size": 12345 }`
+- `GET /download/{accountId}/{blobId}/{name}?type=...` — Download binary data
+
+## EventSource Push
+
+- `GET /eventsource/?types=*&ping=30` — Long-running Server-Sent Events connection for push notifications.

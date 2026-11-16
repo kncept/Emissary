@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { parseISO, format } from 'date-fns';
-import { getEmail, markRead, markFlagged, deleteEmail } from '../api';
-import type { Email } from '../types';
+import { getEmail, markRead, markFlagged, deleteEmail } from '../api.ts';
+import type { Email } from '../types.ts';
 
 export default function EmailView() {
   const { id } = useParams<{ id: string }>();
