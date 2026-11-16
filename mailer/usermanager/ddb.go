@@ -3,7 +3,6 @@ package usermanager
 import (
 	"context"
 	"crypto/pbkdf2"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -18,16 +17,28 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
 	defaultUserPageSize = 20
 	maxUserPageSize     = 100
 
+	// Password hash scheme constants (legacy, kept for migration)
 	passwordHashScheme     = "pbkdf2-sha256"
 	passwordHashIterations = 210_000
 	passwordSaltBytes      = 16
 	passwordKeyBytes       = 32
+
+	// bcrypt settings (default for new passwords)
+	bcryptCost = 12
+
+	// argon2 settings
+	argon2Time    = 1
+	argon2Memory  = 64 * 1024
+	argon2Threads = 4
+	argon2KeyLen  = 32
 )
 
 // ddbClient is the subset of the DynamoDB client used by DdbManager. It is an
@@ -60,6 +71,7 @@ type ddbUser struct {
 	Admin          bool     `dynamodbav:"admin"`
 	Enabled        bool     `dynamodbav:"enabled"`
 	SaltedPassword string   `dynamodbav:"saltedPassword"`
+	Salt           string   `dynamodbav:"salt"`
 	Rules          []string `dynamodbav:"rules"`
 }
 
@@ -94,7 +106,7 @@ func (m *DdbManager) Authenticate(ctx context.Context, username, password string
 	// Verify the password before revealing that the account is disabled, so a
 	// disabled user with a wrong password is indistinguishable from any other
 	// failed login.
-	if !checkPassword(user.SaltedPassword, password) {
+	if !checkPassword(user.Salt, user.SaltedPassword, password) {
 		return nil, ErrInvalidCredentials
 	}
 	if !user.Enabled {
@@ -213,11 +225,13 @@ func (m *DdbManager) Create(ctx context.Context, user *EmissaryUser) error {
 		user.Username = id
 	}
 
-	if user.SaltedPassword != "" && !isPasswordHash(user.SaltedPassword) {
-		hashed, err := hashPassword(user.SaltedPassword)
+	if user.SaltedPassword != "" && user.Salt == "" {
+		// Plaintext password provided, hash it with default (bcrypt)
+		salt, hashed, err := hashPassword(user.SaltedPassword)
 		if err != nil {
 			return err
 		}
+		user.Salt = salt
 		user.SaltedPassword = hashed
 	}
 
@@ -357,14 +371,15 @@ func (m *DdbManager) ChangePassword(ctx context.Context, email, oldPassword, new
 	if err != nil {
 		return err
 	}
-	if oldPassword != "" && !checkPassword(user.SaltedPassword, oldPassword) {
+	if oldPassword != "" && !checkPassword(user.Salt, user.SaltedPassword, oldPassword) {
 		return ErrInvalidCredentials
 	}
 
-	hashed, err := hashPassword(newPassword)
+	salt, hashed, err := hashPassword(newPassword)
 	if err != nil {
 		return err
 	}
+	user.Salt = salt
 	user.SaltedPassword = hashed
 	return m.Save(ctx, user)
 }
@@ -426,6 +441,7 @@ func ddbUserFrom(user *EmissaryUser) ddbUser {
 		Admin:          user.Admin,
 		Enabled:        user.Enabled,
 		SaltedPassword: user.SaltedPassword,
+		Salt:           user.Salt,
 		Rules:          user.Rules,
 	}
 }
@@ -444,53 +460,117 @@ func (u ddbUser) emissaryUser() *EmissaryUser {
 		},
 		Enabled:        u.Enabled,
 		SaltedPassword: u.SaltedPassword,
+		Salt:           u.Salt,
 		Rules:          rules,
 	}
 }
 
-func isPasswordHash(value string) bool {
-	return strings.HasPrefix(value, passwordHashScheme+"$")
-}
-
-func hashPassword(password string) (string, error) {
-	salt := make([]byte, passwordSaltBytes)
-	if _, err := rand.Read(salt); err != nil {
-		return "", fmt.Errorf("generate password salt: %w", err)
-	}
-
-	key, err := pbkdf2.Key(sha256.New, password, salt, passwordHashIterations, passwordKeyBytes)
+// hashPassword generates a new password hash using bcrypt (default).
+// Returns the salt (with b- prefix) and the hash, or an error.
+func hashPassword(password string) (salt, hash string, err error) {
+	// Default to bcrypt with b- prefix
+	hashBytes, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	if err != nil {
-		return "", fmt.Errorf("derive password hash: %w", err)
+		return "", "", fmt.Errorf("bcrypt hash: %w", err)
 	}
-
-	return strings.Join([]string{
-		passwordHashScheme,
-		strconv.Itoa(passwordHashIterations),
-		base64.RawStdEncoding.EncodeToString(salt),
-		base64.RawStdEncoding.EncodeToString(key),
-	}, "$"), nil
+	return "b-", string(hashBytes), nil
 }
 
-func checkPassword(stored, password string) bool {
-	parts := strings.Split(stored, "$")
-	if len(parts) != 4 || parts[0] != passwordHashScheme {
+// checkPassword verifies a password against the stored hash using the
+// salt prefix to determine the algorithm.
+func checkPassword(salt, stored, password string) bool {
+	switch {
+	case salt == "":
+		// Plaintext comparison (insecure, for migration/testing only)
+		return subtle.ConstantTimeCompare([]byte(stored), []byte(password)) == 1
+
+	case strings.HasPrefix(salt, "b-"):
+		// bcrypt
+		return bcrypt.CompareHashAndPassword([]byte(stored), []byte(password)) == nil
+
+	case strings.HasPrefix(salt, "a2-"):
+		// argon2id
+		return verifyArgon2(salt, stored, password)
+
+	case strings.HasPrefix(salt, "p2-"):
+		// PBKDF2-SHA256 (legacy format)
+		return checkPBKDF2(salt, stored, password)
+
+	default:
+		// Unknown prefix - treat as invalid
+		return false
+	}
+}
+
+// verifyArgon2 verifies an argon2id hash.
+// The salt format is: a2-$time$memory$threads$keyLen$saltBase64
+// The stored hash is the base64-encoded argon2 output.
+func verifyArgon2(salt, stored, password string) bool {
+	// Parse salt: a2-$time$memory$threads$keyLen$salt
+	if !strings.HasPrefix(salt, "a2-") {
+		return false
+	}
+	parts := strings.Split(salt[3:], "$")
+	if len(parts) != 5 {
+		return false
+	}
+	time, err := strconv.ParseUint(parts[0], 10, 32)
+	if err != nil {
+		return false
+	}
+	memory, err := strconv.ParseUint(parts[1], 10, 32)
+	if err != nil {
+		return false
+	}
+	threads, err := strconv.ParseUint(parts[2], 10, 8)
+	if err != nil {
+		return false
+	}
+	keyLen, err := strconv.ParseUint(parts[3], 10, 32)
+	if err != nil {
+		return false
+	}
+	saltBytes, err := base64.RawStdEncoding.DecodeString(parts[4])
+	if err != nil {
 		return false
 	}
 
-	iterations, err := strconv.Atoi(parts[1])
+	expected, err := base64.RawStdEncoding.DecodeString(stored)
+	if err != nil {
+		return false
+	}
+
+	actual := argon2.IDKey([]byte(password), saltBytes, uint32(time), uint32(memory), uint8(threads), uint32(keyLen))
+	return subtle.ConstantTimeCompare(actual, expected) == 1
+}
+
+// checkPBKDF2 verifies a legacy PBKDF2-SHA256 hash.
+// The salt format is: p2-$iterations$saltBase64
+// The stored hash is the base64-encoded PBKDF2 output.
+func checkPBKDF2(salt, stored, password string) bool {
+	// Parse salt: p2-$iterations$saltBase64
+	if !strings.HasPrefix(salt, "p2-") {
+		return false
+	}
+	parts := strings.Split(salt[3:], "$")
+	if len(parts) != 2 {
+		return false
+	}
+	iterations, err := strconv.Atoi(parts[0])
 	if err != nil || iterations <= 0 {
 		return false
 	}
-	salt, err := base64.RawStdEncoding.DecodeString(parts[2])
-	if err != nil {
-		return false
-	}
-	expected, err := base64.RawStdEncoding.DecodeString(parts[3])
+	saltBytes, err := base64.RawStdEncoding.DecodeString(parts[1])
 	if err != nil {
 		return false
 	}
 
-	actual, err := pbkdf2.Key(sha256.New, password, salt, iterations, len(expected))
+	expected, err := base64.RawStdEncoding.DecodeString(stored)
+	if err != nil {
+		return false
+	}
+
+	actual, err := pbkdf2.Key(sha256.New, password, saltBytes, iterations, len(expected))
 	if err != nil {
 		return false
 	}

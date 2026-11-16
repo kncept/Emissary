@@ -107,6 +107,7 @@ type EmissaryUser struct {
 
 	Enabled        bool     // kept, but cannot log in when false
 	SaltedPassword string   // the user's stored, salted password
+	Salt           string   // The salt for the users password
 	Rules          []string // system rules, see below
 }
 ```
@@ -115,6 +116,7 @@ type EmissaryUser struct {
 | --- | --- |
 | `Enabled` | When false, the user is kept but cannot log in. |
 | `SaltedPassword` | The user's stored, salted password; verified at login. |
+| `Salt` | The users salt. Note that this has usage rules |
 | `Rules` | A string array of rules applied to mail for the user (below). |
 
 ### System rules
@@ -127,8 +129,28 @@ that user is handled. For example, a disabled user could carry a
 The rules are not implemented yet: each has specific requirements that
 will be addressed separately.
 
+## Salt Rules
+
+The `Salt` field determines how the password in `SaltedPassword` is hashed.
+The prefix of the salt value identifies the algorithm:
+
+| Prefix | Algorithm | Notes |
+| --- | --- | --- |
+| *(blank / no prefix)* | Plaintext | **Insecure** — only for migration or testing |
+| `b-` | bcrypt | Default for new passwords |
+| `a2-` | Argon2id | |
+| `p2-` | PBKDF2-SHA256 | Legacy; used by existing `ddb` records |
+
+When hashing a new password (on create or password change), the default is **bcrypt** (`b-` prefix).
+
+Verification works by inspecting the salt prefix:
+- No prefix → plaintext comparison
+- `b-` → bcrypt.CompareHashAndPassword
+- `a2-` → argon2.Verify
+- `p2-` → PBKDF2-SHA256 verification
+
 ## Status
 
-The user management API is implemented in `api/users.yaml` and `mailer/handler/users.go`. The `ddb` user manager is implemented in `mailer/usermanager/ddb.go` and backs the `users` DynamoDB table, using the user's email address as the `id` partition key. Passwords are stored as salted PBKDF2-SHA256 verifiers. The `any`, `ldap`, and `none` backends do not implement `EmissaryAuthManager` and therefore do not support user management operations (including password change).
+The user management API is implemented in `api/users.yaml` and `mailer/handler/users.go`. The `ddb` user manager is implemented in `mailer/usermanager/ddb.go` and backs the `users` DynamoDB table, using the user's email address as the `id` partition key. Passwords are stored using the salt-prefix scheme described above (defaulting to bcrypt for new hashes; existing records use `p2-` PBKDF2-SHA256). The `any`, `ldap`, and `none` backends do not implement `EmissaryAuthManager` and therefore do not support user management operations (including password change).
 
 See [AUTH.md](AUTH.md) for login, refresh and the token claims, [API.md](API.md) for the endpoints as implemented, and [CONFIGURATION.md](CONFIGURATION.md) for `USER_MANAGER` and the backend settings.

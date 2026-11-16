@@ -147,9 +147,13 @@ func TestDdbManager_Authenticate(t *testing.T) {
 		t.Fatalf("Create() id = %q, want normalized address", user.ID)
 	}
 
-	stored := fake.items[user.ID]["saltedPassword"].(*types.AttributeValueMemberS).Value
-	if stored == "hunter2" || !strings.HasPrefix(stored, passwordHashScheme+"$") {
-		t.Errorf("stored password = %q, want a salted hash", stored)
+	storedHash := fake.items[user.ID]["saltedPassword"].(*types.AttributeValueMemberS).Value
+	storedSalt := fake.items[user.ID]["salt"].(*types.AttributeValueMemberS).Value
+	if storedHash == "hunter2" || !strings.HasPrefix(storedHash, "$2") {
+		t.Errorf("stored password hash = %q, want bcrypt hash", storedHash)
+	}
+	if storedSalt != "b-" {
+		t.Errorf("stored salt = %q, want b- prefix for bcrypt", storedSalt)
 	}
 
 	got, err := m.Authenticate(ctx, "Alice@Example.com", "hunter2")

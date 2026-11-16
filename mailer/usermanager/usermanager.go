@@ -64,6 +64,10 @@ type EmissaryUser struct {
 	// password through Create and ChangePassword.
 	SaltedPassword string
 
+	// Salt is the salt/prefix identifying the password hash algorithm.
+	// Empty = plaintext, b- = bcrypt, a2- = argon2, p2- = pbkdf2.
+	Salt string
+
 	// Rules are the system rules applied to mail for this user.
 	Rules []string
 }
