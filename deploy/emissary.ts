@@ -61,6 +61,20 @@ const inboundRecipients = (() => {
 const appAssetDirectory = path.join(__dirname, '..', 'mailer', 'cmd', 'frontend')
 const appBootstrap = path.join(appAssetDirectory, 'bootstrap')
 
+function resolveTablePrefix(): string {
+  let tablePrefix = (env.TABLE_PREFIX || env.DDB_TABLE_PREFIX || '').trim()
+  if (tablePrefix === '') {
+    tablePrefix = 'emissary'
+  }
+  if (!tablePrefix.endsWith('-') && !tablePrefix.endsWith('_')) {
+    tablePrefix = tablePrefix + '-'
+  }
+  return tablePrefix
+}
+
+const ddbTablePrefix = resolveTablePrefix()
+
+
 const app = new cdk.App()
 
 // components to deploy
@@ -304,14 +318,42 @@ async function emailClientStack(
     effect: iam.Effect.ALLOW,
   }))
 
-  // Email read/flag state must survive cold starts, so store it in DynamoDB.
+  // DynamoDB tables used by the application. Table names are derived from
+  // TABLE_PREFIX the same way as the household project (default "emissary-").
+  const metadataTableName = `${ddbTablePrefix}metadata`
   const metadataTable = new dynamodb.Table(stack, 'emissary-metadata', {
-    tableName: `emissary-${emissaryDomain.replaceAll(".", "-")}-metadata`,
+    tableName: metadataTableName,
     partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
     billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     removalPolicy: cdk.RemovalPolicy.DESTROY,
   })
   metadataTable.grantReadWriteData(role)
+
+  const sessionType = (env.SESSION || '').toLowerCase().trim()
+  let sessionTableName = env.SESSION_TABLE || ''
+  if (sessionType === 'ddb' || sessionType === 'dynamodb') {
+    if (sessionTableName === '') sessionTableName = `${ddbTablePrefix}sessions`
+    const sessionTable = new dynamodb.Table(stack, 'emissary-sessions', {
+      tableName: sessionTableName,
+      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    })
+    sessionTable.grantReadWriteData(role)
+  }
+
+  const userManagerType = (env.USER_MANAGER || 'none').toLowerCase().trim()
+  let userTableName = env.USER_TABLE || ''
+  if (userManagerType === 'ddb' || userManagerType === 'dynamodb') {
+    if (userTableName === '') userTableName = `${ddbTablePrefix}users`
+    const userTable = new dynamodb.Table(stack, 'emissary-users', {
+      tableName: userTableName,
+      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    })
+    userTable.grantReadWriteData(role)
+  }
 
   const authUsername = env.USERNAME || ''
   const authPassword = env.PASSWORD || ''
@@ -387,8 +429,11 @@ async function emailClientStack(
       SENDER: 'aws-ses',
       SES_FROM: env.SES_FROM || `no-reply@${emissaryDomain}`,
       METADATA: 'ddb',
+      TABLE_PREFIX: ddbTablePrefix,
       DDB_TABLE: metadataTable.tableName,
       METADATA_REGION: awsRegion,
+      ...(sessionTableName ? { SESSION: env.SESSION || 'ddb', SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
+      ...(userTableName ? { USER_TABLE: userTableName, USER_REGION: awsRegion } : {}),
       ...(authPassword ? { PASSWORD: authPassword } : {}),
       // Pass the JWT secret ARN - the application will resolve it at runtime
       JWT_SECRET: jwtSecret.secretArn,

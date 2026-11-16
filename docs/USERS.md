@@ -19,7 +19,10 @@ hold:
 
 The backends selected with `USER_MANAGER` are `none`, `any`, `ddb` and
 `ldap` (see [CONFIGURATION.md](CONFIGURATION.md)); only the in-
-application `ddb` backend is Emissary-mastered. The API layer
+application `ddb` backend is Emissary-mastered. When using DynamoDB, table
+names are derived from `TABLE_PREFIX` the same way as the household project
+(default `emissary`), with explicit `USER_TABLE`/`DDB_TABLE`/`SESSION_TABLE`
+overrides available (see [CONFIGURATION.md](CONFIGURATION.md#dynamodb-table-naming)). The API layer
 determines condition 2 by type assertion: the configured
 `UserManager` is Emissary-mastered when it also implements
 `EmissaryAuthManager`, the superinterface defined below.
@@ -126,6 +129,6 @@ will be addressed separately.
 
 ## Status
 
-The user management API is implemented in `api/users.yaml` and `mailer/handler/users.go`. The `ddb` user manager is registered and selectable but the storage implementation is not complete; the management operations panic when used with the `ddb` backend. The `any`, `ldap`, and `none` backends do not implement `EmissaryAuthManager` and therefore do not support user management operations (including password change).
+The user management API is implemented in `api/users.yaml` and `mailer/handler/users.go`. The `ddb` user manager is implemented in `mailer/usermanager/ddb.go` and backs the `users` DynamoDB table, using the user's email address as the `id` partition key. Passwords are stored as salted PBKDF2-SHA256 verifiers. The `any`, `ldap`, and `none` backends do not implement `EmissaryAuthManager` and therefore do not support user management operations (including password change).
 
 See [AUTH.md](AUTH.md) for login, refresh and the token claims, [API.md](API.md) for the endpoints as implemented, and [CONFIGURATION.md](CONFIGURATION.md) for `USER_MANAGER` and the backend settings.

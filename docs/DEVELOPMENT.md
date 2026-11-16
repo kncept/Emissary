@@ -91,6 +91,5 @@ Currently open implementation work (see also `TODO.md`):
 
 - `cmd/sns-receiver` — the SNS-to-S3 relay Lambda (planned to re-write
   SES notifications as RFC 822 objects keyed by SMTP message id).
-- `usermanager` `ddb` and `ldap` backends (registered, panic when
-  reached).
+- `usermanager` `ldap` backend (registered, panics when reached).
 - Bounce handling, e.g. reacting to SES receipt verdicts.

@@ -95,9 +95,6 @@ func (c *MetadataConfig) Validate() error {
 	default:
 		errs = append(errs, fmt.Errorf("unknown metadata type %q (want memory, file or ddb)", c.Type))
 	}
-	if (c.Type == "ddb" || c.Type == "dynamodb") && c.DdbTable == "" {
-		errs = append(errs, errors.New("metadata=ddb requires a table (set DDB_TABLE)"))
-	}
 	return errors.Join(errs...)
 }
 
@@ -108,9 +105,6 @@ func (c *SessionConfig) Validate() error {
 	case "memory", "ddb", "dynamodb":
 	default:
 		errs = append(errs, fmt.Errorf("unknown session type %q (want memory, ddb or dynamodb)", c.Type))
-	}
-	if (c.Type == "ddb" || c.Type == "dynamodb") && c.DdbTable == "" {
-		errs = append(errs, errors.New("session=ddb requires a table (set SESSION_TABLE)"))
 	}
 	return errors.Join(errs...)
 }
@@ -144,9 +138,6 @@ func (c *UserManagerConfig) Validate() error {
 	if c.Type == "any" && c.Domain == "" {
 		errs = append(errs, errors.New("user manager any requires a domain (set DOMAIN)"))
 	}
-	if (c.Type == "ddb" || c.Type == "dynamodb") && c.DdbTable == "" {
-		errs = append(errs, errors.New("user manager ddb requires a table (set USER_TABLE)"))
-	}
 	if c.Type == "ldap" && c.LDAPURL == "" {
 		errs = append(errs, errors.New("user manager ldap requires a server URL (set LDAP_URL)"))
 	}
@@ -165,6 +156,10 @@ type Config struct {
 	// AWSRegion is the default AWS region used when a specific service
 	// region is not configured.
 	AWSRegion string
+
+	// DDBTablePrefix is prepended to logical DynamoDB table names when
+	// building table names (see TABLE_PREFIX). It defaults to "emissary".
+	DDBTablePrefix string
 }
 
 // Validate checks the entire configuration for consistency. It returns a
@@ -178,6 +173,43 @@ func (c *Config) Validate() error {
 		c.Session.Validate(),
 		c.UserManager.Validate(),
 	)
+}
+
+// ApplyDDBTablePrefix names tables the same way as the household project
+// (TABLE_PREFIX): prefix joined with a separator and the logical table name.
+// If prefix is empty, "emissary-" is used. If prefix does not already end with
+// "-" or "_", "-" is inserted.
+func ApplyDDBTablePrefix(prefix, name string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		prefix = "emissary"
+	}
+	if strings.HasSuffix(prefix, "-") || strings.HasSuffix(prefix, "_") {
+		return prefix + name
+	}
+	return prefix + "-" + name
+}
+
+func resolveDDBTable(explicit, prefix, logical string) string {
+	if strings.TrimSpace(explicit) != "" {
+		return strings.TrimSpace(explicit)
+	}
+	return ApplyDDBTablePrefix(prefix, logical)
+}
+
+// MetadataTableName returns the DynamoDB table name for message metadata.
+func (c *Config) MetadataTableName() string {
+	return resolveDDBTable(c.Metadata.DdbTable, c.DDBTablePrefix, "metadata")
+}
+
+// SessionTableName returns the DynamoDB table name for sessions.
+func (c *Config) SessionTableName() string {
+	return resolveDDBTable(c.Session.DdbTable, c.DDBTablePrefix, "sessions")
+}
+
+// UserTableName returns the DynamoDB table name for users.
+func (c *Config) UserTableName() string {
+	return resolveDDBTable(c.UserManager.DdbTable, c.DDBTablePrefix, "users")
 }
 
 // Load reads configuration from the environment. The account credentials are
@@ -226,7 +258,8 @@ func Load(ctx context.Context) (*Config, error) {
 			LDAPUserFilter:   firstEnv(ctx, "LDAP_USER_FILTER"),
 			LDAPCacheTTL:     firstEnv(ctx, "LDAP_CACHE_TTL"),
 		},
-		AWSRegion: awsRegion,
+		AWSRegion:      awsRegion,
+		DDBTablePrefix: strings.TrimSpace(firstEnvDefault(ctx, "emissary", "TABLE_PREFIX", "DDB_TABLE_PREFIX")),
 	}
 
 	ttl, err := time.ParseDuration(firstEnvDefault(ctx, "24h", "JWT_TTL"))

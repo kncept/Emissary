@@ -60,8 +60,9 @@ table-driven with `t.Run` subtests.
 concurrency and clone isolation), S3 through a fake client.
 `metadata` likewise covers memory and file (atomic writes, corrupt
 JSON, directory creation) plus a concurrency test. `usermanager`
-covers `none` and `any`, including that `ddb` and `ldap` construct
-and select but panic with `"unimplemented"` for ordinary users.
+covers `none`, `any` and `ddb` (through a fake DynamoDB client), and
+that `ldap` constructs and selects but panics with `"unimplemented"`
+for ordinary users.
 `sender` covers the log sender; the SES sender is only constructed.
 
 ### HTTP handler

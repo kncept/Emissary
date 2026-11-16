@@ -19,6 +19,11 @@ func TestLoad_Defaults(t *testing.T) {
 		os.Unsetenv("JWT_SECRET")
 		os.Unsetenv("STORAGE")
 		os.Unsetenv("SENDER")
+		os.Unsetenv("SESSION")
+		os.Unsetenv("SESSION_TABLE")
+		os.Unsetenv("SESSION_REGION")
+		os.Unsetenv("TABLE_PREFIX")
+		os.Unsetenv("DDB_TABLE_PREFIX")
 		os.Unsetenv("METADATA")
 		os.Unsetenv("JWT_TTL")
 		os.Unsetenv("PORT")
@@ -208,27 +213,37 @@ func TestLoad_S3StorageRequiresBucket(t *testing.T) {
 	}
 }
 
-func TestLoad_DDBMetadataRequiresTable(t *testing.T) {
+func TestLoad_DDBMetadataDerivesTableFromPrefix(t *testing.T) {
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("METADATA", "ddb")
 	defer cleanupEnv()
 
-	_, err := Load(context.Background())
-	if err == nil {
-		t.Error("Load() should error when ddb metadata is selected without table")
+	cfg, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.MetadataTableName(); got != "emissary-metadata" {
+		t.Errorf("MetadataTableName() = %q, want %q", got, "emissary-metadata")
 	}
 }
 
-func TestLoad_DynamoDBAlias(t *testing.T) {
+func TestLoad_DynamoDBAliasDerivesTableFromPrefix(t *testing.T) {
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("METADATA", "dynamodb")
+	os.Setenv("TABLE_PREFIX", "custom")
 	defer cleanupEnv()
 
-	_, err := Load(context.Background())
-	if err == nil {
-		t.Error("Load() should error when dynamodb metadata is selected without table")
+	cfg, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DDBTablePrefix != "custom" {
+		t.Errorf("DDBTablePrefix = %q, want %q", cfg.DDBTablePrefix, "custom")
+	}
+	if got := cfg.MetadataTableName(); got != "custom-metadata" {
+		t.Errorf("MetadataTableName() = %q, want %q", got, "custom-metadata")
 	}
 }
 
@@ -386,9 +401,9 @@ func TestMetadataConfig_Validate(t *testing.T) {
 		{"memory", MetadataConfig{Type: "memory"}, false},
 		{"file", MetadataConfig{Type: "file"}, false},
 		{"ddb with table", MetadataConfig{Type: "ddb", DdbTable: "t"}, false},
-		{"ddb without table", MetadataConfig{Type: "ddb"}, true},
+		{"ddb without table", MetadataConfig{Type: "ddb"}, false},
 		{"dynamodb with table", MetadataConfig{Type: "dynamodb", DdbTable: "t"}, false},
-		{"dynamodb without table", MetadataConfig{Type: "dynamodb"}, true},
+		{"dynamodb without table", MetadataConfig{Type: "dynamodb"}, false},
 		{"unknown", MetadataConfig{Type: "redis"}, true},
 	}
 	for _, tt := range tests {
@@ -403,10 +418,12 @@ func TestMetadataConfig_Validate(t *testing.T) {
 
 func TestConfig_Validate_CompositeError(t *testing.T) {
 	cfg := &Config{
-		Server:   ServerConfig{}, // missing username and password
-		Storage:  StorageConfig{Type: "bad"},
-		Sender:   SenderConfig{Type: "bad"},
-		Metadata: MetadataConfig{Type: "ddb"}, // missing table
+		Server:      ServerConfig{}, // missing username
+		Storage:     StorageConfig{Type: "bad"},
+		Sender:      SenderConfig{Type: "bad"},
+		Metadata:    MetadataConfig{Type: "redis"},
+		Session:     SessionConfig{Type: "bad"},
+		UserManager: UserManagerConfig{Type: "bad"},
 	}
 	err := cfg.Validate()
 	if err == nil {
@@ -424,8 +441,14 @@ func TestConfig_Validate_CompositeError(t *testing.T) {
 	if !strings.Contains(msg, "sender type") {
 		t.Errorf("composite error should mention sender type, got: %v", msg)
 	}
-	if !strings.Contains(msg, "metadata=ddb") {
-		t.Errorf("composite error should mention ddb table requirement, got: %v", msg)
+	if !strings.Contains(msg, "metadata type") {
+		t.Errorf("composite error should mention metadata type, got: %v", msg)
+	}
+	if !strings.Contains(msg, "session type") {
+		t.Errorf("composite error should mention session type, got: %v", msg)
+	}
+	if !strings.Contains(msg, "user manager type") {
+		t.Errorf("composite error should mention user manager type, got: %v", msg)
 	}
 }
 
@@ -448,6 +471,11 @@ func cleanupEnv() {
 	os.Unsetenv("JWT_SECRET")
 	os.Unsetenv("STORAGE")
 	os.Unsetenv("SENDER")
+	os.Unsetenv("SESSION")
+	os.Unsetenv("SESSION_TABLE")
+	os.Unsetenv("SESSION_REGION")
+	os.Unsetenv("TABLE_PREFIX")
+	os.Unsetenv("DDB_TABLE_PREFIX")
 	os.Unsetenv("METADATA")
 	os.Unsetenv("JWT_TTL")
 	os.Unsetenv("PORT")

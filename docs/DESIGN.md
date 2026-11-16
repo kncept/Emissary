@@ -39,9 +39,9 @@ application.
   Lambda that reads raw messages from SNS and writes them (RFC 822,
   keyed by SMTP message id) into one or more S3 buckets; it currently
   panics and is not wired into the CDK app.
-- The `ddb` and `ldap` user managers are registered but not implemented
-  (they exist so deployments can select them later); they currently
-  panic for ordinary users.
+- The `ldap` user manager is registered but not implemented (it exists
+  so deployments can select it later); it currently panics for ordinary
+  users. The `ddb` user manager is implemented against DynamoDB.
 - Bounce handling and multi-instance deployments are open ideas; see
   `TODO.md`.
 

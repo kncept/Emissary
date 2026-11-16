@@ -77,30 +77,47 @@ func TestAnyManagerRequiresDomain(t *testing.T) {
 	}
 }
 
-func TestDdbAndLdapAreSelectable(t *testing.T) {
-	for _, kind := range []string{"ddb", "ldap"} {
-		t.Run(kind, func(t *testing.T) {
-			m, err := New(Config{
-				Type:          kind,
-				AdminUsername: "admin",
-				AdminPassword: "secret",
-				DdbTable:      "users",
-				LDAPURL:       "ldap://localhost:389",
-			})
-			if err != nil {
-				t.Fatalf("New(%q) error = %v", kind, err)
-			}
-			if _, err := m.Authenticate(context.Background(), "admin", "secret"); err != nil {
-				t.Fatalf("%s admin login failed: %v", kind, err)
-			}
+func TestLdapIsSelectableButUnimplemented(t *testing.T) {
+	m, err := New(Config{
+		Type:          "ldap",
+		AdminUsername: "admin",
+		AdminPassword: "secret",
+		LDAPURL:       "ldap://localhost:389",
+	})
+	if err != nil {
+		t.Fatalf("New(%q) error = %v", "ldap", err)
+	}
+	if _, err := m.Authenticate(context.Background(), "admin", "secret"); err != nil {
+		t.Fatalf("%s admin login failed: %v", "ldap", err)
+	}
 
-			defer func() {
-				if recovered := recover(); recovered != "unimplemented" {
-					t.Errorf("%s ordinary login panic = %v, want unimplemented", kind, recovered)
-				}
-			}()
-			_, _ = m.Authenticate(context.Background(), "user@example.com", "password")
-		})
+	defer func() {
+		if recovered := recover(); recovered != "unimplemented" {
+			t.Errorf("%s ordinary login panic = %v, want unimplemented", "ldap", recovered)
+		}
+	}()
+	_, _ = m.Authenticate(context.Background(), "user@example.com", "password")
+}
+
+func TestDdbIsSelectable(t *testing.T) {
+	m, err := New(Config{
+		Type:          "ddb",
+		AdminUsername: "admin",
+		AdminPassword: "secret",
+		DdbTable:      "users",
+	})
+	if err != nil {
+		t.Fatalf("New(%q) error = %v", "ddb", err)
+	}
+	ddb, ok := m.(*DdbManager)
+	if !ok {
+		t.Fatalf("New(%q) = %T, want *DdbManager", "ddb", m)
+	}
+	if _, ok := any(ddb).(EmissaryAuthManager); !ok {
+		t.Error("DdbManager must implement EmissaryAuthManager")
+	}
+	if _, err := m.Authenticate(context.Background(), "admin", "secret"); err != nil {
+		t.Fatalf("ddb admin login failed: %v", err)
 	}
 }
 

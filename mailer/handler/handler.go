@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -49,23 +50,24 @@ type SendEmailRequest struct {
 }
 
 type HandlerConfig struct {
-	AuthUser       string
-	AuthPass       string
-	JWTSecret      string
-	JWTSecretTTL   time.Duration
-	S3Bucket       string
-	StorageType    string
-	MetadataType   string
-	MetadataPath   string
-	MetadataTable  string
-	MetadataRegion string
-	SessionType    string
-	SessionTable   string
-	SessionRegion  string
-	Storage        storage.Storage
-	Metadata       metadata.MetadataStore
-	JWTAudience    string
-	JWTIssuer      string
+	AuthUser         string
+	AuthPass         string
+	JWTSecret        string
+	JWTSecretTTL     time.Duration
+	S3Bucket         string
+	StorageType      string
+	MetadataType     string
+	MetadataPath     string
+	MetadataTable    string
+	MetadataRegion   string
+	SessionType      string
+	SessionTable     string
+	SessionRegion    string
+	DDBTablePrefix   string
+	Storage          storage.Storage
+	Metadata         metadata.MetadataStore
+	JWTAudience      string
+	JWTIssuer        string
 	UserManager      usermanager.UserManager
 	UserManagerType  string
 	UserDomain       string
@@ -77,9 +79,27 @@ type HandlerConfig struct {
 	LDAPBaseDN       string
 	LDAPUserFilter   string
 	LDAPCacheTTL     string
-	Sender     sender.Sender
-	SenderType string
-	SenderFrom string
+	Sender           sender.Sender
+	SenderType       string
+	SenderFrom       string
+}
+
+func applyDDBTablePrefix(prefix, name string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		prefix = "emissary"
+	}
+	if strings.HasSuffix(prefix, "-") || strings.HasSuffix(prefix, "_") {
+		return prefix + name
+	}
+	return prefix + "-" + name
+}
+
+func resolveDDBTable(explicit, prefix, logical string) string {
+	if strings.TrimSpace(explicit) != "" {
+		return strings.TrimSpace(explicit)
+	}
+	return applyDDBTablePrefix(prefix, logical)
 }
 
 func New(cfg HandlerConfig) (http.Handler, error) {
@@ -108,7 +128,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 			AdminUsername:    cfg.AuthUser,
 			AdminPassword:    cfg.AuthPass,
 			Domain:           cfg.UserDomain,
-			DdbTable:         cfg.UserTable,
+			DdbTable:         resolveDDBTable(cfg.UserTable, cfg.DDBTablePrefix, "users"),
 			Region:           cfg.UserRegion,
 			LDAPURL:          cfg.LDAPURL,
 			LDAPBindDN:       cfg.LDAPBindDN,
@@ -125,7 +145,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 	var sessionStore session.SessionStore
 	switch cfg.SessionType {
 	case "ddb", "dynamodb":
-		sessionStore, err = session.NewDdbSessionStore(cfg.SessionTable, cfg.SessionRegion)
+		sessionStore, err = session.NewDdbSessionStore(resolveDDBTable(cfg.SessionTable, cfg.DDBTablePrefix, "sessions"), cfg.SessionRegion)
 		if err != nil {
 			return nil, err
 		}
@@ -158,7 +178,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 		case "file":
 			metaStore, err = metadata.NewFileMetadata(cfg.MetadataPath)
 		case "ddb", "dynamodb":
-			metaStore, err = metadata.NewDdbMetadata(cfg.MetadataTable, cfg.MetadataRegion)
+			metaStore, err = metadata.NewDdbMetadata(resolveDDBTable(cfg.MetadataTable, cfg.DDBTablePrefix, "metadata"), cfg.MetadataRegion)
 		default:
 			metaStore = metadata.NewMemoryMetadata()
 		}
@@ -186,6 +206,10 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, metaStore metadata.MetadataStore, mailSender sender.Sender, userManager usermanager.UserManager) http.Handler {
 	mux := http.NewServeMux()
 
+	// Create JMAP handler
+	jmapHandler := jmap.NewHandler(emailStore, metaStore, userManager)
+	dispatcher := jmap.NewDispatcher(jmapHandler)
+
 	mux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Username string `json:"username"`
@@ -204,6 +228,10 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 		result, err := authenticator.Login(r.Context(), req.Username, req.Password)
 		if err != nil {
 			logRequestError(r, "authenticate "+strconv.Quote(req.Username), err)
+			if errors.Is(err, usermanager.ErrUserDisabled) {
+				writeError(w, http.StatusForbidden, "user is disabled")
+				return
+			}
 			writeError(w, http.StatusUnauthorized, "invalid credentials")
 			return
 		}
@@ -257,7 +285,6 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 	})
 
-	dispatcher := jmap.NewDispatcher(&jmap.UnimplementedHandler{})
 	mux.Handle("GET /.well-known/jmap", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPSession(w, r)
 	})))
@@ -362,30 +389,11 @@ func (h usersSecurityHandler) HandleBearerAuth(ctx context.Context, operationNam
 	return ctx, nil
 }
 
-type EmissaryAuthManager interface {
-	usermanager.UserManager
+// EmissaryAuthManager and EmissaryUser live in the usermanager package. The
+// aliases keep the handler's exported names stable for callers and tests.
+type EmissaryAuthManager = usermanager.EmissaryAuthManager
 
-	List(ctx context.Context, cursor string, pageSize int) (users []*EmissaryUser, nextCursor string, err error)
-	Create(ctx context.Context, user *EmissaryUser) error
-	Save(ctx context.Context, user *EmissaryUser) error
-	Get(ctx context.Context, email string) (*EmissaryUser, error)
-	Delete(ctx context.Context, email string) error
-}
-
-type EmissaryUser struct {
-	ID       string
-	Username string
-	Email    string
-	Admin    bool
-
-	Enabled        bool
-	SaltedPassword string
-	Rules          []string
-}
-
-func (u *EmissaryUser) IsEnabled() bool {
-	return u.Enabled
-}
+type EmissaryUser = usermanager.EmissaryUser
 
 type authErr struct {
 	message string
@@ -494,29 +502,29 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request) {
 
 	session := map[string]any{
 		"capabilities": map[string]any{
-			"urn:ietf:params:jmap:core":               map[string]any{},
-			"urn:ietf:params:jmap:mail":               map[string]any{},
-			"urn:ietf:params:jmap:submission":         map[string]any{},
-			"urn:ietf:params:jmap:vacationresponse":   map[string]any{},
+			"urn:ietf:params:jmap:core":             map[string]any{},
+			"urn:ietf:params:jmap:mail":             map[string]any{},
+			"urn:ietf:params:jmap:submission":       map[string]any{},
+			"urn:ietf:params:jmap:vacationresponse": map[string]any{},
 		},
 		"accounts": map[string]any{
 			username: map[string]any{
-				"name":        username,
-				"isPersonal":  true,
-				"isReadOnly":  false,
+				"name":       username,
+				"isPersonal": true,
+				"isReadOnly": false,
 				"accountCapabilities": map[string]any{
-					"urn:ietf:params:jmap:core":               map[string]any{},
-					"urn:ietf:params:jmap:mail":               map[string]any{},
-					"urn:ietf:params:jmap:submission":         map[string]any{},
-					"urn:ietf:params:jmap:vacationresponse":   map[string]any{},
+					"urn:ietf:params:jmap:core":             map[string]any{},
+					"urn:ietf:params:jmap:mail":             map[string]any{},
+					"urn:ietf:params:jmap:submission":       map[string]any{},
+					"urn:ietf:params:jmap:vacationresponse": map[string]any{},
 				},
 			},
 		},
 		"primaryAccounts": map[string]any{
-			"urn:ietf:params:jmap:core":               username,
-			"urn:ietf:params:jmap:mail":               username,
-			"urn:ietf:params:jmap:submission":         username,
-			"urn:ietf:params:jmap:vacationresponse":   username,
+			"urn:ietf:params:jmap:core":             username,
+			"urn:ietf:params:jmap:mail":             username,
+			"urn:ietf:params:jmap:submission":       username,
+			"urn:ietf:params:jmap:vacationresponse": username,
 		},
 		"username":       username,
 		"apiUrl":         "/api/",
@@ -568,9 +576,9 @@ func writeJMAPError(w http.ResponseWriter, typ, detail string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]any{
-		"@type":    "error",
-		"type":     typ,
-		"detail":   detail,
+		"@type":  "error",
+		"type":   typ,
+		"detail": detail,
 	})
 }
 

@@ -33,7 +33,7 @@ The user manager is selected with `USER_MANAGER`:
 | --- | --- |
 | `none` (default) | Only the built-in administrator can log in. |
 | `any` | Any valid receiving address in `DOMAIN` can log in with any password. |
-| `ddb` | Reserved for in-application user management backed by DynamoDB. |
+| `ddb` | In-application user management backed by DynamoDB. Administrator users can manage accounts through `/api/user/`. |
 | `ldap` | Reserved for proxying authentication to an LDAP server. |
 
 The JWT carries the user id in the `sub` claim and only includes

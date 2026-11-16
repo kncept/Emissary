@@ -2,10 +2,13 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"log"
+	"strings"
 
 	usersapi "github.com/kncept/Emissary/api/users/generated"
 	"github.com/kncept/Emissary/mailer/auth"
+	"github.com/kncept/Emissary/mailer/usermanager"
 )
 
 type usersHandler struct {
@@ -96,19 +99,21 @@ func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserR
 	}
 
 	user := &EmissaryUser{
-		ID:       req.Email,
-		Username: req.Email,
-		Email:    req.Email,
-		Admin:    admin,
-
 		Enabled:        enabled,
 		SaltedPassword: req.Password,
 		Rules:          rules,
 	}
+	user.ID = req.Email
+	user.Username = req.Email
+	user.Email = req.Email
+	user.Admin = admin
 
 	if err := h.manager.Create(ctx, user); err != nil {
 		log.Printf("create user: %v", err)
-		return &usersapi.CreateUserConflict{Error: "user already exists"}, nil
+		if errors.Is(err, usermanager.ErrUserExists) {
+			return &usersapi.CreateUserConflict{Error: "user already exists"}, nil
+		}
+		return &usersapi.CreateUserBadRequest{Error: "failed to create user"}, nil
 	}
 
 	return &usersapi.UserResponse{
@@ -163,6 +168,9 @@ func (h *usersHandler) UpdateUser(ctx context.Context, req *usersapi.UpdateUserR
 
 	if err := h.manager.Save(ctx, user); err != nil {
 		log.Printf("save user: %v", err)
+		if errors.Is(err, usermanager.ErrUserNotFound) {
+			return &usersapi.UpdateUserNotFound{Error: "user not found"}, nil
+		}
 		return &usersapi.UpdateUserBadRequest{Error: "failed to update user"}, nil
 	}
 
@@ -182,7 +190,10 @@ func (h *usersHandler) DeleteUser(ctx context.Context, params usersapi.DeleteUse
 
 	if err := h.manager.Delete(ctx, params.Email); err != nil {
 		log.Printf("delete user: %v", err)
-		return &usersapi.DeleteUserNotFound{Error: "user not found"}, nil
+		if errors.Is(err, usermanager.ErrUserNotFound) {
+			return &usersapi.DeleteUserNotFound{Error: "user not found"}, nil
+		}
+		return &usersapi.DeleteUserNotFound{Error: "failed to delete user"}, nil
 	}
 
 	return &usersapi.DeleteUserResponse{Success: true}, nil
@@ -194,34 +205,34 @@ func (h *usersHandler) ChangePassword(ctx context.Context, req *usersapi.ChangeP
 		return &usersapi.ChangePasswordUnauthorized{Error: "authentication required"}, nil
 	}
 
-	isOwnAccount := claims.Subject == params.Email
+	isOwnAccount := strings.EqualFold(claims.Subject, params.Email)
 	isAdmin := claims.EmissaryUserManagement
 
 	if !isOwnAccount && !isAdmin {
 		return &usersapi.ChangePasswordForbidden{Error: "insufficient permissions"}, nil
 	}
 
-	user, err := h.manager.Get(ctx, params.Email)
-	if err != nil {
-		log.Printf("get user for password change: %v", err)
-		return &usersapi.ChangePasswordNotFound{Error: "user not found"}, nil
+	oldPassword := ""
+	if req.OldPassword.IsSet() {
+		oldPassword = req.OldPassword.Value
+	}
+	if isOwnAccount && oldPassword == "" {
+		return &usersapi.ChangePasswordBadRequest{Error: "old password is required"}, nil
+	}
+	if req.NewPassword == "" {
+		return &usersapi.ChangePasswordBadRequest{Error: "new password is required"}, nil
 	}
 
-	oldPassword := req.OldPassword.Value
-	if req.OldPassword.IsSet() || isOwnAccount {
-		if !req.OldPassword.IsSet() {
-			return &usersapi.ChangePasswordBadRequest{Error: "old password is required"}, nil
-		}
-		if user.SaltedPassword != oldPassword {
+	if err := h.manager.ChangePassword(ctx, params.Email, oldPassword, req.NewPassword); err != nil {
+		log.Printf("change password: %v", err)
+		switch {
+		case errors.Is(err, usermanager.ErrUserNotFound):
+			return &usersapi.ChangePasswordNotFound{Error: "user not found"}, nil
+		case errors.Is(err, usermanager.ErrInvalidCredentials):
 			return &usersapi.ChangePasswordConflict{Error: "old password is incorrect"}, nil
+		default:
+			return &usersapi.ChangePasswordBadRequest{Error: "failed to change password"}, nil
 		}
-	}
-
-	user.SaltedPassword = req.NewPassword
-
-	if err := h.manager.Save(ctx, user); err != nil {
-		log.Printf("save user after password change: %v", err)
-		return &usersapi.ChangePasswordBadRequest{Error: "failed to change password"}, nil
 	}
 
 	return &usersapi.ChangePasswordResponse{Success: true}, nil

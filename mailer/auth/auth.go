@@ -23,10 +23,10 @@ var (
 )
 
 const (
-	defaultTokenTTL       = 24 * time.Hour
-	accessTokenTTL        = 9 * time.Hour
-	refreshTokenTTL       = 30 * 24 * time.Hour
-	sessionIDBytes        = 16
+	defaultTokenTTL = 24 * time.Hour
+	accessTokenTTL  = 9 * time.Hour
+	refreshTokenTTL = 30 * 24 * time.Hour
+	sessionIDBytes  = 16
 )
 
 type jwtHeader struct {
@@ -55,13 +55,13 @@ type jwtClaims = Claims
 // Authenticator validates users through a pluggable user manager and issues
 // HS256 JWTs.
 type Authenticator struct {
-	users       usermanager.UserManager
+	users        usermanager.UserManager
 	sessionStore session.SessionStore
-	secret      []byte
-	ttl         time.Duration // legacy, not used for new tokens
-	now         func() time.Time
-	audience    string
-	issuer      string
+	secret       []byte
+	ttl          time.Duration // legacy, not used for new tokens
+	now          func() time.Time
+	audience     string
+	issuer       string
 }
 
 // New preserves the original single-account constructor. It is equivalent to
@@ -86,13 +86,13 @@ func NewWithUserManager(users usermanager.UserManager, sessionStore session.Sess
 		sessionStore = session.NewMemorySessionStore()
 	}
 	return &Authenticator{
-		users:         users,
-		sessionStore:  sessionStore,
-		secret:        []byte(secret),
-		ttl:           ttl,
-		now:           time.Now,
-		audience:      audience,
-		issuer:        issuer,
+		users:        users,
+		sessionStore: sessionStore,
+		secret:       []byte(secret),
+		ttl:          ttl,
+		now:          time.Now,
+		audience:     audience,
+		issuer:       issuer,
 	}
 }
 
@@ -145,6 +145,9 @@ type LoginResult struct {
 func (a *Authenticator) Login(ctx context.Context, username, password string) (*LoginResult, error) {
 	user, err := a.users.Authenticate(ctx, username, password)
 	if err != nil {
+		if errors.Is(err, usermanager.ErrUserDisabled) {
+			return nil, err
+		}
 		return nil, ErrInvalidCredentials
 	}
 
@@ -203,12 +206,10 @@ func (a *Authenticator) issueTokens(ctx context.Context, user *usermanager.User)
 	}
 	sid := base64.RawURLEncoding.EncodeToString(sidBytes)
 
-	// Check if user manager is Emissary-mastered
+	// Only an Emissary-mastered user manager can manage its own users, and
+	// only administrators of that store receive the management claim.
 	var emissaryUserMgmt bool
-	if mgr, ok := a.users.(interface {
-		List(ctx context.Context, cursor string, pageSize int) (users []*usermanager.User, nextCursor string, err error)
-	}); ok {
-		_ = mgr
+	if _, ok := a.users.(usermanager.EmissaryAuthManager); ok {
 		emissaryUserMgmt = user.Admin
 	}
 

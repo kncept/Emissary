@@ -135,8 +135,8 @@ for. Consequences:
 
 This document is the contract to implement. The currently deployed
 handler still issues a single access token (default TTL 24 hours) with
-no refresh flow, and the `ddb`/`ldap` user managers are reserved but
-unimplemented.
+no refresh flow. The `ddb` user manager is implemented; the `ldap`
+user manager is reserved but unimplemented.
 
 See [API.md](API.md) for the endpoints as implemented,
 [ARCHITECTURE.md](ARCHITECTURE.md) for the authentication and

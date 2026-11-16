@@ -39,8 +39,16 @@ deployed Lambda receives its JWT secret as an ARN.
 | --- | --- | --- |
 | `METADATA` | `memory` | `memory`, `file` or `ddb` (alias `dynamodb`). |
 | `METADATA_FILE` | `emissary-metadata.json` | JSON file used when `METADATA=file`. |
-| `DDB_TABLE` | — | DynamoDB table. Required when `METADATA=ddb`. |
+| `DDB_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for message read/flag state. When unset, the name is derived from `TABLE_PREFIX` (`metadata` table). |
 | `METADATA_REGION` | AWS region | Region of the DynamoDB table. |
+
+## Sessions (refresh tokens)
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SESSION` | `memory` | `memory`, `ddb` or `dynamodb`. |
+| `SESSION_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for sessions. When unset, the name is derived from `TABLE_PREFIX` (`sessions` table). |
+| `SESSION_REGION` | AWS region | Region of the DynamoDB sessions table. |
 
 ## User manager (login for ordinary users)
 
@@ -48,13 +56,31 @@ deployed Lambda receives its JWT secret as an ARN.
 | --- | --- | --- |
 | `USER_MANAGER` | `none` | `none`, `any`, `ddb` or `ldap`. |
 | `DOMAIN` | — | Receiving domain; required by the `any` backend (any valid address `@DOMAIN` can log in with any password). Also used by the CDK app. |
-| `USER_TABLE` | — | DynamoDB table; required by the `ddb` backend (not yet implemented). |
+| `USER_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for the `ddb` backend. When unset, the name is derived from `TABLE_PREFIX` (`users` table). |
 | `USER_REGION` | AWS region | Region of the user table. |
 | `LDAP_URL` | — | LDAP server URL; required by the `ldap` backend (not yet implemented). |
 | `LDAP_BIND_DN` / `LDAP_BIND_PASSWORD` | — | Bind credentials for the `ldap` backend. |
 | `LDAP_BASE_DN` | — | Search base for the `ldap` backend. |
 | `LDAP_USER_FILTER` | — | User search filter for the `ldap` backend. |
 | `LDAP_CACHE_TTL` | — | Cache TTL for the `ldap` backend. |
+
+## DynamoDB table naming
+
+DynamoDB table names are derived from a prefix the same way as the
+household project:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `TABLE_PREFIX` | `emissary` | Prefix applied to logical DynamoDB table names. `DDB_TABLE_PREFIX` is accepted as an alias. |
+
+The resolved table name is `<prefix><name>` when the prefix already ends
+with `-` or `_`, otherwise `<prefix>-<name>`. When `TABLE_PREFIX` is not
+set, the default prefix is `emissary` (for example `emissary-metadata`).
+
+The logical table names are `metadata` (read/flag state), `sessions`
+(refresh tokens) and `users` (the `ddb` user manager). Explicit
+`DDB_TABLE`, `SESSION_TABLE` and `USER_TABLE` values override the derived
+names.
 
 ## AWS
 
@@ -79,10 +105,11 @@ behaviours on top of the table above:
 ## Deployed values (set by the CDK client stack)
 
 The Lambda is created with: `STORAGE=s3`, `SENDER=aws-ses`,
-`METADATA=ddb`, `METADATA_REGION`/`DDB_TABLE` pointing at the metadata
-table, `JWT_SECRET` as the Secrets Manager ARN, plus `USERNAME`,
-`PASSWORD` (only when provided at deploy time), `USER_MANAGER`
-(default `none`), `DOMAIN`, `SES_FROM` (default `no-reply@<DOMAIN>`),
-`JWT_AUDIENCE=mail.<DOMAIN>` and `JWT_ISSUER=emissary-<DOMAIN>`.
-Deploy-time variables are listed in
+`METADATA=ddb`, `TABLE_PREFIX`, and the resolved DynamoDB table/region
+variables for the enabled DDB-backed stores (including
+`METADATA_REGION`/`DDB_TABLE`), `JWT_SECRET` as the Secrets Manager ARN,
+plus `USERNAME`, `PASSWORD` (only when provided at deploy time),
+`USER_MANAGER` (default `none`), `DOMAIN`, `SES_FROM` (default
+`no-reply@<DOMAIN>`), `JWT_AUDIENCE=mail.<DOMAIN>` and
+`JWT_ISSUER=emissary-<DOMAIN>`. Deploy-time variables are listed in
 [DEPLOYMENT.md](DEPLOYMENT.md#deploy-time-variables).

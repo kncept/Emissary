@@ -42,11 +42,13 @@ AWS, not the application directly):
 | --- | --- | --- |
 | `DOMAIN` | yes | The receiving domain, e.g. `example.com`. |
 | `AWS_REGION` | yes | Region for SES, S3, DynamoDB, API Gateway. |
+| `TABLE_PREFIX` | no | Prefix for DynamoDB table names (default `emissary`, normalized to `emissary-`), applied the same way as the household project. `DDB_TABLE_PREFIX` is accepted as an alias. |
 | `SUBDOMAINS` | no | Recipients accepted by the receipt rule: unset → only `DOMAIN`; `*` → `DOMAIN` plus every subdomain; a comma list → `DOMAIN` plus each entry (entries without a dot become `<entry>.<DOMAIN>`). |
 | `S3_BUCKET` | no | Use this existing bucket for inbound mail instead of the created one. |
 | `USERNAME` | no | Administrator username baked into the Lambda env. |
 | `PASSWORD` | no | Administrator password baked into the Lambda env (a warning is printed when unset). |
-| `USER_MANAGER` | no | User-manager backend for the deployed app (default `none`). |
+| `USER_MANAGER` | no | User-manager backend for the deployed app (default `none`). When set to `ddb`, a users table is created. |
+| `SESSION` | no | Session backend for the deployed app. When set to `ddb`, a sessions table is created. |
 | `SES_FROM` | no | Default From address (default `no-reply@<DOMAIN>`). |
 | `JWT_SECRET` | no | Signing secret for the app. Unset → CDK generates a 64-character secret in Secrets Manager. |
 
@@ -95,17 +97,19 @@ Skipped (with a warning) unless `mailer/cmd/frontend/bootstrap` exists.
 - Lambda function `emissary-<domain>`: custom runtime
   `provided.al2023`, x86_64, 512 MB, 30s timeout, handler `bootstrap`.
   Its environment pins `STORAGE=s3`, `SENDER=aws-ses`, `METADATA=ddb`
-  and passes the bucket, table, domain, admin credentials (password
-  only if provided), `JWT_SECRET` as a Secrets Manager ARN, and the JWT
-  audience/issuer.
+  and passes the bucket, `TABLE_PREFIX`, the resolved DynamoDB table
+  names, domain, admin credentials (password only if provided),
+  `JWT_SECRET` as a Secrets Manager ARN, and the JWT audience/issuer.
 - IAM role `emissary-<domain>-app`: Lambda basic execution (logs to
   `/logs/emissary/<domain>`, 3-month retention), read and delete access
   to the inbound bucket, `ses:SendEmail`/`ses:SendRawEmail` on the
   account's identities, read/write on the metadata table, and read on
   the JWT secret.
-- DynamoDB table `emissary-<domain>-metadata` (partition key `id`,
-  pay-per-request) for read/flag state — state that must survive cold
-  starts.
+- DynamoDB tables for application state (partition key `id`,
+  pay-per-request), named from `TABLE_PREFIX` the same way as the
+  household project (default prefix `emissary-`): `metadata` for
+  read/flag state (always created), and `sessions`/`users` when the
+  corresponding `SESSION`/`USER_MANAGER` backend is `ddb`.
 - Secrets Manager secret `emissary/<domain>/jwt-secret` — generated
   when `JWT_SECRET` is not supplied, otherwise seeded with the given
   value via a custom resource. The app resolves the ARN at runtime.

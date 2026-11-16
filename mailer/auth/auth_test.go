@@ -4,12 +4,25 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kncept/Emissary/mailer/usermanager"
 )
+
+type disabledUserManager struct{}
+
+func (disabledUserManager) Name() string { return "disabled" }
+
+func (disabledUserManager) Authenticate(context.Context, string, string) (*usermanager.User, error) {
+	return nil, usermanager.ErrUserDisabled
+}
+
+func (disabledUserManager) Lookup(context.Context, string) (*usermanager.User, error) {
+	return nil, usermanager.ErrUserDisabled
+}
 
 func TestAuthenticator_Authenticate(t *testing.T) {
 	a := New("user", "pass", "secret", time.Hour, "", "")
@@ -33,6 +46,78 @@ func TestAuthenticator_Authenticate(t *testing.T) {
 			got := a.Authenticate(tt.username, tt.password)
 			if got != tt.want {
 				t.Errorf("Authenticate() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAuthenticator_LoginReturnsDisabledUserError(t *testing.T) {
+	a := NewWithUserManager(disabledUserManager{}, nil, "secret", time.Hour, "", "")
+
+	_, err := a.Login(context.Background(), "user@example.com", "password")
+	if !errors.Is(err, usermanager.ErrUserDisabled) {
+		t.Errorf("Login() error = %v, want ErrUserDisabled", err)
+	}
+}
+
+type masteredUserManager struct {
+	user usermanager.User
+}
+
+func (m masteredUserManager) Name() string { return "mastered" }
+
+func (m masteredUserManager) Authenticate(context.Context, string, string) (*usermanager.User, error) {
+	user := m.user
+	return &user, nil
+}
+
+func (m masteredUserManager) Lookup(context.Context, string) (*usermanager.User, error) {
+	user := m.user
+	return &user, nil
+}
+
+func (masteredUserManager) List(context.Context, string, int) ([]*usermanager.EmissaryUser, string, error) {
+	return nil, "", nil
+}
+
+func (masteredUserManager) Create(context.Context, *usermanager.EmissaryUser) error { return nil }
+func (masteredUserManager) Save(context.Context, *usermanager.EmissaryUser) error   { return nil }
+
+func (masteredUserManager) Get(context.Context, string) (*usermanager.EmissaryUser, error) {
+	return nil, usermanager.ErrUserNotFound
+}
+
+func (masteredUserManager) Delete(context.Context, string) error { return nil }
+func (masteredUserManager) ChangePassword(context.Context, string, string, string) error {
+	return nil
+}
+
+func TestAuthenticator_EmissaryUserManagementClaim(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		admin bool
+		want  bool
+	}{
+		{"admin", true, true},
+		{"ordinary", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := NewWithUserManager(masteredUserManager{user: usermanager.User{
+				ID:    "user@example.com",
+				Email: "user@example.com",
+				Admin: tc.admin,
+			}}, nil, "secret", time.Hour, "", "")
+
+			result, err := a.Login(context.Background(), "user@example.com", "password")
+			if err != nil {
+				t.Fatalf("Login() error = %v", err)
+			}
+			claims, err := a.ValidateClaims(result.AccessToken)
+			if err != nil {
+				t.Fatalf("ValidateClaims() error = %v", err)
+			}
+			if claims.EmissaryUserManagement != tc.want {
+				t.Errorf("EmissaryUserManagement = %v, want %v", claims.EmissaryUserManagement, tc.want)
 			}
 		})
 	}

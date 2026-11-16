@@ -19,6 +19,18 @@ var (
 	// authenticated. Callers should not distinguish between an unknown user
 	// and a wrong password.
 	ErrInvalidCredentials = errors.New("invalid username or password")
+
+	// ErrUserNotFound is returned by Emissary-mastered managers when a user
+	// does not exist.
+	ErrUserNotFound = errors.New("user not found")
+
+	// ErrUserExists is returned when creating a user whose id is already in
+	// use.
+	ErrUserExists = errors.New("user already exists")
+
+	// ErrUserDisabled is returned when the supplied credentials are correct
+	// but the account has been disabled.
+	ErrUserDisabled = errors.New("user is disabled")
 )
 
 // User is an authenticated principal.
@@ -36,6 +48,29 @@ type User struct {
 // IsAdmin returns whether this user is an administrator.
 func (u *User) IsAdmin() bool {
 	return u.Admin
+}
+
+// EmissaryUser is a user owned by an Emissary-mastered user manager. It embeds
+// User, so it can be used anywhere a *User is expected.
+type EmissaryUser struct {
+	User // ID, Username, Email, Admin
+
+	// Enabled reports whether the user may log in. A disabled user is kept
+	// but rejected at login.
+	Enabled bool
+
+	// SaltedPassword is the user's stored password verifier. Passwords are
+	// salted and hashed by the manager; callers supply or change a plaintext
+	// password through Create and ChangePassword.
+	SaltedPassword string
+
+	// Rules are the system rules applied to mail for this user.
+	Rules []string
+}
+
+// IsEnabled reports whether the user may log in.
+func (u *EmissaryUser) IsEnabled() bool {
+	return u.Enabled
 }
 
 // Config selects and configures a user manager backend.
@@ -70,6 +105,20 @@ type UserManager interface {
 	Name() string
 	Authenticate(ctx context.Context, username, password string) (*User, error)
 	Lookup(ctx context.Context, username string) (*User, error)
+}
+
+// EmissaryAuthManager is implemented by user managers that own their user
+// store instead of delegating authentication to an external directory. The
+// management operations back the /api/user/ endpoints.
+type EmissaryAuthManager interface {
+	UserManager
+
+	List(ctx context.Context, cursor string, pageSize int) (users []*EmissaryUser, nextCursor string, err error)
+	Create(ctx context.Context, user *EmissaryUser) error
+	Save(ctx context.Context, user *EmissaryUser) error
+	Get(ctx context.Context, email string) (*EmissaryUser, error)
+	Delete(ctx context.Context, email string) error
+	ChangePassword(ctx context.Context, email, oldPassword, newPassword string) error
 }
 
 // New builds the manager selected by cfg.Type. An empty type is equivalent to
@@ -224,45 +273,6 @@ func (m *AnyManager) Lookup(_ context.Context, username string) (*User, error) {
 		return nil, ErrInvalidCredentials
 	}
 	return &User{ID: address, Username: address, Email: address}, nil
-}
-
-// DdbManager will provide in-application user management backed by DynamoDB.
-// The type is registered now so deployments can select it, but the storage
-// implementation is not part of this change.
-type DdbManager struct {
-	admin  adminAuth
-	table  string
-	region string
-}
-
-var _ UserManager = (*DdbManager)(nil)
-
-func NewDdb(cfg Config) *DdbManager {
-	return &DdbManager{
-		admin:  newAdminAuth(cfg),
-		table:  cfg.DdbTable,
-		region: cfg.Region,
-	}
-}
-
-func (m *DdbManager) Name() string { return "ddb" }
-
-func (m *DdbManager) Authenticate(_ context.Context, username, password string) (*User, error) {
-	if user, handled, err := m.admin.authenticate(username, password); handled {
-		return user, err
-	}
-	panic("unimplemented")
-}
-
-func (m *DdbManager) Lookup(_ context.Context, username string) (*User, error) {
-	if m.admin.isAdmin(username) {
-		return &User{
-			ID:       m.admin.username,
-			Username: m.admin.username,
-			Admin:    true,
-		}, nil
-	}
-	panic("unimplemented")
 }
 
 // LdapManager will proxy authentication to an LDAP server. The type is
