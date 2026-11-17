@@ -1,4 +1,4 @@
-import type { AuthState, LoginResponse } from './types.ts';
+import type { AuthState, LoginResponse, AuthCheckResponse } from './types.ts';
 import { login as generatedLogin, refresh as generatedRefresh } from './api/generated/auth.ts';
 import type { TokenResponse, Error as AuthError } from './api/generated/schemas/auth/index.ts';
 import {
@@ -103,6 +103,16 @@ export async function getUsers(cursor?: string, pageSize = 20) {
   return data as { users: Array<{ email: string; enabled: boolean; admin: boolean; rules: string[] }>; nextCursor?: string };
 }
 
+export async function autocompleteUsers(q: string): Promise<{ users: string[] }> {
+  const params = new URLSearchParams({ q });
+  const response = await authenticatedFetch(`${API_BASE}/user/autocomplete?${params.toString()}`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error((data as { error?: string }).error || 'Failed to search users');
+  }
+  return data as { users: string[] };
+}
+
 export async function getUser(email: string) {
   const response = await authenticatedFetch(`${API_BASE}/user/${encodeURIComponent(email)}`);
   const data = await response.json().catch(() => ({}));
@@ -165,13 +175,25 @@ export async function checkAuth(): Promise<AuthState> {
     return { authenticated: false };
   }
 
+  // Parse JWT claims from the token (admin, emissaryUserManagement)
+  let admin = false;
+  let emissaryUserManagement = false;
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    admin = payload.Admin === true || payload.admin === true;
+    emissaryUserManagement = payload.EmissaryUserManagement === true || payload.emissaryUserManagement === true;
+  } catch {
+    // Ignore parse errors
+  }
+
   try {
     const response = await authenticatedFetch(`${API_BASE}/auth/check`);
     if (!response.ok) {
       return { authenticated: false };
     }
-    const data = await response.json();
-    return data;
+    const data: AuthCheckResponse = await response.json();
+    // Use username from server response (which validates the token)
+    return { authenticated: true, username: data.username, admin, emissaryUserManagement };
   } catch {
     return { authenticated: false };
   }

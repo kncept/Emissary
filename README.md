@@ -36,8 +36,8 @@ The user manager is selected with `USER_MANAGER`:
 | `ddb` | In-application user management backed by DynamoDB. Administrator users can manage accounts through `/api/user/`. |
 | `ldap` | Reserved for proxying authentication to an LDAP server. |
 
-The JWT carries the user id in the `sub` claim and only includes
-`admin: true` for the built-in administrator. Ordinary users only see mail
-addressed to them or sent by them. Administrators can filter the mailbox with
-`GET /api/emails?user=<address>` (omit the filter to see every message) and can
-send as any address.
+The JWT carries the user id (the user's email address) in the `sub` claim and
+only includes `admin: true` for the built-in administrator. Ordinary users only
+see mail addressed to them or sent by them. Administrators can filter messages
+with `GET /api/emails?user=<address>` (omit the filter to see every message) and
+can send as any address.

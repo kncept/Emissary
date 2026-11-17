@@ -67,7 +67,7 @@ The following claims must always be present:
 
 | Claim | Type | Meaning |
 | --- | --- | --- |
-| `sub` | string | The email address of the user. |
+| `sub` | string | The user id (the user's email address). |
 | `sid` | string | The session id; used to ensure strict access/refresh token stepping. |
 
 In addition to standard claims, the JWT MAY have the following
@@ -82,7 +82,7 @@ The refresh token must contain:
 
 | Claim | Type | Meaning |
 | --- | --- | --- |
-| `sub` | string | The email address of the user; used to double-check the session. |
+| `sub` | string | The user id (the user's email address); used to double-check the session. |
 | `sid` | string | The session id. |
 | `issue` | integer | The issue number of this refresh token; strict ordering is enforced. |
 

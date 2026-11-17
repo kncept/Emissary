@@ -199,6 +199,38 @@ func (m *DdbManager) List(ctx context.Context, cursor string, pageSize int) ([]*
 	return users, nextCursor, nil
 }
 
+func (m *DdbManager) Autocomplete(ctx context.Context, q string) ([]string, error) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return []string{}, nil
+	}
+
+	qLower := strings.ToLower(q)
+	matches := make([]string, 0, 10)
+	cursor := ""
+
+	for len(matches) < 10 {
+		users, next, err := m.List(ctx, cursor, 100)
+		if err != nil {
+			return nil, err
+		}
+		for _, u := range users {
+			if strings.Contains(strings.ToLower(u.Email), qLower) {
+				matches = append(matches, u.Email)
+				if len(matches) >= 10 {
+					break
+				}
+			}
+		}
+		if next == "" || len(users) == 0 {
+			break
+		}
+		cursor = next
+	}
+
+	return matches, nil
+}
+
 func (m *DdbManager) Create(ctx context.Context, user *EmissaryUser) error {
 	if user == nil {
 		return errors.New("user is required")

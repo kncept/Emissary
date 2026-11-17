@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { checkAuth, deleteEmail, login } from './api';
 
 const TOKEN_KEY = 'emissary_token';
 const REFRESH_TOKEN_KEY = 'emissary_refresh_token';
@@ -17,6 +16,11 @@ function createMockResponse(data: unknown, options: { status?: number; ok?: bool
   };
 }
 
+async function importApi() {
+  vi.resetModules();
+  return await import('./api');
+}
+
 describe('auth api', () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -28,6 +32,7 @@ describe('auth api', () => {
 
   describe('checkAuth', () => {
     it('returns unauthenticated immediately when no token is stored', async () => {
+      const { checkAuth } = await importApi();
       const fetchMock = vi.fn();
       vi.stubGlobal('fetch', fetchMock);
 
@@ -38,11 +43,12 @@ describe('auth api', () => {
     });
 
     it('sends the stored token as a Bearer header', async () => {
+      const { checkAuth } = await importApi();
       window.localStorage.setItem(TOKEN_KEY, 'abc123');
       const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url === '/api/auth/check') {
-          return createMockResponse({ authenticated: true, username: 'Emissary', admin: false });
+          return createMockResponse({ username: 'Emissary' });
         }
         throw new Error(`Unexpected fetch: ${url}`);
       });
@@ -63,12 +69,13 @@ describe('auth api', () => {
         authHeader = headers['Authorization'] ?? headers['authorization'] ?? null;
       }
       expect(authHeader).toBe('Bearer abc123');
-      expect(result).toEqual({ authenticated: true, username: 'Emissary', admin: false });
+      expect(result).toEqual({ authenticated: true, username: 'Emissary', admin: false, emissaryUserManagement: false });
     });
   });
 
   describe('deleteEmail', () => {
     it('sends a JMAP Email/set destroy request with the stored token', async () => {
+      const { deleteEmail } = await importApi();
       window.localStorage.setItem(TOKEN_KEY, 'abc123');
       window.localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-token');
 
@@ -81,7 +88,7 @@ describe('auth api', () => {
             primaryAccounts: { 'urn:ietf:params:jmap:mail': 'test@example.com' },
           });
         }
-        if (url === '/api') {
+        if (url === '/api/') {
           return createMockResponse({
             methodResponses: [
               ['Email/set', { accountId: 'test@example.com', oldState: '1', newState: '2', created: {}, updated: {}, destroyed: ['email-id'], notDestroyed: {} }, 'set1'],
@@ -95,12 +102,11 @@ describe('auth api', () => {
 
       await deleteEmail('email-id');
 
-      // Should have called session, then JMAP API
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      // deleteEmail calls jmapRequest which fetches session then makes JMAP API call
       expect(fetchMock).toHaveBeenCalledWith('/.well-known/jmap', expect.any(Object));
-      const apiCall = fetchMock.mock.calls[1] as [string, RequestInit?];
-      expect(apiCall[0]).toBe('/api');
-      const apiOptions = apiCall[1];
+      const apiCall = fetchMock.mock.calls.find((call) => call[0] === '/api/');
+      expect(apiCall).toBeDefined();
+      const apiOptions = (apiCall as unknown as [string, RequestInit?])[1];
       expect(apiOptions).toBeDefined();
       expect(apiOptions!.method).toBe('POST');
       // Headers can be Headers object, string[][], or Record<string, string>
@@ -120,11 +126,15 @@ describe('auth api', () => {
     });
 
     it('throws when the delete fails', async () => {
+      const { deleteEmail } = await importApi();
       window.localStorage.setItem(TOKEN_KEY, 'abc123');
       window.localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-token');
 
       const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
+        if (url === '/api/auth/check') {
+          return createMockResponse({ username: 'test@example.com' });
+        }
         if (url === '/.well-known/jmap') {
           return createMockResponse({
             username: 'test@example.com',
@@ -132,7 +142,7 @@ describe('auth api', () => {
             primaryAccounts: { 'urn:ietf:params:jmap:mail': 'test@example.com' },
           });
         }
-        if (url === '/api') {
+        if (url === '/api/') {
           return createMockResponse({
             methodResponses: [
               ['error', { type: 'notFound', description: 'Email not found' }, 'set1'],
@@ -150,6 +160,7 @@ describe('auth api', () => {
 
   describe('login', () => {
     it('stores the returned tokens and reports success to the caller', async () => {
+      const { login } = await importApi();
       const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url === '/api/auth/login') {
@@ -172,6 +183,7 @@ describe('auth api', () => {
     });
 
     it('does not store tokens and surfaces the error on failure', async () => {
+      const { login } = await importApi();
       const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url === '/api/auth/login') {

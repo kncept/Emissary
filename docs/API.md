@@ -49,6 +49,10 @@ every path in `auth.yaml` must start with `/api/auth/`, every path in
 fall under either prefix, and the three documents must never share a
 (method, path) operation.
 
+`GET /api/user/autocomplete` is the one `/api/user/` operation that is
+not generated from `users.yaml`: it is served directly by the configured
+`UserManager` and is documented below.
+
 ## Conventions
 
 - Requests and responses are JSON. Bodies are capped at 1 MiB.
@@ -67,7 +71,6 @@ fall under either prefix, and the three documents must never share a
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/api/auth/login` | — | Exchange credentials for a JWT. |
-| `GET` | `/api/auth/check` | — | Report whether the presented token is valid. |
 | `POST` | `/api/auth/logout` | Bearer | Client-side token discard hook. |
 | `GET` | `/api/user/` | Bearer\* | List all users (paginated). |
 | `POST` | `/api/user/` | Bearer\* | Create a new user. |
@@ -75,6 +78,7 @@ fall under either prefix, and the three documents must never share a
 | `PATCH` | `/api/user/{email}` | Bearer\* | Update a user. |
 | `DELETE` | `/api/user/{email}` | Bearer\* | Delete a user. |
 | `POST` | `/api/user/{email}/password` | Bearer† | Change a user's password. |
+| `GET` | `/api/user/autocomplete` | Bearer | Search user IDs (email addresses) for admin masquerade. |
 | `GET` | `/.well-known/jmap` | Bearer | Get the JMAP Session object (capabilities, accounts). |
 | `POST` | `/api/` | Bearer | JMAP batch API endpoint for all mail operations. |
 | `POST` | `/upload/{accountId}` | Bearer | Upload binary data (attachments). |
@@ -133,22 +137,36 @@ Response (`200`):
 
 `401 invalid credentials` on failure. The administrator is checked
 first, then the configured user manager backend. The access token carries the
-user id in `sub` (mirrored in `sid`), `admin` only when true, `iat`,
-`exp`, and the configured `aud`/`iss`.
-
-## `GET /api/auth/check`
-
-Returns `{ "authenticated": false }` without a valid token, otherwise:
-
-```json
-{ "authenticated": true, "username": "ebola@example.com", "admin": false }
-```
+user id (the user's email address) in `sub`, the session id in `sid`,
+`admin` only when true, `iat`, `exp`, and the configured `aud`/`iss`.
 
 ## `POST /api/auth/logout`
 
 JWTs are stateless, so nothing is invalidated server-side; the endpoint
 exists as a stable hook for future revocation. Returns
 `{ "success": true }`. The client is expected to drop the token.
+
+## `GET /api/user/autocomplete`
+
+Searches user IDs (email addresses) for admin masquerade. The endpoint is
+backed by `UserManager.Autocomplete`, not by the generated management
+server, and is available to administrators.
+
+Query parameter `q` is required and must be at least 3 characters.
+
+Response (`200`):
+
+```json
+{
+  "users": [
+    "user@example.com",
+    "other@example.com"
+  ]
+}
+```
+
+Returns up to 10 matches. An empty list means there are no matches (not a
+`404`).
 
 ## `GET /.well-known/jmap`
 

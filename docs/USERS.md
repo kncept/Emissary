@@ -2,8 +2,8 @@
 
 When Emissary manages its own users, an administrator can create,
 update, list and delete user accounts through the API. The normative
-wire contract will live in `api/users.yaml` (not added yet); this
-document describes the design. Error conventions (status codes,
+wire contract for the management endpoints lives in `api/users.yaml`;
+this document describes the design. Error conventions (status codes,
 `{"error": "<message>"}` bodies, generic messages) are shared with the
 rest of the API — see [API.md](API.md).
 
@@ -40,6 +40,7 @@ type UserManager interface {
 	Name() string
 	Authenticate(ctx context.Context, username, password string) (*User, error)
 	Lookup(ctx context.Context, username string) (*User, error)
+	Autocomplete(ctx context.Context, q string) ([]string, error)
 }
 
 type EmissaryAuthManager interface {
@@ -96,10 +97,10 @@ Errors:
 ## The user
 
 `EmissaryUser` is a superstruct of `User`: it embeds `User` (whose
-`ID`/`Email` is the email address the user logs in with — the user's
-stable identifier), so it is a `User` as well: it promotes `User`'s
-fields and methods, and its embedded `User` can be handed anywhere a
-`User` (or `*User`) is expected. The fields it adds:
+`ID` is the user's email address — the stable identifier and login name
+— and whose `Email` holds the same address), so it is a `User` as well:
+it promotes `User`'s fields and methods, and its embedded `User` can be
+handed anywhere a `User` (or `*User`) is expected. The fields it adds:
 
 ```go
 type EmissaryUser struct {
@@ -148,6 +149,64 @@ Verification works by inspecting the salt prefix:
 - `b-` → bcrypt.CompareHashAndPassword
 - `a2-` → argon2.Verify
 - `p2-` → PBKDF2-SHA256 verification
+
+## Admin Masquerade
+
+Administrators with the `EmissaryUserManagement` JWT claim can **masquerade as another user** to view and act in the application on their behalf for support and administration purposes.
+
+### Frontend UI
+
+- A **"Masquerade" button** appears in the top header bar for users with admin permissions (the `EmissaryUserManagement` claim in their JWT).
+- Clicking the button opens a **modal** with a user ID (email address) input field and an autocomplete results area.
+- **Autocomplete behavior:**
+  - Search begins only after **at least 3 characters** are entered.
+  - Requests are **debounced by 100 ms** after the last keystroke.
+  - A **spinner** shows while a search is in progress.
+  - Only **one request** is in flight at a time; rapid typing does not fire parallel requests.
+  - The client caches the **last 3 lookups in memory** (keyed by normalized query).
+  - The UI **always displays the latest valid results** for the current query (subject to the debounce delay); stale responses never override newer ones.
+  - Up to **10 matches** are shown; clicking a result selects that full user ID (email address).
+  - When a search completes with no matches, an **empty state** is displayed.
+- The frontend restricts the masquerade UI to admins, but **security is enforced server-side** (the API returns `403` for non-admins).
+
+### API Endpoint (Autocomplete)
+
+The autocomplete endpoint lives under the `/api/user/` prefix but is served directly by the configured `UserManager` (see `mailer/handler/handler.go`), not by the generated user-management server. `Autocomplete` is part of the `UserManager` interface only.
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/user/autocomplete` | Bearer\* | Search users by partial user ID (email address) for admin masquerade. |
+
+\* Requires `EmissaryUserManagement` JWT claim and Emissary-mastered user manager (`ddb` backend).
+
+**Request:**
+- Query parameter `q` (string): the partial user ID (email address) to search (minimum 3 characters).
+
+**Response (`200`):**
+```json
+{
+  "users": [
+    "user@example.com",
+    "other@example.com"
+  ]
+}
+```
+Returns up to **10 user IDs (email addresses)**. An empty list indicates no matches (not a `404`).
+
+**Errors:**
+- `401` — Authentication required (missing/invalid token).
+- `403` — Insufficient permissions (caller lacks `EmissaryUserManagement` claim in a valid JWT).
+
+The endpoint follows shared API conventions from [API.md](API.md) (error body `{"error": "<message>"}`).
+
+### Activation & Session
+
+After selecting a user from autocomplete, the admin initiates masquerade via the existing token exchange mechanism (consistent with `docs/AUTH.md` and `/api/auth/*`). The selected user becomes the effective user context for subsequent requests.
+
+**Open items for future enhancement:**
+- **Exit masquerade:** How an admin stops masquerading and returns to their own identity.
+- **Active indicator:** Persistent banner/indicator while masquerading.
+- **Search semantics:** Prefix vs. substring match, case sensitivity, exclusion of current user or disabled accounts.
 
 ## Status
 

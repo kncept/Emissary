@@ -139,14 +139,13 @@ func TestAuthCheck_ValidToken(t *testing.T) {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 	var resp struct {
-		Authenticated bool   `json:"authenticated"`
-		Username      string `json:"username"`
+		Username string `json:"username"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !resp.Authenticated || resp.Username != "user" {
-		t.Errorf("got %+v, want authenticated user %q", resp, "user")
+	if resp.Username != "user" {
+		t.Errorf("got username %q, want %q", resp.Username, "user")
 	}
 }
 
@@ -154,17 +153,8 @@ func TestAuthCheck_NoToken(t *testing.T) {
 	h, _ := newTestHandler()
 	w := doRequest(h, http.MethodGet, "/api/auth/check", "", "")
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
-	}
-	var resp struct {
-		Authenticated bool `json:"authenticated"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp.Authenticated {
-		t.Error("expected authenticated=false when no token is sent")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 }
 
@@ -198,20 +188,12 @@ func TestLoginThenAuthCheck(t *testing.T) {
 	}
 
 	var checkResp struct {
-		Authenticated bool   `json:"authenticated"`
-		Username      string `json:"username"`
-		Admin         bool   `json:"admin"`
+		Username string `json:"username"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &checkResp); err != nil {
 		t.Fatalf("decode auth/check response: %v", err)
 	}
-	if !checkResp.Authenticated {
-		t.Error("expected authenticated=true")
-	}
 	if checkResp.Username != "user" {
 		t.Errorf("username = %q, want %q", checkResp.Username, "user")
-	}
-	if !checkResp.Admin {
-		t.Error("expected admin=true for admin user (NoneManager only allows admin)")
 	}
 }

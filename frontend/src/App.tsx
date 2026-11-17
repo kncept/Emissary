@@ -58,7 +58,11 @@ function App() {
           path="/*"
           element={
             authenticated ? (
-              <Layout onLogout={handleLogout} canManageUsers={auth.emissaryUserManagement}>
+              <Layout
+                onLogout={handleLogout}
+                canManageUsers={auth.emissaryUserManagement}
+                canMasquerade={auth.admin}
+              >
                 <Routes>
                   <Route path="/" element={<EmailList admin={auth.admin} />} />
                   <Route path="/email/:id" element={<EmailView />} />

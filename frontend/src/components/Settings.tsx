@@ -5,15 +5,26 @@ interface SettingsProps {
   auth: AuthState;
 }
 
+const MASQUERADE_AS_KEY = 'masquerade_as';
+
 export default function Settings({ auth }: SettingsProps) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [masqueradeAs, setMasqueradeAs] = useState<string | null>(null);
 
   useEffect(() => {
     // Reset messages when auth changes
     setError(null);
     setSuccess(null);
   }, [auth]);
+
+  useEffect(() => {
+    try {
+      setMasqueradeAs(window.localStorage.getItem(MASQUERADE_AS_KEY));
+    } catch {
+      setMasqueradeAs(null);
+    }
+  }, []);
 
   return (
     <div className="settings-page">
@@ -22,9 +33,16 @@ export default function Settings({ auth }: SettingsProps) {
       <section className="settings-section">
         <h3>Account Information</h3>
         <div className="settings-field">
-          <label>Mailbox ID</label>
+          <label>User ID (email address)</label>
           <div className="settings-value">{auth.email || auth.username || 'Unknown'}</div>
         </div>
+
+        {masqueradeAs && (
+          <div className="settings-field">
+            <label>Masquerading as</label>
+            <div className="settings-value">{masqueradeAs}</div>
+          </div>
+        )}
 
         {auth.admin && (
           <div className="settings-field">

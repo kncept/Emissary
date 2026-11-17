@@ -24,6 +24,10 @@ func (disabledUserManager) Lookup(context.Context, string) (*usermanager.User, e
 	return nil, usermanager.ErrUserDisabled
 }
 
+func (disabledUserManager) Autocomplete(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 func TestAuthenticator_Authenticate(t *testing.T) {
 	a := New("user", "pass", "secret", time.Hour, "", "")
 
@@ -74,6 +78,10 @@ func (m masteredUserManager) Authenticate(context.Context, string, string) (*use
 func (m masteredUserManager) Lookup(context.Context, string) (*usermanager.User, error) {
 	user := m.user
 	return &user, nil
+}
+
+func (masteredUserManager) Autocomplete(context.Context, string) ([]string, error) {
+	return nil, nil
 }
 
 func (masteredUserManager) List(context.Context, string, int) ([]*usermanager.EmissaryUser, string, error) {

@@ -137,13 +137,13 @@ func getEmailsJMAP(t *testing.T, h http.Handler, token string) []EmailResponse {
 	// First, query for email IDs
 	queryResp := jmapRequest(t, h, token, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
 		{"Email/query", map[string]interface{}{
-			"accountId": "bob@example.com",
-			"filter":    map[string]string{"inMailbox": "inbox"},
-			"sort":      []interface{}{map[string]interface{}{"property": "receivedAt", "isAscending": false}},
+			"accountId":       "bob@example.com",
+			"filter":          map[string]string{"inMailbox": "inbox"},
+			"sort":            []interface{}{map[string]interface{}{"property": "receivedAt", "isAscending": false}},
 			"collapseThreads": false,
 		}, "q1"},
 	})
-	
+
 	methodResponsesRaw, ok := queryResp["methodResponses"]
 	if !ok {
 		return []EmailResponse{}
@@ -157,18 +157,12 @@ func getEmailsJMAP(t *testing.T, h http.Handler, token string) []EmailResponse {
 			break
 		}
 	}
-	
+
 	if queryResult == nil {
 		return []EmailResponse{}
 	}
-	
-	// The result is nested under "result" key
-	resultObj, ok := queryResult["result"].(map[string]interface{})
-	if !ok {
-		return []EmailResponse{}
-	}
-	
-	idsRaw, ok := resultObj["ids"]
+
+	idsRaw, ok := queryResult["ids"]
 	if !ok {
 		return []EmailResponse{}
 	}
@@ -177,20 +171,20 @@ func getEmailsJMAP(t *testing.T, h http.Handler, token string) []EmailResponse {
 	for i, id := range ids {
 		idStrings[i] = id.(string)
 	}
-	
+
 	if len(idStrings) == 0 {
 		return []EmailResponse{}
 	}
-	
+
 	// Now get the emails with the IDs
 	getResp := jmapRequest(t, h, token, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
 		{"Email/get", map[string]interface{}{
-			"accountId": "bob@example.com",
-			"ids":       idStrings,
+			"accountId":  "bob@example.com",
+			"ids":        idStrings,
 			"properties": []string{"id", "from", "to", "subject", "preview", "receivedAt", "keywords", "mailboxIds"},
 		}, "g1"},
 	})
-	
+
 	methodResponsesRaw, ok = getResp["methodResponses"]
 	if !ok {
 		return []EmailResponse{}
@@ -204,23 +198,19 @@ func getEmailsJMAP(t *testing.T, h http.Handler, token string) []EmailResponse {
 			break
 		}
 	}
-	
+
 	if getRespObj == nil {
 		return []EmailResponse{}
 	}
-	
-	var listRaw interface{}
-	listRaw, ok = getRespObj["result"]
+
+	listRaw, ok := getRespObj["list"]
 	if !ok {
 		return []EmailResponse{}
 	}
-	resultObj = listRaw.(map[string]interface{})
-	var listRaw2 interface{}
-	listRaw2, _ = resultObj["list"]
+	list, ok := listRaw.([]interface{})
 	if !ok {
 		return []EmailResponse{}
 	}
-	list := listRaw2.([]interface{})
 	emails := make([]EmailResponse, len(list))
 	for i, item := range list {
 		e := item.(map[string]interface{})
@@ -502,7 +492,7 @@ func TestSendEmailFromRules(t *testing.T) {
 	addEmail(store, "original", "alice@example.com", "bob@example.com")
 
 	_, userToken, _ := login(t, h, "bob@example.com", "anything")
-	
+
 	// First create the email
 	emailCreateResp := jmapRequest(t, h, userToken, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
 		{"Email/set", map[string]interface{}{
@@ -520,23 +510,20 @@ func TestSendEmailFromRules(t *testing.T) {
 			},
 		}, "e1"},
 	})
-	
+
 	// Parse the created email ID
 	var createdEmailID string
 	methodResponsesRaw, _ := emailCreateResp["methodResponses"].([]interface{})
 	for _, mr := range methodResponsesRaw {
 		call := mr.([]interface{})
 		if len(call) >= 2 && call[0] == "Email/set" {
-			resultObj := call[1].(map[string]interface{})
-			// The result is nested under "result" key
-			if result, ok := resultObj["result"].(map[string]interface{}); ok {
-				if created, ok := result["created"].(map[string]interface{}); ok {
-					for _, v := range created {
-						if emailData, ok := v.(map[string]interface{}); ok {
-							if id, ok := emailData["id"].(string); ok {
-								createdEmailID = id
-								break
-							}
+			result := call[1].(map[string]interface{})
+			if created, ok := result["created"].(map[string]interface{}); ok {
+				for _, v := range created {
+					if emailData, ok := v.(map[string]interface{}); ok {
+						if id, ok := emailData["id"].(string); ok {
+							createdEmailID = id
+							break
 						}
 					}
 				}
@@ -547,7 +534,7 @@ func TestSendEmailFromRules(t *testing.T) {
 	if createdEmailID == "" {
 		t.Fatal("failed to create email")
 	}
-	
+
 	// Now submit the email (ordinary user - no custom from allowed)
 	jmapRequest(t, h, userToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
 		{"EmailSubmission/set", map[string]interface{}{
@@ -555,7 +542,7 @@ func TestSendEmailFromRules(t *testing.T) {
 			"create": map[string]interface{}{
 				"s1": map[string]interface{}{
 					"identityId": "primary",
-					"emailId": createdEmailID,
+					"emailId":    createdEmailID,
 					// No envelope - ordinary users can't set custom from
 				},
 			},
@@ -574,7 +561,7 @@ func TestSendEmailFromRules(t *testing.T) {
 	}
 
 	_, adminToken, _ := login(t, h, "admin", "secret")
-	
+
 	// Admin send with explicit from
 	adminEmailCreateResp := jmapRequest(t, h, adminToken, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
 		{"Email/set", map[string]interface{}{
@@ -592,21 +579,19 @@ func TestSendEmailFromRules(t *testing.T) {
 			},
 		}, "e1"},
 	})
-	
+
 	var adminCreatedEmailID string
 	methodResponsesRaw, _ = adminEmailCreateResp["methodResponses"].([]interface{})
 	for _, mr := range methodResponsesRaw {
 		call := mr.([]interface{})
 		if len(call) >= 2 && call[0] == "Email/set" {
-			resultObj := call[1].(map[string]interface{})
-			if result, ok := resultObj["result"].(map[string]interface{}); ok {
-				if created, ok := result["created"].(map[string]interface{}); ok {
-					for _, v := range created {
-						if emailData, ok := v.(map[string]interface{}); ok {
-							if id, ok := emailData["id"].(string); ok {
-								adminCreatedEmailID = id
-								break
-							}
+			result := call[1].(map[string]interface{})
+			if created, ok := result["created"].(map[string]interface{}); ok {
+				for _, v := range created {
+					if emailData, ok := v.(map[string]interface{}); ok {
+						if id, ok := emailData["id"].(string); ok {
+							adminCreatedEmailID = id
+							break
 						}
 					}
 				}
@@ -617,14 +602,14 @@ func TestSendEmailFromRules(t *testing.T) {
 	if adminCreatedEmailID == "" {
 		t.Fatal("failed to create admin email")
 	}
-	
+
 	jmapRequest(t, h, adminToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
 		{"EmailSubmission/set", map[string]interface{}{
 			"accountId": "admin",
 			"create": map[string]interface{}{
 				"s1": map[string]interface{}{
 					"identityId": "primary",
-					"emailId": adminCreatedEmailID,
+					"emailId":    adminCreatedEmailID,
 					"envelope": map[string]interface{}{
 						"mailFrom": map[string]string{"email": "dave@example.com"},
 						"rcptTo":   []map[string]string{{"email": "alice@example.com"}},
@@ -678,21 +663,19 @@ func TestSendEmailFromRules(t *testing.T) {
 			},
 		}, "e1"},
 	})
-	
+
 	var replyCreatedEmailID string
 	methodResponsesRaw, _ = replyCreateResp["methodResponses"].([]interface{})
 	for _, mr := range methodResponsesRaw {
 		call := mr.([]interface{})
 		if len(call) >= 2 && call[0] == "Email/set" {
-			resultObj := call[1].(map[string]interface{})
-			if result, ok := resultObj["result"].(map[string]interface{}); ok {
-				if created, ok := result["created"].(map[string]interface{}); ok {
-					for _, v := range created {
-						if emailData, ok := v.(map[string]interface{}); ok {
-							if id, ok := emailData["id"].(string); ok {
-								replyCreatedEmailID = id
-								break
-							}
+			result := call[1].(map[string]interface{})
+			if created, ok := result["created"].(map[string]interface{}); ok {
+				for _, v := range created {
+					if emailData, ok := v.(map[string]interface{}); ok {
+						if id, ok := emailData["id"].(string); ok {
+							replyCreatedEmailID = id
+							break
 						}
 					}
 				}
@@ -703,7 +686,7 @@ func TestSendEmailFromRules(t *testing.T) {
 	if replyCreatedEmailID == "" {
 		t.Fatal("failed to create reply email")
 	}
-	
+
 	// Submit reply
 	jmapRequest(t, h, adminToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
 		{"EmailSubmission/set", map[string]interface{}{
@@ -711,7 +694,7 @@ func TestSendEmailFromRules(t *testing.T) {
 			"create": map[string]interface{}{
 				"s1": map[string]interface{}{
 					"identityId": "primary",
-					"emailId": replyCreatedEmailID,
+					"emailId":    replyCreatedEmailID,
 					// No envelope - should default to original recipient
 				},
 			},
@@ -755,21 +738,19 @@ func TestSendEmailWithCCAndBCC(t *testing.T) {
 			},
 		}, "e1"},
 	})
-	
+
 	var ccCreatedEmailID string
 	methodResponsesRaw, _ := ccEmailCreateResp["methodResponses"].([]interface{})
 	for _, mr := range methodResponsesRaw {
 		call := mr.([]interface{})
 		if len(call) >= 2 && call[0] == "Email/set" {
-			resultObj := call[1].(map[string]interface{})
-			if result, ok := resultObj["result"].(map[string]interface{}); ok {
-				if created, ok := result["created"].(map[string]interface{}); ok {
-					for _, v := range created {
-						if emailData, ok := v.(map[string]interface{}); ok {
-							if id, ok := emailData["id"].(string); ok {
-								ccCreatedEmailID = id
-								break
-							}
+			result := call[1].(map[string]interface{})
+			if created, ok := result["created"].(map[string]interface{}); ok {
+				for _, v := range created {
+					if emailData, ok := v.(map[string]interface{}); ok {
+						if id, ok := emailData["id"].(string); ok {
+							ccCreatedEmailID = id
+							break
 						}
 					}
 				}
@@ -780,7 +761,7 @@ func TestSendEmailWithCCAndBCC(t *testing.T) {
 	if ccCreatedEmailID == "" {
 		t.Fatal("failed to create cc email")
 	}
-	
+
 	// Now submit the email
 	jmapRequest(t, h, userToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
 		{"EmailSubmission/set", map[string]interface{}{
@@ -788,7 +769,7 @@ func TestSendEmailWithCCAndBCC(t *testing.T) {
 			"create": map[string]interface{}{
 				"s1": map[string]interface{}{
 					"identityId": "primary",
-					"emailId": ccCreatedEmailID,
+					"emailId":    ccCreatedEmailID,
 					"envelope": map[string]interface{}{
 						"mailFrom": map[string]string{"email": ""},
 						"rcptTo":   []map[string]string{{"email": "dave@example.com"}, {"email": "eve@example.com"}, {"email": "frank@example.com"}, {"email": "george@example.com"}},
@@ -834,21 +815,19 @@ func TestSendEmailWithCCAndBCC(t *testing.T) {
 			},
 		}, "e1"},
 	})
-	
+
 	var multiCreatedEmailID string
 	methodResponsesRaw, _ = multiEmailCreateResp["methodResponses"].([]interface{})
 	for _, mr := range methodResponsesRaw {
 		call := mr.([]interface{})
 		if len(call) >= 2 && call[0] == "Email/set" {
-			resultObj := call[1].(map[string]interface{})
-			if result, ok := resultObj["result"].(map[string]interface{}); ok {
-				if created, ok := result["created"].(map[string]interface{}); ok {
-					for _, v := range created {
-						if emailData, ok := v.(map[string]interface{}); ok {
-							if id, ok := emailData["id"].(string); ok {
-								multiCreatedEmailID = id
-								break
-							}
+			result := call[1].(map[string]interface{})
+			if created, ok := result["created"].(map[string]interface{}); ok {
+				for _, v := range created {
+					if emailData, ok := v.(map[string]interface{}); ok {
+						if id, ok := emailData["id"].(string); ok {
+							multiCreatedEmailID = id
+							break
 						}
 					}
 				}
@@ -859,7 +838,7 @@ func TestSendEmailWithCCAndBCC(t *testing.T) {
 	if multiCreatedEmailID == "" {
 		t.Fatal("failed to create multi-to email")
 	}
-	
+
 	// Now submit the email
 	jmapRequest(t, h, userToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
 		{"EmailSubmission/set", map[string]interface{}{
@@ -867,7 +846,7 @@ func TestSendEmailWithCCAndBCC(t *testing.T) {
 			"create": map[string]interface{}{
 				"s1": map[string]interface{}{
 					"identityId": "primary",
-					"emailId": multiCreatedEmailID,
+					"emailId":    multiCreatedEmailID,
 					"envelope": map[string]interface{}{
 						"mailFrom": map[string]string{"email": ""},
 						"rcptTo":   []map[string]string{{"email": "alice@example.com"}, {"email": "carol@example.com"}},

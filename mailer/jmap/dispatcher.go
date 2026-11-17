@@ -16,22 +16,22 @@ func (inv *Invocation) UnmarshalJSON(data []byte) error {
 	if len(raw) != 3 {
 		return fmt.Errorf("expected 3-element array for Invocation, got %d elements", len(raw))
 	}
-	
+
 	// Unmarshal method name
 	if err := json.Unmarshal(raw[0], &inv.Name); err != nil {
 		return err
 	}
-	
+
 	// Unmarshal arguments as map
 	if err := json.Unmarshal(raw[1], &inv.Arguments); err != nil {
 		return err
 	}
-	
+
 	// Unmarshal client ID
 	if err := json.Unmarshal(raw[2], &inv.ClientID); err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -73,14 +73,14 @@ type Invocation struct {
 
 // Request represents a JMAP API request (batch of method calls).
 type Request struct {
-	Using       []string     `json:"using"`
-	MethodCalls []Invocation `json:"methodCalls"`
+	Using       []string          `json:"using"`
+	MethodCalls []Invocation      `json:"methodCalls"`
 	CreatedIDs  map[string]string `json:"createdIds,omitempty"`
 }
 
 // Response represents a JMAP API response (batch of method responses).
 type Response struct {
-	MethodResponses []Invocation `json:"methodResponses"`
+	MethodResponses []Invocation      `json:"methodResponses"`
 	CreatedIDs      map[string]string `json:"createdIds,omitempty"`
 	SessionState    string            `json:"sessionState"`
 }
@@ -208,10 +208,15 @@ func (d *Dispatcher) dispatchCall(ctx context.Context, accountID string, call In
 	}
 
 	// Construct the response invocation
-	// The response is [methodName, result, clientId]
+	// The response is [methodName, arguments, clientId], where arguments is
+	// the result object returned by the method handler.
+	var resultArgs map[string]json.RawMessage
+	if err := json.Unmarshal(result, &resultArgs); err != nil {
+		return d.errorResponseFromError(methodName, clientID, err), nil
+	}
 	return Invocation{
 		Name:      methodName,
-		Arguments: map[string]json.RawMessage{"result": result},
+		Arguments: resultArgs,
 		ClientID:  clientID,
 	}, nil
 }
@@ -221,13 +226,14 @@ func (d *Dispatcher) errorResponse(call Invocation, err error) Invocation {
 }
 
 func (d *Dispatcher) errorResponseFromError(methodName, clientID string, err error) Invocation {
-	// JMAP error response format: [methodName, {type: "...", description: "..."}, clientId]
+	// JMAP error response format: ["error", {type: "...", description: "..."}, clientId]
+	description, _ := json.Marshal(err.Error())
 	errorArgs := map[string]json.RawMessage{
 		"type":        json.RawMessage(`"unknownMethod"`),
-		"description": json.RawMessage(`"` + err.Error() + `"`),
+		"description": json.RawMessage(description),
 	}
 	return Invocation{
-		Name:      methodName,
+		Name:      "error",
 		Arguments: errorArgs,
 		ClientID:  clientID,
 	}

@@ -35,11 +35,12 @@ var (
 
 // User is an authenticated principal.
 type User struct {
-	// ID is the stable identifier written to the JWT subject claim.
+	// ID is the stable identifier written to the JWT subject claim. The user
+	// id is the user's email address.
 	ID string
 	// Username is the name presented at login.
 	Username string
-	// Email is the mailbox this user owns, when the backend is email based.
+	// Email is the user's email address (the user id).
 	Email string
 	// Admin reports whether this is the single built-in administrator.
 	Admin bool
@@ -109,6 +110,9 @@ type UserManager interface {
 	Name() string
 	Authenticate(ctx context.Context, username, password string) (*User, error)
 	Lookup(ctx context.Context, username string) (*User, error)
+	// Autocomplete returns up to 10 user ID (email address) suggestions for
+	// the given query.
+	Autocomplete(ctx context.Context, q string) ([]string, error)
 }
 
 // EmissaryAuthManager is implemented by user managers that own their user
@@ -218,6 +222,14 @@ func (m *NoneManager) Lookup(_ context.Context, username string) (*User, error) 
 	return nil, ErrInvalidCredentials
 }
 
+func (m *NoneManager) Autocomplete(_ context.Context, q string) ([]string, error) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return []string{}, nil
+	}
+	return []string{q}, nil
+}
+
 // AnyManager allows any valid address in the receiving domain to log in with
 // any password. It is intended for development and trusted deployments.
 type AnyManager struct {
@@ -249,7 +261,7 @@ func (m *AnyManager) Authenticate(_ context.Context, username, password string) 
 		return nil, ErrInvalidCredentials
 	}
 	// Reject addresses such as "a@domain@domain" that merely end in the right
-	// suffix but are not valid mailboxes.
+	// suffix but are not valid addresses.
 	if strings.Count(address, "@") != 1 {
 		return nil, ErrInvalidCredentials
 	}
@@ -277,6 +289,14 @@ func (m *AnyManager) Lookup(_ context.Context, username string) (*User, error) {
 		return nil, ErrInvalidCredentials
 	}
 	return &User{ID: address, Username: address, Email: address}, nil
+}
+
+func (m *AnyManager) Autocomplete(_ context.Context, q string) ([]string, error) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return []string{}, nil
+	}
+	return []string{q}, nil
 }
 
 // LdapManager will proxy authentication to an LDAP server. The type is
@@ -310,6 +330,10 @@ func (m *LdapManager) Lookup(_ context.Context, username string) (*User, error) 
 			Admin:    true,
 		}, nil
 	}
+	panic("unimplemented")
+}
+
+func (m *LdapManager) Autocomplete(_ context.Context, _ string) ([]string, error) {
 	panic("unimplemented")
 }
 

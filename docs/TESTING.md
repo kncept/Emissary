@@ -123,7 +123,7 @@ it. When renaming tests, keep this table in sync.
 | Ordinary users see only mail sent by or addressed to them | `handler` `TestUserModeFiltersEmailsByOwner` |
 | Out-of-visibility messages return `404`, not `403` (no existence leak) | `handler` `TestUserModeFiltersEmailsByOwner`, `TestDeleteEmailVisibilityAndRemoval` |
 | Admins see everything and can filter with `?user=` | `handler` `TestAdminCanFilterAndSeeAllUsers` |
-| JWT `sub` is the user id; `admin: true` only for the built-in admin | `handler` `TestJWTIncludesUserIDAndAdminOnlyForAdmin`, `auth` tests |
+| JWT `sub` is the user id (the user's email address); `admin: true` only for the built-in admin | `handler` `TestJWTIncludesUserIDAndAdminOnlyForAdmin`, `auth` tests |
 | Blank `PASSWORD` disables admin login without affecting other managers | `handler` `TestBlankAdminPasswordDisablesAdminLogin`, `usermanager` tests |
 | Ordinary users always send as themselves; admins as anyone; replies default to the original recipient | `handler` `TestSendEmailFromRules` |
 | Deleting an email also removes its metadata | `handler` `TestDeleteEmailAlsoDeletesMetadata` |

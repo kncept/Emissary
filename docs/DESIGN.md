@@ -59,8 +59,8 @@ application.
 ## Visibility and authorization model
 
 Authentication produces a JWT (HS256, Bearer token) whose `sub` claim is
-the user id and which carries `admin: true` only for the built-in
-administrator. Authorization is enforced in the API handler:
+the user id (the user's email address) and which carries `admin: true`
+only for the built-in administrator. Authorization is enforced in the API handler:
 
 - Ordinary users only see messages where their address appears in
   `From`, `To`, `Cc` or `Bcc`.

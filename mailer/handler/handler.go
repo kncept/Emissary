@@ -273,18 +273,6 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 		})
 	})
 
-	mux.HandleFunc("GET /api/auth/check", func(w http.ResponseWriter, r *http.Request) {
-		if claims, ok := bearerClaims(authenticator, r); ok {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"authenticated": true,
-				"username":      claims.Subject,
-				"admin":         claims.Admin,
-			})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
-	})
-
 	mux.Handle("GET /.well-known/jmap", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPSession(w, r)
 	})))
@@ -294,6 +282,35 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 	mux.Handle("POST /upload/", requireAuth(authenticator, http.HandlerFunc(handleJMAPUpload)))
 	mux.Handle("GET /download/", requireAuth(authenticator, http.HandlerFunc(handleJMAPDownload)))
 	mux.Handle("GET /eventsource/", requireAuth(authenticator, http.HandlerFunc(handleJMAPPush)))
+
+	mux.Handle("GET /api/user/autocomplete", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims := currentClaims(r)
+		if claims == nil || !claims.Admin {
+			writeError(w, http.StatusForbidden, "insufficient permissions")
+			return
+		}
+
+		q := strings.TrimSpace(r.URL.Query().Get("q"))
+		if len(q) < 3 {
+			writeError(w, http.StatusBadRequest, "q must be at least 3 characters")
+			return
+		}
+
+		matches, err := userManager.Autocomplete(r.Context(), q)
+		if err != nil {
+			logRequestError(r, "autocomplete users", err)
+			writeError(w, http.StatusInternalServerError, "failed to search users")
+			return
+		}
+		if matches == nil {
+			matches = []string{}
+		}
+		if len(matches) > 10 {
+			matches = matches[:10]
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"users": matches})
+	})))
 
 	if mgr, ok := userManager.(EmissaryAuthManager); ok {
 		usersHandler := NewUsersHandler(mgr, authenticator)
@@ -364,9 +381,11 @@ func (h usersSecurityHandler) HandleBearerAuth(ctx context.Context, operationNam
 	if err != nil {
 		return nil, err
 	}
+
 	if !claims.EmissaryUserManagement {
 		return nil, &authErr{message: "insufficient permissions"}
 	}
+
 	ctx = context.WithValue(ctx, claimsContextKey{}, claims)
 	return ctx, nil
 }
@@ -862,19 +881,6 @@ func handleSendEmail(w http.ResponseWriter, r *http.Request, emailStore storage.
 
 func handleLogout(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
-}
-
-func handleAuthCheck(w http.ResponseWriter, r *http.Request, authenticator *auth.Authenticator) {
-	if claims, ok := bearerClaims(authenticator, r); ok {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"authenticated":         true,
-			"username":              claims.Subject,
-			"admin":                 claims.Admin,
-			"emissaryUserManagement": claims.EmissaryUserManagement,
-		})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 }
 
 func normalizeAddress(value string) string {
