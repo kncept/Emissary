@@ -5,6 +5,20 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
+# Get the git commit hash for ldflags
+get_commit_hash() {
+	git rev-parse HEAD 2>/dev/null || echo "unknown"
+}
+
+# Get the build time for ldflags (ISO 8601 format)
+get_build_time() {
+	date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "unknown"
+}
+
+COMMIT_HASH=$(get_commit_hash)
+BUILD_TIME=$(get_build_time)
+LDFLAGS="-X github.com/kncept/Emissary/mailer/envutil.CommitHash=${COMMIT_HASH} -X github.com/kncept/Emissary/mailer/envutil.BuildTime=${BUILD_TIME}"
+
 usage() {
 	cat <<EOF
 Usage: $0 <command>
@@ -61,9 +75,9 @@ build_backend() {
 		mkdir -p .build
 		cd mailer
 
-		go build -o ../.build/frontend ./cmd/frontend
-		go build -o ../.build/sns-receiver ./cmd/sns-receiver
-		go build -o ../.build/s3-receiver ./cmd/s3-receiver
+		go build -ldflags="${LDFLAGS}" -o ../.build/frontend ./cmd/frontend
+		go build -ldflags="${LDFLAGS}" -o ../.build/sns-receiver ./cmd/sns-receiver
+		go build -ldflags="${LDFLAGS}" -o ../.build/s3-receiver ./cmd/s3-receiver
 	)
 }
 
@@ -73,11 +87,11 @@ build_backend() {
 build_lambda() {
 	(
 		cd mailer/cmd/frontend
-		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bootstrap .
+		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o bootstrap .
 	)
 	(
 		cd mailer/cmd/s3-receiver
-		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bootstrap .
+		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o bootstrap .
 	)
 }
 
@@ -135,6 +149,29 @@ generate_guid() {
 	fi
 }
 
+# Print the non-private environment variables that affect deployment
+deploy_show_env() {
+	echo "=== Emissary Deployment Environment ==="
+	echo "DOMAIN: ${DOMAIN:-<not set>}"
+	echo "AWS_REGION: ${AWS_REGION:-<not set>}"
+	echo "SUBDOMAINS: ${SUBDOMAINS:-<not set (defaults to DOMAIN only)>}"
+	echo "S3_BUCKET: ${S3_BUCKET:-<not set (will create new bucket)>}"
+	echo "TABLE_PREFIX: ${TABLE_PREFIX:-${DDB_TABLE_PREFIX:-<not set (defaults to emissary-)>}}"
+	echo "SESSION: ${SESSION:-<not set (defaults to none)>}"
+	echo "SESSION_TABLE: ${SESSION_TABLE:-<not set>}"
+	echo "USER_MANAGER: ${USER_MANAGER:-<not set (defaults to none)>}"
+	echo "USER_TABLE: ${USER_TABLE:-<not set>}"
+	echo "USERNAME: ${USERNAME:-<not set (no admin user)>}"
+	if [[ -n "${PASSWORD+x}" ]]; then
+		echo "PASSWORD: (defined)"
+	else
+		echo "PASSWORD: (not defined)"
+	fi
+	echo "JWT_SECRET: $(if [[ -n "${JWT_SECRET:-}" ]]; then echo "(defined)"; else echo "<not set (will generate)>"; fi)"
+	echo "SES_FROM: ${SES_FROM:-<not set (defaults to no-reply@DOMAIN)>}"
+	echo "========================================="
+}
+
 # Deploy helpers
 deploy_init() {
 	(
@@ -153,6 +190,7 @@ deploy_list() {
 
 # Deploy all stacks
 deploy_all() {
+	deploy_show_env
 	deploy_init
 	(
 		cd deploy
@@ -162,6 +200,7 @@ deploy_all() {
 
 # Deploy the email identity stack
 deploy_id() {
+	deploy_show_env
 	deploy_init
 	(
 		cd deploy
@@ -171,6 +210,7 @@ deploy_id() {
 
 # Deploy the email identity and inbound stacks
 deploy_in() {
+	deploy_show_env
 	deploy_init
 	(
 		cd deploy
@@ -180,6 +220,7 @@ deploy_in() {
 
 # Deploy the application stack
 deploy_client() {
+	deploy_show_env
 	deploy_init
 	(
 		cd deploy
