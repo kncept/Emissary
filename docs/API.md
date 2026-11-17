@@ -24,7 +24,7 @@ implementation and client consumption.
 
 ## Specs and path ownership
 
-The wire contract is defined by three OpenAPI documents, and they must
+The wire contract is defined by four OpenAPI documents, and they must
 never overlap:
 
 - [`api/auth.yaml`](../api/auth.yaml) — authentication. **Every
@@ -41,12 +41,20 @@ never overlap:
 - [`api/jmap.yaml`](../api/jmap.yaml) — JMAP (RFC 8620/8621): the
   session resource, the batched API endpoint, binary upload/download
   and the EventSource connection. It defines **no** auth operations;
-  none of its paths may fall under `/api/auth/` or `/api/user/`.
+  none of its paths may fall under `/api/auth/`, `/api/user/` or
+  `/api/support/`.
+- [`api/support.yaml`](../api/support.yaml) — administrative support and
+  diagnostics (admin only). **Every operation lives under the reserved
+  URL prefix `/api/support/`.** The prefix is owned exclusively by this
+  document: it never defines operations outside the prefix, and no other
+  document may define a path under it. These endpoints require the
+  `Admin` JWT claim; see [SUPPORT.md](SUPPORT.md).
 
 The rule is enforced by `api/spec_test.go` (run by `./run.sh test`):
 every path in `auth.yaml` must start with `/api/auth/`, every path in
-`users.yaml` must start with `/api/user/`, no path in `jmap.yaml` may
-fall under either prefix, and the three documents must never share a
+`users.yaml` must start with `/api/user/`, every path in `support.yaml`
+must start with `/api/support/`, no path in `jmap.yaml` may fall under
+any of those prefixes, and the four documents must never share a
 (method, path) operation.
 
 `GET /api/user/autocomplete` is the one `/api/user/` operation that is
@@ -79,6 +87,10 @@ not generated from `users.yaml`: it is served directly by the configured
 | `DELETE` | `/api/user/{email}` | Bearer\* | Delete a user. |
 | `POST` | `/api/user/{email}/password` | Bearer† | Change a user's password. |
 | `GET` | `/api/user/autocomplete` | Bearer | Search user IDs (email addresses) for admin masquerade. |
+| `GET` | `/api/support/configurations` | Bearer‡ | List configuration sections and implementations. |
+| `GET` | `/api/support/configurations/{name}` | Bearer‡ | Get full settings for one configuration section. |
+| `GET` | `/api/support/bucket/root` | Bearer‡ | List unprocessed staging objects at the bucket root. |
+| `POST` | `/api/support/process-email` | Bearer‡ | Run the inbound pipeline on a staging object. |
 | `GET` | `/.well-known/jmap` | Bearer | Get the JMAP Session object (capabilities, accounts). |
 | `POST` | `/api/` | Bearer | JMAP batch API endpoint for all mail operations. |
 | `POST` | `/upload/{accountId}` | Bearer | Upload binary data (attachments). |
@@ -88,6 +100,8 @@ not generated from `users.yaml`: it is served directly by the configured
 \* Requires `EmissaryUserManagement` JWT claim and Emissary-mastered user manager (the `ddb` backend).
 
 † Any authenticated user can change their own password. Administrators with `EmissaryUserManagement` can change any user's password. Requires Emissary-mastered user manager (`ddb` backend).
+
+‡ Requires the `Admin` JWT claim (the built-in administrator). See [SUPPORT.md](SUPPORT.md).
 
 ## JMAP Mail Operations
 
@@ -167,6 +181,20 @@ Response (`200`):
 
 Returns up to 10 matches. An empty list means there are no matches (not a
 `404`).
+
+## Support API
+
+The administrative support endpoints under `/api/support/` are documented in
+[SUPPORT.md](SUPPORT.md). They require the `Admin` JWT claim and expose:
+
+- `GET /api/support/configurations` — configuration sections and their
+  implementations.
+- `GET /api/support/configurations/{name}` — full settings for one section,
+  with secrets redacted.
+- `GET /api/support/bucket/root` — staging objects at the bucket root (S3
+  storage only).
+- `POST /api/support/process-email` — run the inbound pipeline on a staging
+  object (S3 storage only).
 
 ## `GET /.well-known/jmap`
 

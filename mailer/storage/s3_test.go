@@ -31,6 +31,7 @@ func newFakeS3(objects map[string]string) *fakeS3 {
 
 func (f *fakeS3) ListObjectsV2(_ context.Context, input *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
 	prefix := aws.ToString(input.Prefix)
+	delimiter := aws.ToString(input.Delimiter)
 	keys := make([]string, 0, len(f.objects))
 	for key := range f.objects {
 		if strings.HasPrefix(key, prefix) {
@@ -40,11 +41,24 @@ func (f *fakeS3) ListObjectsV2(_ context.Context, input *s3.ListObjectsV2Input, 
 	sort.Strings(keys)
 
 	contents := make([]types.Object, 0, len(keys))
+	commonPrefixes := make([]types.CommonPrefix, 0)
+	seenPrefixes := make(map[string]bool)
 	for _, key := range keys {
+		if delimiter != "" {
+			rest := strings.TrimPrefix(key, prefix)
+			if idx := strings.Index(rest, delimiter); idx >= 0 {
+				commonPrefix := prefix + rest[:idx+len(delimiter)]
+				if !seenPrefixes[commonPrefix] {
+					seenPrefixes[commonPrefix] = true
+					commonPrefixes = append(commonPrefixes, types.CommonPrefix{Prefix: aws.String(commonPrefix)})
+				}
+				continue
+			}
+		}
 		key := key
 		contents = append(contents, types.Object{Key: &key})
 	}
-	return &s3.ListObjectsV2Output{Contents: contents}, nil
+	return &s3.ListObjectsV2Output{Contents: contents, CommonPrefixes: commonPrefixes}, nil
 }
 
 func (f *fakeS3) GetObject(_ context.Context, input *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
@@ -79,6 +93,54 @@ func (f *fakeS3) HeadObject(_ context.Context, input *s3.HeadObjectInput, _ ...f
 		return nil, &types.NotFound{}
 	}
 	return &s3.HeadObjectOutput{ContentLength: aws.Int64(int64(len(body)))}, nil
+}
+
+func TestS3StorageListRootReturnsObjectsAndPrefixes(t *testing.T) {
+	fake := newFakeS3(map[string]string{
+		"staging-one":             testMessage,
+		"staging-two":             testMessage,
+		"users/alice/inbox/a.eml": testMessage,
+		"users/bob/inbox/b.eml":   testMessage,
+	})
+	store := &S3Storage{client: fake, bucket: "mail-bucket"}
+
+	objects, prefixes, err := store.ListRoot(context.Background())
+	if err != nil {
+		t.Fatalf("ListRoot() error = %v", err)
+	}
+
+	keys := make([]string, 0, len(objects))
+	for _, object := range objects {
+		keys = append(keys, object.Key)
+	}
+	sort.Strings(keys)
+	if strings.Join(keys, ",") != "staging-one,staging-two" {
+		t.Errorf("ListRoot() object keys = %v, want [staging-one staging-two]", keys)
+	}
+	if len(prefixes) != 1 || prefixes[0] != "users/" {
+		t.Errorf("ListRoot() prefixes = %v, want [users/]", prefixes)
+	}
+}
+
+func TestS3StorageObjectExists(t *testing.T) {
+	fake := newFakeS3(map[string]string{"present": testMessage})
+	store := &S3Storage{client: fake, bucket: "mail-bucket"}
+
+	exists, err := store.ObjectExists(context.Background(), "present")
+	if err != nil {
+		t.Fatalf("ObjectExists(present) error = %v", err)
+	}
+	if !exists {
+		t.Error("ObjectExists(present) = false, want true")
+	}
+
+	exists, err = store.ObjectExists(context.Background(), "missing")
+	if err != nil {
+		t.Fatalf("ObjectExists(missing) error = %v", err)
+	}
+	if exists {
+		t.Error("ObjectExists(missing) = true, want false")
+	}
 }
 
 func TestS3StorageListAllEmailsReadsSESMessageKeys(t *testing.T) {

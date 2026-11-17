@@ -31,4 +31,14 @@ export default defineConfig({
       schemas: 'src/api/generated/schemas/users',
     },
   },
+  support: {
+    input: {
+      target: '../api/support.yaml',
+    },
+    output: {
+      target: 'src/api/generated/support.ts',
+      client: 'fetch',
+      schemas: 'src/api/generated/schemas/support',
+    },
+  },
 });

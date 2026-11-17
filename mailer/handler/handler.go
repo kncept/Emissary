@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	supportapi "github.com/kncept/Emissary/api/support/generated"
 	usersapi "github.com/kncept/Emissary/api/users/generated"
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/email"
@@ -52,10 +53,12 @@ type SendEmailRequest struct {
 type HandlerConfig struct {
 	AuthUser         string
 	AuthPass         string
+	ListenAddr       string
 	JWTSecret        string
 	JWTSecretTTL     time.Duration
 	S3Bucket         string
 	StorageType      string
+	AWSRegion        string
 	MetadataType     string
 	MetadataPath     string
 	MetadataTable    string
@@ -200,10 +203,10 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 		}
 	}
 
-	return newHandler(authenticator, emailStore, metaStore, mailSender, users), nil
+	return newHandler(authenticator, emailStore, metaStore, sessionStore, mailSender, users, cfg), nil
 }
 
-func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, metaStore metadata.MetadataStore, mailSender sender.Sender, userManager usermanager.UserManager) http.Handler {
+func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, metaStore metadata.MetadataStore, sessionStore session.SessionStore, mailSender sender.Sender, userManager usermanager.UserManager, cfg HandlerConfig) http.Handler {
 	mux := http.NewServeMux()
 
 	// Create JMAP handler with sender for EmailSubmission
@@ -311,6 +314,17 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 
 		writeJSON(w, http.StatusOK, map[string]any{"users": matches})
 	})))
+
+	supportHandler := newSupportHandler(cfg, emailStore, metaStore, sessionStore, mailSender, userManager)
+	supportServer, err := supportapi.NewServer(supportHandler, supportSecurityHandler{authenticator}, supportapi.WithErrorHandler(supportErrorHandler))
+	if err != nil {
+		log.Printf("failed to create support server: %v", err)
+	} else {
+		// Register per-method prefixes so the admin routes coexist with the
+		// method-specific JMAP catch-all (POST /api/).
+		mux.Handle("GET /api/support/", supportServer)
+		mux.Handle("POST /api/support/", supportServer)
+	}
 
 	if mgr, ok := userManager.(EmissaryAuthManager); ok {
 		usersHandler := NewUsersHandler(mgr, authenticator)

@@ -1,6 +1,12 @@
 import type { AuthState, LoginResponse } from './types.ts';
 import { login as generatedLogin, refresh as generatedRefresh } from './api/generated/auth.ts';
 import type { TokenResponse, Error as AuthError } from './api/generated/schemas/auth/index.ts';
+import type {
+  BucketRootResponse,
+  ConfigurationDetail,
+  ConfigurationsResponse,
+  ProcessEmailResponse,
+} from './api/generated/schemas/support/index.ts';
 import {
   getEmails,
   getEmail,
@@ -167,6 +173,45 @@ export async function changeUserPassword(email: string, body: { oldPassword?: st
     throw new Error(data.error || 'Failed to change password');
   }
   return data;
+}
+
+export async function getSupportConfigurations(): Promise<ConfigurationsResponse> {
+  const response = await authenticatedFetch(`${API_BASE}/support/configurations`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error((data as { error?: string }).error || 'Failed to load configurations');
+  }
+  return data as ConfigurationsResponse;
+}
+
+export async function getSupportConfiguration(name: string): Promise<ConfigurationDetail> {
+  const response = await authenticatedFetch(`${API_BASE}/support/configurations/${encodeURIComponent(name)}`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error((data as { error?: string }).error || 'Failed to load configuration');
+  }
+  return data as ConfigurationDetail;
+}
+
+export async function getSupportBucketRoot(): Promise<BucketRootResponse> {
+  const response = await authenticatedFetch(`${API_BASE}/support/bucket/root`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error((data as { error?: string }).error || 'Failed to list the bucket root');
+  }
+  return data as BucketRootResponse;
+}
+
+export async function processSupportEmail(id: string): Promise<ProcessEmailResponse> {
+  const response = await authenticatedFetch(`${API_BASE}/support/process-email`, {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error((data as { error?: string }).error || 'Failed to process email');
+  }
+  return data as ProcessEmailResponse;
 }
 
 export async function checkAuth(): Promise<AuthState> {

@@ -31,6 +31,7 @@ generate_api() {
 		# Ensure ogen is available
 		go tool ogen -target ../api/jmap/generated ../api/jmap.yaml
 		go tool ogen -target ../api/auth/generated ../api/auth.yaml
+		go tool ogen -target ../api/support/generated ../api/support.yaml
 		go tool ogen -target ../api/users/generated ../api/users.yaml
 	)
 

@@ -8,6 +8,7 @@ import EmailView from './components/EmailView';
 import Compose from './components/Compose';
 import Users from './components/Users';
 import Settings from './components/Settings';
+import Support from './components/Support';
 import Layout from './components/Layout';
 import './App.css';
 
@@ -69,6 +70,16 @@ function App() {
                   <Route path="/compose" element={<Compose admin={auth.admin} currentUser={auth.username} />} />
                   <Route path="/compose/:id" element={<Compose admin={auth.admin} currentUser={auth.username} />} />
                   <Route path="/settings" element={<Settings auth={auth} />} />
+                  <Route
+                    path="/support"
+                    element={
+                      auth.admin ? (
+                        <Support />
+                      ) : (
+                        <Navigate to="/" replace />
+                      )
+                    }
+                  />
                   <Route
                     path="/users"
                     element={

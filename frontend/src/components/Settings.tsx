@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import type { AuthState } from '../types';
 
 interface SettingsProps {
@@ -75,6 +76,18 @@ export default function Settings({ auth }: SettingsProps) {
           Logout
         </button>
       </section>
+
+      {auth.admin && (
+        <section className="settings-section">
+          <h3>Support</h3>
+          <p style={{ color: 'var(--color-text-muted)', marginBottom: '1rem' }}>
+            Inspect runtime configuration, list unprocessed inbound messages and reprocess them from staging.
+          </p>
+          <Link className="btn btn-secondary" to="/support">
+            Open support tools
+          </Link>
+        </section>
+      )}
 
       {error && <div className="error-message">{error}</div>}
       {success && <div className="success-message">{success}</div>}

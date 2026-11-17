@@ -1,13 +1,16 @@
-// Package api holds the normative OpenAPI documents — auth.yaml, jmap.yaml
-// and users.yaml — and the code generated from them. The tests in this
-// package enforce the path-ownership rule that keeps the three documents
+// Package api holds the normative OpenAPI documents — auth.yaml, jmap.yaml,
+// support.yaml and users.yaml — and the code generated from them. The tests
+// in this package enforce the path-ownership rule that keeps the documents
 // free of overlap:
 //
 //   - every operation in auth.yaml lives under the reserved prefix
 //     /api/auth/;
+//   - every operation in support.yaml lives under the reserved prefix
+//     /api/support/;
 //   - every operation in users.yaml lives under the reserved prefix
 //     /api/user/;
-//   - no path in jmap.yaml falls under /api/auth/ or /api/user/;
+//   - no path in jmap.yaml falls under /api/auth/, /api/support/ or
+//     /api/user/;
 //   - the documents never share a (method, path) operation.
 //
 // See "Specs and path ownership" in docs/API.md.
@@ -23,6 +26,9 @@ import (
 
 // authPrefix is the reserved URL prefix owned exclusively by auth.yaml.
 const authPrefix = "/api/auth/"
+
+// supportPrefix is the reserved URL prefix owned exclusively by support.yaml.
+const supportPrefix = "/api/support/"
 
 // usersPrefix is the reserved URL prefix owned exclusively by users.yaml.
 const usersPrefix = "/api/user/"
@@ -61,6 +67,16 @@ func TestAuthSpecUsesReservedPrefix(t *testing.T) {
 	}
 }
 
+// TestSupportSpecUsesReservedPrefix verifies that every operation in
+// support.yaml lives under the reserved /api/support/ prefix.
+func TestSupportSpecUsesReservedPrefix(t *testing.T) {
+	for path := range loadSpec(t, "support.yaml").Paths {
+		if !strings.HasPrefix(path, supportPrefix) {
+			t.Errorf("support.yaml: %q does not use the reserved %s prefix", path, supportPrefix)
+		}
+	}
+}
+
 // TestUsersSpecUsesReservedPrefix verifies that every operation in
 // users.yaml lives under the reserved /api/user/ prefix.
 func TestUsersSpecUsesReservedPrefix(t *testing.T) {
@@ -71,12 +87,15 @@ func TestUsersSpecUsesReservedPrefix(t *testing.T) {
 	}
 }
 
-// TestJmapSpecStaysOutOfAuthPrefix verifies that jmap.yaml defines no
-// path under the reserved /api/auth/ prefix.
-func TestJmapSpecStaysOutOfAuthPrefix(t *testing.T) {
+// TestJmapSpecStaysOutOfReservedPrefixes verifies that jmap.yaml defines
+// no path under the reserved auth, support or users prefixes.
+func TestJmapSpecStaysOutOfReservedPrefixes(t *testing.T) {
 	for path := range loadSpec(t, "jmap.yaml").Paths {
 		if strings.HasPrefix(path, authPrefix) {
 			t.Errorf("jmap.yaml: %q must not fall under the reserved %s prefix", path, authPrefix)
+		}
+		if strings.HasPrefix(path, supportPrefix) {
+			t.Errorf("jmap.yaml: %q must not fall under the reserved %s prefix", path, supportPrefix)
 		}
 		if strings.HasPrefix(path, usersPrefix) {
 			t.Errorf("jmap.yaml: %q must not fall under the reserved %s prefix", path, usersPrefix)
@@ -89,23 +108,27 @@ func TestJmapSpecStaysOutOfAuthPrefix(t *testing.T) {
 func TestSpecsDoNotOverlap(t *testing.T) {
 	authPaths := loadSpec(t, "auth.yaml").Paths
 	jmapPaths := loadSpec(t, "jmap.yaml").Paths
+	supportPaths := loadSpec(t, "support.yaml").Paths
 	usersPaths := loadSpec(t, "users.yaml").Paths
 
-	for path, methods := range authPaths {
-		for method := range methods {
-			if _, shared := jmapPaths[path][strings.ToLower(method)]; shared {
-				t.Errorf("%s %s is defined in both auth.yaml and jmap.yaml", strings.ToUpper(method), path)
-			}
-			if _, shared := usersPaths[path][strings.ToLower(method)]; shared {
-				t.Errorf("%s %s is defined in both auth.yaml and users.yaml", strings.ToUpper(method), path)
-			}
-		}
+	documents := []struct {
+		name  string
+		paths map[string]map[string]yaml.Node
+	}{
+		{name: "auth.yaml", paths: authPaths},
+		{name: "jmap.yaml", paths: jmapPaths},
+		{name: "support.yaml", paths: supportPaths},
+		{name: "users.yaml", paths: usersPaths},
 	}
 
-	for path, methods := range usersPaths {
-		for method := range methods {
-			if _, shared := jmapPaths[path][strings.ToLower(method)]; shared {
-				t.Errorf("%s %s is defined in both users.yaml and jmap.yaml", strings.ToUpper(method), path)
+	for i, left := range documents {
+		for _, right := range documents[i+1:] {
+			for path, methods := range left.paths {
+				for method := range methods {
+					if _, shared := right.paths[path][strings.ToLower(method)]; shared {
+						t.Errorf("%s %s is defined in both %s and %s", strings.ToUpper(method), path, left.name, right.name)
+					}
+				}
 			}
 		}
 	}

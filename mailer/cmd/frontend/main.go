@@ -26,10 +26,12 @@ func main() {
 	handlerCfg := handler.HandlerConfig{
 		AuthUser:       cfg.Server.Username,
 		AuthPass:       cfg.Server.Password,
+		ListenAddr:     cfg.Server.ListenAddr,
 		JWTSecret:      cfg.Server.JWTSecret,
 		JWTSecretTTL:   cfg.Server.JWTExpiry,
 		S3Bucket:       cfg.Storage.S3Bucket,
 		StorageType:    cfg.Storage.Type,
+		AWSRegion:      cfg.AWSRegion,
 		MetadataType:   cfg.Metadata.Type,
 		MetadataPath:   cfg.Metadata.FilePath,
 		MetadataTable:  cfg.Metadata.DdbTable,

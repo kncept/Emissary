@@ -18,9 +18,9 @@ import (
 	"github.com/kncept/Emissary/mailer/email"
 )
 
-// s3API is the subset of the S3 client used by S3Storage. Keeping it as an
+// S3API is the subset of the S3 client used by S3Storage. Keeping it as an
 // interface makes the storage layer testable without contacting AWS.
-type s3API interface {
+type S3API interface {
 	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
@@ -29,9 +29,18 @@ type s3API interface {
 }
 
 type S3Storage struct {
-	client s3API
+	client S3API
 	bucket string
 	prefix string
+}
+
+// RootObject is one object directly under the bucket root. The support API
+// reports these as unprocessed staging messages.
+type RootObject struct {
+	Key          string
+	Size         int64
+	LastModified time.Time
+	ETag         string
 }
 
 func NewS3Storage(bucket string) (*S3Storage, error) {
@@ -43,6 +52,77 @@ func NewS3Storage(bucket string) (*S3Storage, error) {
 		client: s3.NewFromConfig(cfg),
 		bucket: bucket,
 	}, nil
+}
+
+// BucketName returns the configured bucket name.
+func (s *S3Storage) BucketName() string { return s.bucket }
+
+// Client returns the configured S3 operations. Administrative features (such
+// as the support API) reuse the same client rather than building another.
+func (s *S3Storage) Client() S3API { return s.client }
+
+// ListRoot lists the immediate contents of the bucket: objects at the root
+// (SES staging messages) and the top-level common prefixes (normally users/).
+func (s *S3Storage) ListRoot(ctx context.Context) ([]RootObject, []string, error) {
+	var objects []RootObject
+	var prefixes []string
+
+	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket:    aws.String(s.bucket),
+		Delimiter: aws.String("/"),
+	})
+	for paginator.HasMorePages() {
+		output, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to list bucket root: %w", err)
+		}
+
+		for _, obj := range output.Contents {
+			if obj.Key == nil {
+				continue
+			}
+			root := RootObject{Key: *obj.Key}
+			if obj.Size != nil {
+				root.Size = *obj.Size
+			}
+			if obj.LastModified != nil {
+				root.LastModified = *obj.LastModified
+			}
+			if obj.ETag != nil {
+				root.ETag = *obj.ETag
+			}
+			objects = append(objects, root)
+		}
+		for _, prefix := range output.CommonPrefixes {
+			if prefix.Prefix == nil {
+				continue
+			}
+			prefixes = append(prefixes, *prefix.Prefix)
+		}
+	}
+
+	if objects == nil {
+		objects = []RootObject{}
+	}
+	if prefixes == nil {
+		prefixes = []string{}
+	}
+	return objects, prefixes, nil
+}
+
+// ObjectExists reports whether an object with the exact key exists.
+func (s *S3Storage) ObjectExists(ctx context.Context, key string) (bool, error) {
+	_, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err == nil {
+		return true, nil
+	}
+	if isObjectNotFound(err) {
+		return false, nil
+	}
+	return false, fmt.Errorf("failed to check object %q: %w", key, err)
 }
 
 // ListAllEmails implements the Storage interface.

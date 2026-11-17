@@ -12,6 +12,7 @@ It can be set up as a lambda, run natively or embedded in a dockerfile.
 - [Architecture](docs/ARCHITECTURE.md) — how the components fit together and the mail/auth flows
 - [Authentication](docs/AUTH.md) — login and the access/refresh token pair
 - [Users](docs/USERS.md) — in-application user management (the `ddb` backend)
+- [Support](docs/SUPPORT.md) — admin support tools for configuration and inbound staging
 - [Configuration](docs/CONFIGURATION.md) — every environment variable
 - [API](docs/API.md) — the HTTP API reference
 - [Deployment](docs/DEPLOYMENT.md) — the CDK stacks and deploy workflow

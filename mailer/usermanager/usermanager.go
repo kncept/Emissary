@@ -219,7 +219,12 @@ func (m *NoneManager) Lookup(_ context.Context, username string) (*User, error) 
 			Admin:    true,
 		}, nil
 	}
-	return nil, ErrInvalidCredentials
+	// Return a stub user for any username (non-admin)
+	return &User{
+		ID:       username,
+		Username: username,
+		Admin:    false,
+	}, nil
 }
 
 func (m *NoneManager) Autocomplete(_ context.Context, q string) ([]string, error) {

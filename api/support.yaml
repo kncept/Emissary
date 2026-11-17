@@ -1,0 +1,375 @@
+openapi: 3.1.0
+info:
+  title: Emissary Support API
+  version: 1.0.0
+  description: |-
+    Administrative support and diagnostics endpoints for Emissary.
+
+    Every operation in this document lives under the reserved URL prefix
+    `/api/support/`. The prefix is owned exclusively by this document: it
+    never defines operations outside the prefix, and no operation in any
+    other document (notably `api/auth.yaml`, `api/user/` and `api/jmap.yaml`)
+    may use a path under the prefix. This guarantees the documents never
+    overlap. See "Specs and path ownership" in docs/API.md.
+
+    Every operation requires a valid bearer token whose `Admin` claim is
+    true. The non-admin visibility and data rules used elsewhere in the API
+    do not apply: support endpoints expose server configuration and the raw
+    contents of the inbound mail bucket, and `ProcessEmail` can move mail
+    between the staging area and user mailboxes.
+
+    Secrets (passwords, JWT signing secrets, LDAP bind passwords and AWS
+    credentials) are never returned. Configuration responses only report
+    whether a secret is configured.
+
+    Error conventions (status codes, `{"error": "<message>"}` bodies,
+    generic messages) are shared with the rest of the API - see
+    docs/API.md. Full operational details are in docs/SUPPORT.md.
+servers:
+- url: https://{host}
+  description: Emissary mail server host
+  variables:
+    host:
+      default: mail.example.com
+tags:
+- name: Support
+  description: Administrative support and diagnostics operations (admin only)
+paths:
+  /api/support/configurations:
+    get:
+      tags:
+      - Support
+      summary: List configuration sections and their implementations
+      description: |-
+        Returns every runtime configuration section together with the name of
+        the implementation currently backing it (for example `s3`, `ddb`,
+        `memory`, `file`, `aws-ses`, `log`, `none`, `any` or `ldap`).
+
+        Use `GET /api/support/configurations/{name}` to fetch the full
+        configuration details for one section.
+      operationId: listConfigurations
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: The configured sections
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationsResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient permissions (admin only)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/support/configurations/{name}:
+    get:
+      tags:
+      - Support
+      summary: Get full details for one configuration section
+      description: |-
+        Returns the full configuration for a section. Names are case
+        insensitive; the canonical names are `server`, `storage`, `sender`,
+        `metadata`, `session`, `user-manager` and `aws`.
+
+        Secret values are replaced by booleans or descriptive markers (for
+        example `passwordConfigured: true`); they are never returned.
+      operationId: getConfiguration
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: name
+        in: path
+        required: true
+        description: Configuration section name
+        schema:
+          type: string
+          minLength: 1
+      responses:
+        '200':
+          description: The configuration section
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationDetail'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient permissions (admin only)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown configuration section
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/support/bucket/root:
+    get:
+      tags:
+      - Support
+      summary: List the root contents of the mail bucket
+      description: |-
+        Lists the immediate contents of the configured S3 mail bucket. Root
+        objects are the raw messages written by SES and not yet processed;
+        common prefixes are the top-level virtual directories (normally
+        `users/`).
+
+        This operation is only available when `STORAGE=s3`. With any other
+        storage backend it returns `501 Not Implemented`.
+      operationId: listBucketRoot
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: The bucket root contents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BucketRootResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient permissions (admin only)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: Bucket operations are not available for the configured storage backend
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: The bucket could not be listed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/support/process-email:
+    post:
+      tags:
+      - Support
+      summary: Process a staging email
+      description: |-
+        Runs the standard inbound processing pipeline on a raw staging object.
+        The `id` is the object key reported by `GET /api/support/bucket/root`.
+
+        Processing validates each recipient, copies the message into the
+        matching user mailbox(es), sends bounces for unknown recipients and
+        deletes the staging object. It is irreversible: repeating the call
+        after a successful run returns `404 Not Found`.
+
+        This operation is only available when `STORAGE=s3`. With any other
+        storage backend it returns `501 Not Implemented`.
+      operationId: processEmail
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessEmailRequest'
+      responses:
+        '200':
+          description: The message was processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessEmailResponse'
+        '400':
+          description: Invalid request (missing or malformed id)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient permissions (admin only)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: The staging object does not exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: Bucket operations are not available for the configured storage backend
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: The message could not be processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: The access token from login or refresh (requires the Admin claim)
+  schemas:
+    ConfigurationsResponse:
+      type: object
+      required:
+      - configurations
+      properties:
+        configurations:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigurationSummary'
+      additionalProperties: false
+    ConfigurationSummary:
+      type: object
+      description: A runtime configuration section and its implementation
+      required:
+      - name
+      - implementation
+      properties:
+        name:
+          type: string
+          description: Canonical section name (for example `storage`)
+        implementation:
+          type: string
+          description: Short name of the active implementation (for example `s3`, `ddb` or `memory`)
+        description:
+          type: string
+          description: Human-readable description of the section
+      additionalProperties: false
+    ConfigurationDetail:
+      type: object
+      description: Full configuration for one section, with secrets redacted
+      required:
+      - name
+      - implementation
+      - settings
+      properties:
+        name:
+          type: string
+          description: Canonical section name
+        implementation:
+          type: string
+          description: Short name of the active implementation
+        description:
+          type: string
+          description: Human-readable description of the section
+        settings:
+          type: object
+          description: |-
+            Configuration values as strings. Secret values are represented by
+            booleans such as `passwordConfigured` and are never included.
+          additionalProperties:
+            type: string
+      additionalProperties: false
+    BucketRootResponse:
+      type: object
+      description: Immediate contents of the configured mail bucket
+      required:
+      - bucket
+      - objects
+      - prefixes
+      properties:
+        bucket:
+          type: string
+          description: The configured bucket name
+        objects:
+          type: array
+          description: Objects directly under the bucket root (unprocessed staging messages)
+          items:
+            $ref: '#/components/schemas/BucketObject'
+        prefixes:
+          type: array
+          description: Common prefixes directly under the bucket root (for example `users/`)
+          items:
+            type: string
+      additionalProperties: false
+    BucketObject:
+      type: object
+      description: One object at the bucket root
+      required:
+      - key
+      - size
+      - lastModified
+      properties:
+        key:
+          type: string
+          description: Object key, suitable for `ProcessEmail`
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Object size in bytes
+        lastModified:
+          type: string
+          format: date-time
+          description: When the object was last modified
+        etag:
+          type: string
+          description: Object ETag, when reported by S3
+      additionalProperties: false
+    ProcessEmailRequest:
+      type: object
+      required:
+      - id
+      properties:
+        id:
+          type: string
+          minLength: 1
+          description: Object key from `GET /api/support/bucket/root`
+      additionalProperties: false
+    ProcessEmailResponse:
+      type: object
+      required:
+      - success
+      - id
+      properties:
+        success:
+          type: boolean
+          default: true
+        id:
+          type: string
+          description: The staging object that was processed
+        message:
+          type: string
+          description: Human-readable result message
+      additionalProperties: false
+    Error:
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          type: string
+          description: A generic error message
+      additionalProperties: false

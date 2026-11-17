@@ -23,6 +23,15 @@ import (
 // ErrNoValidRecipients is returned when a message has no valid recipients.
 var ErrNoValidRecipients = errors.New("no valid recipients")
 
+// S3Client is the subset of the S3 client used by the receiver. Keeping it as
+// an interface lets the staging pipeline run with the same client that the
+// storage layer uses (for example from the support API) and makes it testable.
+type S3Client interface {
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+}
+
 // ReceiverConfig holds the configuration for the receiver.
 type ReceiverConfig struct {
 	// Bucket is the S3 bucket name for inbound messages.
@@ -38,7 +47,7 @@ type ReceiverConfig struct {
 	Domain string
 
 	// SESClient is the S3 client for bucket operations.
-	SESClient *s3.Client
+	SESClient S3Client
 }
 
 // Receiver processes inbound messages from S3.
