@@ -91,7 +91,7 @@ instantiated in `handler.New`:
 | Inbound messages | `storage.Storage` | `STORAGE` | `s3`, `memory` | `s3` needs `S3_BUCKET`. Defaults to `memory`. |
 | Outbound mail | `sender.Sender` | `SENDER` | `aws-ses`, `log` | Defaults to `aws-ses` when `SES_FROM` is set, else `log`. |
 | Message state | `metadata.MetadataStore` | `METADATA` | `memory` (default), `file`, `ddb` | `ddb` uses `DDB_TABLE` or the `metadata` table derived from `TABLE_PREFIX`. |
-| Users | `usermanager.Manager` | `USER_MANAGER` | `none` (default), `any`, `ddb`, `ldap` | `any` accepts any address in `DOMAIN` with any password. `ddb` uses `USER_TABLE` or the `users` table derived from `TABLE_PREFIX` and is Emissary-mastered. `ldap` is unimplemented. |
+| Users | `usermanager.Manager` | `USER_MANAGER` | `none` (default), `ddb`, `ldap` | `ddb` uses `USER_TABLE` or the `users` table derived from `TABLE_PREFIX` and is Emissary-mastered. `ldap` is unimplemented. |
 
 ## Inbound mail flow
 
@@ -138,7 +138,6 @@ validation and delivery process applies:
    whether the address corresponds to a known user in the system
    (including the built-in administrator).
 
-   - The `any` backend accepts any valid address at `DOMAIN`.
    - The `ddb` backend checks the DynamoDB users table.
    - The `none` backend accepts only the administrator.
 

@@ -14,6 +14,7 @@ import (
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/storage"
+	"github.com/kncept/Emissary/mailer/usermanager"
 )
 
 type captureSender struct {
@@ -31,20 +32,69 @@ func (s *captureSender) SendBounce(_ context.Context, originalMessageID, bounceS
 	return nil
 }
 
-func newHandlerForTest(t *testing.T, managerType, domain, adminPassword string) (http.Handler, *storage.MemoryStorage, *captureSender) {
+type testUserManager struct {
+	adminUsername string
+	adminPassword string
+	domain        string
+}
+
+func (m *testUserManager) Name() string { return "test" }
+
+func (m *testUserManager) Authenticate(_ context.Context, username, password string) (*usermanager.User, error) {
+	if strings.EqualFold(strings.TrimSpace(username), m.adminUsername) {
+		if m.adminPassword == "" || password != m.adminPassword {
+			return nil, usermanager.ErrInvalidCredentials
+		}
+		return m.adminUser(), nil
+	}
+	return m.user(username)
+}
+
+func (m *testUserManager) Lookup(_ context.Context, username string) (*usermanager.User, error) {
+	if strings.EqualFold(strings.TrimSpace(username), m.adminUsername) {
+		return m.adminUser(), nil
+	}
+	return m.user(username)
+}
+
+func (m *testUserManager) Autocomplete(_ context.Context, q string) ([]string, error) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return []string{}, nil
+	}
+	return []string{q}, nil
+}
+
+func (m *testUserManager) adminUser() *usermanager.User {
+	return &usermanager.User{ID: m.adminUsername, Username: m.adminUsername, Admin: true}
+}
+
+func (m *testUserManager) user(username string) (*usermanager.User, error) {
+	address := strings.ToLower(strings.TrimSpace(username))
+	if address == "" || strings.Count(address, "@") != 1 || !strings.HasSuffix(address, "@"+m.domain) {
+		return nil, usermanager.ErrInvalidCredentials
+	}
+	return &usermanager.User{ID: address, Username: address, Email: address}, nil
+}
+
+func newHandlerForTest(t *testing.T, adminPassword string) (http.Handler, *storage.MemoryStorage, *captureSender) {
 	t.Helper()
 	store := storage.NewMemoryStorage()
 	sender := &captureSender{from: "default@example.com"}
 	h, err := New(HandlerConfig{
-		AuthUser:        "admin",
-		AuthPass:        adminPassword,
-		JWTSecret:       "secret",
-		JWTSecretTTL:    time.Hour,
-		MetadataType:    "memory",
-		Storage:         store,
-		UserManagerType: managerType,
-		UserDomain:      domain,
-		Sender:          sender,
+		AuthUser:     "admin",
+		AuthPass:     adminPassword,
+		JWTSecret:    "secret",
+		JWTSecretTTL: time.Hour,
+		MetadataType: "memory",
+		Storage:      store,
+		UserManager: &testUserManager{
+			adminUsername: "admin",
+			adminPassword: adminPassword,
+			domain:        "example.com",
+		},
+		UserDomain: "example.com",
+		Sender:     sender,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -276,7 +326,7 @@ func jmapDelete(t *testing.T, h http.Handler, token, emailID string) {
 }
 
 func TestListEmailsEmptyInboxReturnsArray(t *testing.T) {
-	h, _, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	h, _, _ := newHandlerForTest(t, "secret")
 
 	status, token, _ := login(t, h, "bob@example.com", "anything")
 	if status != http.StatusOK {
@@ -290,7 +340,7 @@ func TestListEmailsEmptyInboxReturnsArray(t *testing.T) {
 }
 
 func TestUserReadsOnlyOwnMailbox(t *testing.T) {
-	h, store, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	h, store, _ := newHandlerForTest(t, "secret")
 	addEmail(store, "received", "alice@example.com", "bob@example.com")
 	addEmail(store, "sent", "bob@example.com", "carol@example.com")
 	addEmail(store, "unrelated", "carol@example.com", "dave@example.com")
@@ -312,7 +362,7 @@ func TestUserReadsOnlyOwnMailbox(t *testing.T) {
 }
 
 func TestAdminMasqueradesViaAccountID(t *testing.T) {
-	h, store, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	h, store, _ := newHandlerForTest(t, "secret")
 	addEmail(store, "received", "alice@example.com", "bob@example.com")
 	addEmail(store, "sent", "bob@example.com", "carol@example.com")
 	addEmail(store, "unrelated", "carol@example.com", "dave@example.com")
@@ -357,7 +407,7 @@ func TestAdminMasqueradesViaAccountID(t *testing.T) {
 }
 
 func TestNonAdminCannotReadAnotherAccount(t *testing.T) {
-	h, store, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	h, store, _ := newHandlerForTest(t, "secret")
 	addEmail(store, "private", "alice@example.com", "bob@example.com")
 
 	_, token, _ := login(t, h, "bob@example.com", "anything")
@@ -381,7 +431,7 @@ func TestNonAdminCannotReadAnotherAccount(t *testing.T) {
 }
 
 func TestDeleteEmailVisibilityAndRemoval(t *testing.T) {
-	h, store, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	h, store, _ := newHandlerForTest(t, "secret")
 	addEmail(store, "received", "alice@example.com", "bob@example.com")
 	addEmail(store, "unrelated", "carol@example.com", "dave@example.com")
 
@@ -436,14 +486,18 @@ func TestDeleteEmailAlsoDeletesMetadata(t *testing.T) {
 	addEmail(store, "received", "alice@example.com", "bob@example.com")
 
 	h, err := New(HandlerConfig{
-		AuthUser:        "admin",
-		AuthPass:        "secret",
-		JWTSecret:       "secret",
-		JWTSecretTTL:    time.Hour,
-		Storage:         store,
-		Metadata:        metaStore,
-		UserManagerType: "any",
-		UserDomain:      "example.com",
+		AuthUser:     "admin",
+		AuthPass:     "secret",
+		JWTSecret:    "secret",
+		JWTSecretTTL: time.Hour,
+		Storage:      store,
+		Metadata:     metaStore,
+		UserManager: &testUserManager{
+			adminUsername: "admin",
+			adminPassword: "secret",
+			domain:        "example.com",
+		},
+		UserDomain: "example.com",
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -488,7 +542,7 @@ func TestDeleteEmailAlsoDeletesMetadata(t *testing.T) {
 }
 
 func TestJWTIncludesUserIDAndAdminOnlyForAdmin(t *testing.T) {
-	h, _, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	h, _, _ := newHandlerForTest(t, "secret")
 
 	_, adminToken, _ := login(t, h, "admin", "secret")
 	_, userToken, _ := login(t, h, "alice@example.com", "")
@@ -525,7 +579,7 @@ func decodeClaims(t *testing.T, token string) map[string]any {
 }
 
 func TestBlankAdminPasswordDisablesAdminLogin(t *testing.T) {
-	h, _, _ := newHandlerForTest(t, "any", "example.com", "")
+	h, _, _ := newHandlerForTest(t, "")
 
 	if status, _, _ := login(t, h, "admin", ""); status != http.StatusUnauthorized {
 		t.Errorf("admin login with blank configured password status = %d, want 401", status)
@@ -536,7 +590,7 @@ func TestBlankAdminPasswordDisablesAdminLogin(t *testing.T) {
 }
 
 func TestSendEmailFromRules(t *testing.T) {
-	h, store, sender := newHandlerForTest(t, "any", "example.com", "secret")
+	h, store, sender := newHandlerForTest(t, "secret")
 	addEmail(store, "original", "alice@example.com", "bob@example.com")
 
 	_, userToken, _ := login(t, h, "bob@example.com", "anything")
@@ -762,7 +816,7 @@ func TestSendEmailFromRules(t *testing.T) {
 }
 
 func TestSendEmailWithCCAndBCC(t *testing.T) {
-	h, _, sender := newHandlerForTest(t, "any", "example.com", "secret")
+	h, _, sender := newHandlerForTest(t, "secret")
 
 	_, userToken, _ := login(t, h, "bob@example.com", "anything")
 
@@ -918,7 +972,7 @@ func TestSendEmailWithCCAndBCC(t *testing.T) {
 }
 
 func TestJMAPAccountIdValidationNonAdmin(t *testing.T) {
-	h, _, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	h, _, _ := newHandlerForTest(t, "secret")
 
 	// Login as bob (non-admin)
 	_, bobToken, _ := login(t, h, "bob@example.com", "anything")
@@ -947,7 +1001,7 @@ func TestJMAPAccountIdValidationNonAdmin(t *testing.T) {
 }
 
 func TestJMAPAccountIdValidationAdmin(t *testing.T) {
-	h, store, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	h, store, _ := newHandlerForTest(t, "secret")
 	addEmail(store, "alice-email", "sender@example.com", "alice@example.com")
 
 	// Login as admin

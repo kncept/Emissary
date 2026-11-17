@@ -36,7 +36,6 @@ The user manager is selected with `USER_MANAGER`:
 | Type | Description |
 | --- | --- |
 | `none` (default) | Only the built-in administrator can log in. |
-| `any` | Any valid receiving address in `DOMAIN` can log in with any password. |
 | `ddb` | In-application user management backed by DynamoDB. Administrator users can manage accounts through `/api/user/`. |
 | `ldap` | Reserved for proxying authentication to an LDAP server. |
 

@@ -113,8 +113,8 @@ func (c *SessionConfig) Validate() error {
 // The USERNAME/PASSWORD administrator is configured separately and
 // is available with every backend.
 type UserManagerConfig struct {
-	Type   string // "none", "any", "ddb" or "ldap"
-	Domain string // receiving domain for the "any" backend
+	Type   string // "none", "ddb" or "ldap"
+	Domain string // receiving domain for mail delivery and reporting
 	Region string // AWS region for the "ddb" backend
 
 	DdbTable string
@@ -131,12 +131,9 @@ type UserManagerConfig struct {
 func (c *UserManagerConfig) Validate() error {
 	var errs []error
 	switch c.Type {
-	case "", "none", "any", "ddb", "dynamodb", "ldap":
+	case "", "none", "ddb", "dynamodb", "ldap":
 	default:
-		errs = append(errs, fmt.Errorf("unknown user manager type %q (want none, any, ddb or ldap)", c.Type))
-	}
-	if c.Type == "any" && c.Domain == "" {
-		errs = append(errs, errors.New("user manager any requires a domain (set DOMAIN)"))
+		errs = append(errs, fmt.Errorf("unknown user manager type %q (want none, ddb or ldap)", c.Type))
 	}
 	if c.Type == "ldap" && c.LDAPURL == "" {
 		errs = append(errs, errors.New("user manager ldap requires a server URL (set LDAP_URL)"))

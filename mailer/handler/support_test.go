@@ -14,7 +14,7 @@ func decodeJSONBody(t *testing.T, body []byte, destination any) {
 }
 
 func TestSupportEndpointsRequireAdmin(t *testing.T) {
-	h, _, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	h, _, _ := newHandlerForTest(t, "secret")
 
 	status, adminToken, _ := login(t, h, "admin", "secret")
 	if status != http.StatusOK {
@@ -48,7 +48,7 @@ func TestSupportEndpointsRequireAdmin(t *testing.T) {
 }
 
 func TestSupportRejectsMissingToken(t *testing.T) {
-	h, _, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	h, _, _ := newHandlerForTest(t, "secret")
 
 	w := request(t, h, http.MethodGet, "/api/support/configurations", "", "")
 	if w.Code != http.StatusUnauthorized {
@@ -65,7 +65,7 @@ func TestSupportRejectsMissingToken(t *testing.T) {
 }
 
 func TestSupportListsConfigurations(t *testing.T) {
-	h, _, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	h, _, _ := newHandlerForTest(t, "secret")
 	_, token, _ := login(t, h, "admin", "secret")
 
 	w := request(t, h, http.MethodGet, "/api/support/configurations", "", token)
@@ -112,7 +112,7 @@ func TestSupportListsConfigurations(t *testing.T) {
 }
 
 func TestSupportGetsConfigurationDetailsAndRedactsSecrets(t *testing.T) {
-	h, _, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	h, _, _ := newHandlerForTest(t, "secret")
 	_, token, _ := login(t, h, "admin", "secret")
 
 	w := request(t, h, http.MethodGet, "/api/support/configurations/server", "", token)
@@ -167,7 +167,7 @@ func TestSupportGetsConfigurationDetailsAndRedactsSecrets(t *testing.T) {
 }
 
 func TestSupportBucketOperationsRequireS3Storage(t *testing.T) {
-	h, _, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	h, _, _ := newHandlerForTest(t, "secret")
 	_, token, _ := login(t, h, "admin", "secret")
 
 	w := request(t, h, http.MethodGet, "/api/support/bucket/root", "", token)

@@ -90,7 +90,7 @@ export const getListConfigurationsUrl = () => {
 /**
  * Returns every runtime configuration section together with the name of
  * the implementation currently backing it (for example `s3`, `ddb`,
- * `memory`, `file`, `aws-ses`, `log`, `none`, `any` or `ldap`).
+ * `memory`, `file`, `aws-ses`, `log`, `none` or `ldap`).
  *
  * Use `GET /api/support/configurations/{name}` to fetch the full
  * configuration details for one section.

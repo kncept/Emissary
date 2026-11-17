@@ -54,8 +54,8 @@ deployed Lambda receives its JWT secret as an ARN.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `USER_MANAGER` | `none` | `none`, `any`, `ddb` or `ldap`. |
-| `DOMAIN` | — | Receiving domain; required by the `any` backend (any valid address `@DOMAIN` can log in with any password). Also used by the CDK app. |
+| `USER_MANAGER` | `none` | `none`, `ddb` or `ldap`. |
+| `DOMAIN` | — | Receiving domain; used for mail delivery, bounce sender addresses and the CDK app. |
 | `USER_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for the `ddb` backend. When unset, the name is derived from `TABLE_PREFIX` (`users` table). |
 | `USER_REGION` | AWS region | Region of the user table. |
 | `LDAP_URL` | — | LDAP server URL; required by the `ldap` backend (not yet implemented). |

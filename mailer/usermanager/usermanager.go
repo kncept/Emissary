@@ -80,7 +80,7 @@ func (u *EmissaryUser) IsEnabled() bool {
 
 // Config selects and configures a user manager backend.
 type Config struct {
-	// Type is one of "none", "any", "ddb" or "ldap".
+	// Type is one of "none", "ddb" or "ldap".
 	Type string
 
 	// AdminUsername and AdminPassword describe the built-in administrator.
@@ -88,7 +88,7 @@ type Config struct {
 	AdminUsername string
 	AdminPassword string
 
-	// Domain is the receiving domain used by the "any" backend.
+	// Domain is the receiving domain, used for mail delivery and reporting.
 	Domain string
 
 	// DdbTable is the DynamoDB table used by the "ddb" backend.
@@ -136,14 +136,12 @@ func New(cfg Config) (UserManager, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Type)) {
 	case "", "none":
 		return NewNone(cfg), nil
-	case "any":
-		return NewAny(cfg)
 	case "ddb", "dynamodb":
 		return NewDdb(cfg), nil
 	case "ldap":
 		return NewLdap(cfg), nil
 	default:
-		return nil, fmt.Errorf("unknown user manager type %q (want none, any, ddb or ldap)", cfg.Type)
+		return nil, fmt.Errorf("unknown user manager type %q (want none, ddb or ldap)", cfg.Type)
 	}
 }
 
@@ -235,75 +233,6 @@ func (m *NoneManager) Autocomplete(_ context.Context, q string) ([]string, error
 	return []string{q}, nil
 }
 
-// AnyManager allows any valid address in the receiving domain to log in with
-// any password. It is intended for development and trusted deployments.
-type AnyManager struct {
-	admin  adminAuth
-	domain string
-}
-
-var _ UserManager = (*AnyManager)(nil)
-
-func NewAny(cfg Config) (*AnyManager, error) {
-	domain := normalizeDomain(cfg.Domain)
-	if domain == "" {
-		return nil, errors.New("user manager any requires a domain (set DOMAIN)")
-	}
-	return &AnyManager{admin: newAdminAuth(cfg), domain: domain}, nil
-}
-
-func (m *AnyManager) Name() string { return "any" }
-
-func (m *AnyManager) Authenticate(_ context.Context, username, password string) (*User, error) {
-	// The password is not checked for ordinary users, but the administrator is
-	// always validated so a wrong admin password cannot fall through.
-	if user, handled, err := m.admin.authenticate(username, password); handled {
-		return user, err
-	}
-
-	address, ok := normalizeAddress(username)
-	if !ok || !strings.HasSuffix(address, "@"+m.domain) {
-		return nil, ErrInvalidCredentials
-	}
-	// Reject addresses such as "a@domain@domain" that merely end in the right
-	// suffix but are not valid addresses.
-	if strings.Count(address, "@") != 1 {
-		return nil, ErrInvalidCredentials
-	}
-	return &User{ID: address, Username: address, Email: address}, nil
-}
-
-func (m *AnyManager) Lookup(_ context.Context, username string) (*User, error) {
-	if m.admin.isAdmin(username) {
-		user := &User{
-			ID:       m.admin.username,
-			Username: m.admin.username,
-			Admin:    true,
-		}
-		if isEmail(m.admin.username) {
-			user.Email = strings.ToLower(m.admin.username)
-		}
-		return user, nil
-	}
-
-	address, ok := normalizeAddress(username)
-	if !ok || !strings.HasSuffix(address, "@"+m.domain) {
-		return nil, ErrInvalidCredentials
-	}
-	if strings.Count(address, "@") != 1 {
-		return nil, ErrInvalidCredentials
-	}
-	return &User{ID: address, Username: address, Email: address}, nil
-}
-
-func (m *AnyManager) Autocomplete(_ context.Context, q string) ([]string, error) {
-	q = strings.TrimSpace(q)
-	if q == "" {
-		return []string{}, nil
-	}
-	return []string{q}, nil
-}
-
 // LdapManager will proxy authentication to an LDAP server. The type is
 // registered now so deployments can select it, but the proxy is not part of
 // this change.
@@ -340,10 +269,6 @@ func (m *LdapManager) Lookup(_ context.Context, username string) (*User, error) 
 
 func (m *LdapManager) Autocomplete(_ context.Context, _ string) ([]string, error) {
 	panic("unimplemented")
-}
-
-func normalizeDomain(domain string) string {
-	return strings.ToLower(strings.Trim(strings.TrimSpace(domain), "@"))
 }
 
 func normalizeAddress(value string) (string, bool) {

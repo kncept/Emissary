@@ -27,8 +27,8 @@ this document explains the reasoning behind them.
    JSON payloads, JWT claims and the exact S3 keys a client requests,
    so internal refactors do not churn the suite.
 5. **Every implementation of a seam passes the same contract.**
-   `memory` and `s3` storage, `memory` and `file` metadata, `none` and
-   `any` user managers are each tested against the expectations the
+   `memory` and `s3` storage, `memory` and `file` metadata, and `none`
+   and `ddb` user managers are each tested against the expectations the
    rest of the system has of their interface (e.g. the shared
    `ErrNotFound` convention).
 6. **A bug fix lands with the test that failed first.** The suite is
@@ -60,7 +60,7 @@ table-driven with `t.Run` subtests.
 concurrency and clone isolation), S3 through a fake client.
 `metadata` likewise covers memory and file (atomic writes, corrupt
 JSON, directory creation) plus a concurrency test. `usermanager`
-covers `none`, `any` and `ddb` (through a fake DynamoDB client), and
+covers `none` and `ddb` (through a fake DynamoDB client), and
 that `ldap` constructs and selects but panics with `"unimplemented"`
 for ordinary users.
 `sender` covers the log sender; the SES sender is only constructed.

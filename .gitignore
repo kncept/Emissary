@@ -3,3 +3,6 @@ TODO.md
 .build/
 mailer/cmd/frontend/bootstrap
 mailer/cmd/s3-receiver/bootstrap
+
+# ai keeps regenerating this :/
+/mailer/frontend

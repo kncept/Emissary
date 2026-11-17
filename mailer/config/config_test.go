@@ -465,6 +465,31 @@ func TestConfig_Validate_AllValid(t *testing.T) {
 	}
 }
 
+func TestUserManagerConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     UserManagerConfig
+		wantErr bool
+	}{
+		{"unset", UserManagerConfig{}, false},
+		{"none", UserManagerConfig{Type: "none"}, false},
+		{"ddb", UserManagerConfig{Type: "ddb"}, false},
+		{"dynamodb", UserManagerConfig{Type: "dynamodb"}, false},
+		{"ldap with URL", UserManagerConfig{Type: "ldap", LDAPURL: "ldap://localhost:389"}, false},
+		{"ldap without URL", UserManagerConfig{Type: "ldap"}, true},
+		{"removed any backend", UserManagerConfig{Type: "any", Domain: "example.com"}, true},
+		{"unknown", UserManagerConfig{Type: "smtp"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func cleanupEnv() {
 	os.Unsetenv("USERNAME")
 	os.Unsetenv("PASSWORD")
