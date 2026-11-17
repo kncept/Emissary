@@ -513,11 +513,13 @@ async function emailClientStack(
   })
   s3ReceiverLogGroup.grantWrite(s3ReceiverRole)
 
-  // Grant S3 read access to the inbound email bucket
+  // Grant S3 access to the inbound email bucket (read staging objects, write user mailboxes, delete staging)
   s3ReceiverRole.addToPolicy(new iam.PolicyStatement({
     sid: 'InboundEmailAccess',
     actions: [
       's3:GetObject',
+      's3:PutObject',
+      's3:DeleteObject',
       's3:ListBucket',
     ],
     resources: [
@@ -529,6 +531,19 @@ async function emailClientStack(
 
   // Grant read access to the JWT secret (same as frontend)
   jwtSecret.grantRead(s3ReceiverRole)
+
+  // Grant SES send permissions for bounce messages
+  s3ReceiverRole.addToPolicy(new iam.PolicyStatement({
+    sid: 'SesSendEmail',
+    actions: [
+      'ses:SendEmail',
+      'ses:SendRawEmail',
+    ],
+    resources: [
+      `arn:aws:ses:${awsRegion}:${accountId}:identity/*`,
+    ],
+    effect: iam.Effect.ALLOW,
+  }))
 
   const s3ReceiverFn = new lambda.Function(stack, 'emissary-s3-receiver-fn', {
     runtime: lambda.Runtime.PROVIDED_AL2023,

@@ -99,18 +99,67 @@ instantiated in `handler.New`:
    the SES inbound endpoint for the region.
 2. SES evaluates the active receipt rule set (created and activated by
    the CDK "in" stack; activation is account-wide per region).
-3. The rule's S3 action writes the raw message to the bucket at the
-   **bucket root**, keyed by the SES message id. The bucket policy
-   grants SES `PutObject`; no consumer Lambda is involved.
-4. When a user lists or opens mail, `storage.S3Storage` paginates
-   `ListObjectsV2` over the bucket, `GetObject`s each message, and
-   parses it with `email.Parse`. Unparseable objects are logged and
+3. The rule's S3 action writes the raw message to a **staging area** at the
+   bucket root, keyed by the SES message id. The bucket policy
+   grants SES `PutObject`; no consumer Lambda is involved for this initial write.
+4. A consumer process (Lambda or scheduled job) reads from the staging area,
+   validates recipients, and delivers each message to the appropriate user mailboxes:
+   - For each valid recipient, the message is copied to `users/<recipient-email>/inbox/<timestamp>_<ses-message-id>.eml`
+   - The timestamp is derived from the message's `Date` header or `Received` headers (ISO 8601 UTC)
+   - The staging object is deleted after successful delivery to all recipients
+5. When a user lists or opens mail, `storage.S3Storage` paginates
+   `ListObjectsV2` over their `users/<user-id>/<mailboxId>/` prefix,
+   `GetObject`s each message, and parses it with `email.Parse`. Unparseable objects are logged and
    skipped, not fatal.
-5. `handler` merges read/flag state from the metadata store into each
+6. `handler` merges read/flag state from the metadata store into each
    response and filters the result by the caller's visibility.
 
-Objects written at the root matter: the email id *is* the full object
-key, so a key prefix would change every id.
+The email ID used throughout the API is the full S3 object key (e.g., `users/alice@example.com/inbox/2026-11-17T10:30:45Z_01000192a3b4c5d6...eml`), which encodes the user, mailbox, received time, and SES message ID.
+
+### Recipient validation and delivery
+
+When an inbound message is processed for delivery (by a consumer
+Lambda or scheduled job reading from the S3 bucket staging area), the following
+validation and delivery process applies:
+
+1. **Extract recipients** — Parse the message (`email.Parse`) and
+   collect all envelope recipients from `To`, `Cc`, and `Bcc` headers.
+
+2. **Validate each recipient** — For each recipient address, call
+   `UserManager.Lookup(ctx, address)` using the configured user manager
+   (see [Pluggable components](#pluggable-components)). This checks
+   whether the address corresponds to a known user in the system
+   (including the built-in administrator).
+
+   - The `any` backend accepts any valid address at `DOMAIN`.
+   - The `ddb` backend checks the DynamoDB users table.
+   - The `none` backend accepts only the administrator.
+
+3. **Handle invalid recipients** — If a recipient is not found
+   (`ErrInvalidCredentials` / `ErrUserNotFound`), the message is
+   bounced:
+   - Construct a bounce message using the `sender.Sender` interface.
+   - Call `sender.Send(ctx, bounceMessage)` where the bounce message
+     includes the original message ID, a `BounceSender` address
+     (e.g., `mailer-daemon@<DOMAIN>`), the failed recipient, and an
+     appropriate bounce type (e.g., `UserUnknown`).
+   - The bounce is sent via the configured outbound transport (SES or
+     log).
+
+4. **Deliver to valid recipients** — For each valid recipient:
+   - Extract the received timestamp from the message headers
+   - Copy the raw message to `users/<recipient-email>/inbox/<timestamp>_<ses-message-id>.eml`
+   - Each recipient gets their own copy in their `inbox` mailbox
+
+5. **Mixed validity** — If some recipients are valid and others are not:
+   - Valid recipients each receive their own copy in their inbox.
+   - Invalid recipients each generate a separate bounce.
+   - The staging object is deleted after all deliveries and bounces complete.
+
+This process ensures that mail is only delivered to known users while
+providing proper SMTP bounce semantics for unknown addresses. Each user
+has their own physical copy of the message in their mailbox structure,
+enabling independent management (move, delete, flag) per user.
 
 ## Outbound mail flow
 

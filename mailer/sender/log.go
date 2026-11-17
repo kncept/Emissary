@@ -38,3 +38,8 @@ func (s *LogSender) Send(_ context.Context, message *email.UserEmail) error {
 	log.Printf("outbound email from=%s to=%v subject=%q", from, addressStrings(message.To), message.Subject)
 	return nil
 }
+
+func (s *LogSender) SendBounce(_ context.Context, originalMessageID, bounceSender, recipient, bounceType string, originalMessage *email.UserEmail) error {
+	log.Printf("bounce email: originalMessageID=%s bounceSender=%s recipient=%s bounceType=%s subject=%q", originalMessageID, bounceSender, recipient, bounceType, originalMessage.Subject)
+	return nil
+}

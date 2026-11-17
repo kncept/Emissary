@@ -27,6 +27,9 @@ func (s *captureSender) Send(_ context.Context, message *email.UserEmail) error 
 	s.messages = append(s.messages, message)
 	return nil
 }
+func (s *captureSender) SendBounce(_ context.Context, originalMessageID, bounceSender, recipient, bounceType string, originalMessage *email.UserEmail) error {
+	return nil
+}
 
 func newHandlerForTest(t *testing.T, managerType, domain, adminPassword string) (http.Handler, *storage.MemoryStorage, *captureSender) {
 	t.Helper()

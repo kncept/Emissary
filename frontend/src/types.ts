@@ -17,11 +17,6 @@ export interface AuthState {
   emissaryUserManagement?: boolean;
 }
 
-// Response from GET /api/auth/check
-export interface AuthCheckResponse {
-  username: string;
-}
-
 export interface LoginResponse {
   token?: string;
   tokenType?: string;

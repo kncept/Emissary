@@ -81,6 +81,7 @@ type mockSender struct {
 func (m *mockSender) Name() string { return "MockSender" }
 func (m *mockSender) From() string { return m.from }
 func (m *mockSender) Send(ctx context.Context, msg *email.UserEmail) error { return m.err }
+func (m *mockSender) SendBounce(ctx context.Context, originalMessageID, bounceSender, recipient, bounceType string, originalMessage *email.UserEmail) error { return m.err }
 
 type mockMetadata struct {
 	readMap    map[string]bool

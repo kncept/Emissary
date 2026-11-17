@@ -1,4 +1,4 @@
-import type { AuthState, LoginResponse, AuthCheckResponse } from './types.ts';
+import type { AuthState, LoginResponse } from './types.ts';
 import { login as generatedLogin, refresh as generatedRefresh } from './api/generated/auth.ts';
 import type { TokenResponse, Error as AuthError } from './api/generated/schemas/auth/index.ts';
 import {
@@ -175,28 +175,27 @@ export async function checkAuth(): Promise<AuthState> {
     return { authenticated: false };
   }
 
-  // Parse JWT claims from the token (admin, emissaryUserManagement)
+  // Parse JWT claims from the token (username, admin, emissaryUserManagement)
+  let username = '';
   let admin = false;
   let emissaryUserManagement = false;
   try {
     const payload = JSON.parse(atob(token.split('.')[1]));
+    username = payload.sub || '';
     admin = payload.Admin === true || payload.admin === true;
     emissaryUserManagement = payload.EmissaryUserManagement === true || payload.emissaryUserManagement === true;
   } catch {
     // Ignore parse errors
   }
 
-  try {
-    const response = await authenticatedFetch(`${API_BASE}/auth/check`);
-    if (!response.ok) {
-      return { authenticated: false };
-    }
-    const data: AuthCheckResponse = await response.json();
-    // Use username from server response (which validates the token)
-    return { authenticated: true, username: data.username, admin, emissaryUserManagement };
-  } catch {
+  // An unparseable token (or one without a subject) means no session.
+  // A stale but well-formed token is fine here: the first authenticated
+  // request triggers a refresh, and a fully expired pair redirects to login.
+  if (!username) {
     return { authenticated: false };
   }
+
+  return { authenticated: true, username, admin, emissaryUserManagement };
 }
 
 export async function login(username: string, password: string): Promise<LoginResponse> {

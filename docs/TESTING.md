@@ -81,7 +81,8 @@ Vitest with jsdom (see `frontend/vitest.config.ts`; shared setup in
 `src/test-setup.ts`). `api.test.ts` stubs `fetch` with
 `vi.stubGlobal` and checks token storage, headers and error paths.
 `App.test.tsx` renders the app with `createRoot` inside `act()` and
-checks the auth-check → inbox flow.
+checks the stored-token → inbox flow (the auth state is derived from
+the JWT in localStorage; there is no server-side auth check call).
 
 ### End-to-end (manual)
 

@@ -21,6 +21,12 @@ async function importApi() {
   return await import('./api');
 }
 
+function makeJwt(payload: Record<string, unknown>): string {
+  const b64url = (obj: unknown) =>
+    btoa(JSON.stringify(obj)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `${b64url({ alg: 'HS256', typ: 'JWT' })}.${b64url(payload)}.signature`;
+}
+
 describe('auth api', () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -42,34 +48,38 @@ describe('auth api', () => {
       expect(result).toEqual({ authenticated: false });
     });
 
-    it('sends the stored token as a Bearer header', async () => {
+    it('reads the username and role claims from the stored token without calling the API', async () => {
       const { checkAuth } = await importApi();
-      window.localStorage.setItem(TOKEN_KEY, 'abc123');
-      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url === '/api/auth/check') {
-          return createMockResponse({ username: 'Emissary' });
-        }
-        throw new Error(`Unexpected fetch: ${url}`);
-      });
+      window.localStorage.setItem(TOKEN_KEY, makeJwt({
+        sub: 'Emissary',
+        admin: true,
+        EmissaryUserManagement: true,
+        exp: 9999999999,
+      }));
+      const fetchMock = vi.fn();
       vi.stubGlobal('fetch', fetchMock);
 
       const result = await checkAuth();
 
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      const call = fetchMock.mock.calls[0] as [string, RequestInit?];
-      expect(call[0]).toBe('/api/auth/check');
-      const headers = call[1]?.headers as Headers | Record<string, string> | string[][] | undefined;
-      let authHeader: string | null = null;
-      if (headers instanceof Headers) {
-        authHeader = headers.get('Authorization');
-      } else if (Array.isArray(headers)) {
-        authHeader = headers.find(([k]) => k.toLowerCase() === 'authorization')?.[1] ?? null;
-      } else if (headers) {
-        authHeader = headers['Authorization'] ?? headers['authorization'] ?? null;
-      }
-      expect(authHeader).toBe('Bearer abc123');
-      expect(result).toEqual({ authenticated: true, username: 'Emissary', admin: false, emissaryUserManagement: false });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        authenticated: true,
+        username: 'Emissary',
+        admin: true,
+        emissaryUserManagement: true,
+      });
+    });
+
+    it('returns unauthenticated when the stored token is not a parseable JWT', async () => {
+      const { checkAuth } = await importApi();
+      window.localStorage.setItem(TOKEN_KEY, 'not-a-jwt');
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await checkAuth();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result).toEqual({ authenticated: false });
     });
   });
 
@@ -132,9 +142,6 @@ describe('auth api', () => {
 
       const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === '/api/auth/check') {
-          return createMockResponse({ username: 'test@example.com' });
-        }
         if (url === '/.well-known/jmap') {
           return createMockResponse({
             username: 'test@example.com',

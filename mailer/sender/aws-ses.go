@@ -83,3 +83,33 @@ func addressStrings(addresses []email.Address) []string {
 	}
 	return values
 }
+
+func (s *AwsSesSender) SendBounce(ctx context.Context, originalMessageID, bounceSender, recipient, bounceType string, originalMessage *email.UserEmail) error {
+	// Convert bounceType to SES bounce type
+	var sesBounceType types.BounceType
+	switch bounceType {
+	case "UserUnknown", "user_unknown":
+		sesBounceType = types.BounceTypeDoesNotExist
+	case "ContentRejected", "content_rejected":
+		sesBounceType = types.BounceTypeContentRejected
+	case "AttachmentRejected", "attachment_rejected":
+		sesBounceType = types.BounceTypeMessageTooLarge
+	default:
+		sesBounceType = types.BounceTypeDoesNotExist
+	}
+
+	_, err := s.client.SendBounce(ctx, &ses.SendBounceInput{
+		OriginalMessageId: aws.String(originalMessageID),
+		BounceSender:      aws.String(bounceSender),
+		BouncedRecipientInfoList: []types.BouncedRecipientInfo{
+			{
+				Recipient:  aws.String(recipient),
+				BounceType: sesBounceType,
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("send bounce with SES: %w", err)
+	}
+	return nil
+}
