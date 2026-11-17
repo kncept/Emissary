@@ -7,6 +7,40 @@
 - An AWS account and credentials when deploying or running against S3,
   SES, DynamoDB or Secrets Manager
 
+## No `npx`
+
+We never use `npx` — not in `run.sh`, npm scripts, `cdk.json`, CI or
+documentation. `npx` fetches whatever version happens to be current at
+the time of the call, so the same command can behave differently across
+machines and can break after an upstream release with no change in this
+repo. It also keeps the tool out of the manifest, hiding what the build
+actually depends on.
+
+Every CLI tool is instead a declared dependency in the `package.json` of
+the directory that uses it, exposed as an npm script and invoked with
+`npm run`.
+
+### Workaround when you would reach for `npx`
+
+1. Install the tool into the relevant `package.json`, normally as a dev
+   dependency: `npm install --save-dev <tool>` from that directory.
+   Commit both `package.json` and `package-lock.json` so `npm ci`
+   restores it in clean checkouts and CI.
+2. Add a script that calls the local binary by name, e.g.
+   `"orval": "orval"`. npm puts the local `node_modules/.bin` on the
+   PATH for scripts, so nothing is downloaded or installed globally.
+3. Replace `npx <tool>` with `npm run <script>`, or
+   `npm run <script> -- [args]` when forwarding arguments.
+4. Ensure the calling flow runs `npm ci` first so the local binary is
+   present.
+
+Concretely: `npx orval` became the `orval` dev dependency plus the
+`"orval": "orval"` script in `frontend/package.json`, and `run.sh` now
+runs `cd frontend && npm ci && npm run orval`. `npx ts-node` in
+`deploy/cdk.json` became the `cdkapp` script in `deploy/package.json`,
+invoked as `npm run --silent cdkapp` (silent so only the cloud assembly
+goes to stdout), and `npx cdk ...` is `npm run cdk -- ...`.
+
 ## Build
 
 `./run.sh build` runs four steps:
@@ -43,8 +77,8 @@ runs two generators against the three OpenAPI documents in `api/`:
     application implements
   - Client interfaces for calling other Emissary instances
   - Request decoders, response encoders, validators, router, middleware
-- **Frontend (TypeScript)**: An OpenAPI-to-TypeScript generator
-  (e.g., `openapi-typescript` + `openapi-fetch` or `orval`) targeting
+- **Frontend (TypeScript)**: `orval` (a declared dev dependency in
+  `frontend/package.json`, invoked via `npm run orval`) targeting
   `frontend/src/api/generated`. Outputs include:
   - TypeScript interfaces for all request/response bodies and params
   - A fully typed fetch client (`createClient`) with method signatures

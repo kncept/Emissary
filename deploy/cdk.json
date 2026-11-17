@@ -1,5 +1,5 @@
 {
-  "app": "npx ts-node --prefer-ts-exts emissary.ts",
+  "app": "npm run --silent cdkapp",
   "requireApproval": "never",
   "watch": {
     "include": [

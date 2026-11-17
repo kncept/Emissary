@@ -124,7 +124,7 @@ After deployment the application is reachable at
 
 ## Teardown
 
-`cd deploy && npx cdk destroy --all` removes the stacks. Note that:
+`cd deploy && npm run cdk -- destroy --all` removes the stacks. Note that:
 
 - the inbound bucket is destroyed **with its contents**
   (`autoDeleteObjects` + `DESTROY` removal policy), as are the

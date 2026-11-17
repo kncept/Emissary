@@ -22,6 +22,9 @@ It can be set up as a lambda, run natively or embedded in a dockerfile.
 ## Building
 Use the run.sh build command, as it handles embedding the frontend
 
+We never use `npx`; see [Development](docs/DEVELOPMENT.md#no-npx) for the
+tooling convention and the npm-script workaround.
+
 ## Users and authentication
 
 `USERNAME` and `PASSWORD` define the single built-in

@@ -152,8 +152,10 @@ it. When renaming tests, keep this table in sync.
 - Inner loop, with `dist/` already built:
   - `cd mailer && go test ./...` — everything;
   - `go test ./handler/...` or `-run TestName` — one package or test;
-  - `cd frontend && npm run test` — vitest once, or
-    `npx vitest <file>` / `npx vitest --watch` while iterating.
+  - `cd frontend && npm run test` — vitest once,
+    `npm run test -- <file>` for one file, or `npm run test:watch`
+    while iterating (no `npx`; see
+    [DEVELOPMENT.md](DEVELOPMENT.md#no-npx)).
 - CI (`.github/workflows/ci.yml`) runs `./run.sh test` on every push
   to any branch and on every pull request. The release workflow
   (`release.yml`) only builds and uploads binaries on `v*` tags — it

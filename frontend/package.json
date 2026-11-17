@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint src/*.ts src/*.tsx src/api/*.ts src/components/*.tsx",
+    "orval": "orval",
     "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -9,7 +9,8 @@
     "watch": "tsc -w",
     "test": "jest",
     "cdk": "cdk",
-    "cdklocal": "cdklocal"
+    "cdklocal": "cdklocal",
+    "cdkapp": "ts-node --prefer-ts-exts emissary.ts"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",

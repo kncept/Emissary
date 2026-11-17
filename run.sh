@@ -35,10 +35,13 @@ generate_api() {
 		go tool ogen -target ../api/users/generated ../api/users.yaml
 	)
 
-	# Generate TypeScript API client for the frontend
+	# Generate TypeScript API client for the frontend. Install the declared
+	# dev dependencies first so the local `orval` binary is available; we
+	# never use npx (see "No npx" in docs/DEVELOPMENT.md).
 	(
 		cd frontend
-		npx orval
+		npm ci
+		npm run orval
 	)
 }
 
