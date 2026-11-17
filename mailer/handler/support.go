@@ -11,6 +11,7 @@ import (
 
 	supportapi "github.com/kncept/Emissary/api/support/generated"
 	"github.com/kncept/Emissary/mailer/auth"
+	"github.com/kncept/Emissary/mailer/envutil"
 	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/receiver"
 	"github.com/kncept/Emissary/mailer/sender"
@@ -292,6 +293,8 @@ func (h *supportHandler) configurationSettings(name string) map[string]string {
 		}
 		addSetting(settings, "jwtAudience", h.cfg.JWTAudience)
 		addSetting(settings, "jwtIssuer", h.cfg.JWTIssuer)
+		addSetting(settings, "commitHash", envutil.CommitHash)
+		addSetting(settings, "buildTime", envutil.BuildTime)
 
 	case storageConfigurationName:
 		addSetting(settings, "type", storageImplementation(h.cfg.StorageType, h.storage))

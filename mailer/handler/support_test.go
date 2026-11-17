@@ -138,6 +138,12 @@ func TestSupportGetsConfigurationDetailsAndRedactsSecrets(t *testing.T) {
 	if detail.Settings["jwtSecretConfigured"] != "true" {
 		t.Errorf("jwtSecretConfigured = %q, want true", detail.Settings["jwtSecretConfigured"])
 	}
+	if detail.Settings["commitHash"] == "" {
+		t.Errorf("commitHash is missing from server settings")
+	}
+	if detail.Settings["buildTime"] == "" {
+		t.Errorf("buildTime is missing from server settings")
+	}
 	for _, secretKey := range []string{"password", "adminPassword", "jwtSecret", "ldapBindPassword"} {
 		if _, ok := detail.Settings[secretKey]; ok {
 			t.Errorf("settings leaked secret key %q: %v", secretKey, detail.Settings)

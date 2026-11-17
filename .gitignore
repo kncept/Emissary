@@ -3,5 +3,3 @@ TODO.md
 .build/
 mailer/cmd/frontend/bootstrap
 mailer/cmd/s3-receiver/bootstrap
-mailer/s3-receiver
-mailer/frontend

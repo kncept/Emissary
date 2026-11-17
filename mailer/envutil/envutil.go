@@ -9,6 +9,9 @@ import (
 	"github.com/kncept/Emissary/mailer/awsutil"
 )
 
+var CommitHash string = "unknown"
+var BuildTime string = "unknown"
+
 // cache holds the environment variable cache.
 // It is populated lazily and shared across calls.
 var (
