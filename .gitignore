@@ -4,3 +4,4 @@ TODO.md
 frontend
 mailer/cmd/frontend/bootstrap
 mailer/cmd/s3-receiver/bootstrap
+mailer/s3-receiver
