@@ -59,6 +59,7 @@ build_backend() {
 
 		go build -o ../.build/frontend ./cmd/frontend
 		go build -o ../.build/sns-receiver ./cmd/sns-receiver
+		go build -o ../.build/s3-receiver ./cmd/s3-receiver
 	)
 }
 
@@ -68,6 +69,10 @@ build_backend() {
 build_lambda() {
 	(
 		cd mailer/cmd/frontend
+		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bootstrap .
+	)
+	(
+		cd mailer/cmd/s3-receiver
 		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bootstrap .
 	)
 }

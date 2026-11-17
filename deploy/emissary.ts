@@ -9,6 +9,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda'
 import * as apigateway from 'aws-cdk-lib/aws-apigateway'
 import * as s3 from 'aws-cdk-lib/aws-s3'
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment'
+import * as s3notifications from 'aws-cdk-lib/aws-s3-notifications'
 import * as certificatemanager from 'aws-cdk-lib/aws-certificatemanager'
 import * as route53 from 'aws-cdk-lib/aws-route53'
 import * as targets from 'aws-cdk-lib/aws-route53-targets'
@@ -60,6 +61,8 @@ const inboundRecipients = (() => {
 // the deployment package. Build it with `./run.sh build:lambda`.
 const appAssetDirectory = path.join(__dirname, '..', 'mailer', 'cmd', 'frontend')
 const appBootstrap = path.join(appAssetDirectory, 'bootstrap')
+const s3ReceiverAssetDirectory = path.join(__dirname, '..', 'mailer', 'cmd', 's3-receiver')
+const s3ReceiverBootstrap = path.join(s3ReceiverAssetDirectory, 'bootstrap')
 
 function resolveTablePrefix(): string {
   let tablePrefix = (env.TABLE_PREFIX || env.DDB_TABLE_PREFIX || '').trim()
@@ -266,6 +269,13 @@ async function emailClientStack(
   if (!fs.existsSync(appBootstrap)) {
     console.warn(
       `Skipping the Emissary app stack: ${appBootstrap} does not exist. ` +
+      `Run './run.sh build:lambda' to build it before deploying the app.`,
+    )
+    return
+  }
+  if (!fs.existsSync(s3ReceiverBootstrap)) {
+    console.warn(
+      `Skipping the S3 receiver Lambda: ${s3ReceiverBootstrap} does not exist. ` +
       `Run './run.sh build:lambda' to build it before deploying the app.`,
     )
     return
@@ -486,6 +496,83 @@ async function emailClientStack(
     description: 'Emissary application URL',
     exportName: `EmissaryAppUrl-${emissaryDomain.replaceAll(".", "-")}`,
   })
+
+  // S3 Receiver Lambda - processes inbound emails when written to S3
+  const s3ReceiverRole = new iam.Role(stack, 'emissary-s3-receiver-role', {
+    assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+    roleName: `emissary-${emissaryDomain.replaceAll(".", "-")}-s3-receiver`,
+    managedPolicies: [
+      iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+    ],
+  })
+
+  const s3ReceiverLogGroup = new logs.LogGroup(stack, 'emissary-s3-receiver-logs', {
+    logGroupName: `/logs/emissary/${emissaryDomain.replaceAll(".", "-")}-s3-receiver`,
+    retention: logs.RetentionDays.THREE_MONTHS,
+    removalPolicy: cdk.RemovalPolicy.DESTROY,
+  })
+  s3ReceiverLogGroup.grantWrite(s3ReceiverRole)
+
+  // Grant S3 read access to the inbound email bucket
+  s3ReceiverRole.addToPolicy(new iam.PolicyStatement({
+    sid: 'InboundEmailAccess',
+    actions: [
+      's3:GetObject',
+      's3:ListBucket',
+    ],
+    resources: [
+      `arn:aws:s3:::${inboundEmailBucketName}`,
+      `arn:aws:s3:::${inboundEmailBucketName}/*`,
+    ],
+    effect: iam.Effect.ALLOW,
+  }))
+
+  // Grant read access to the JWT secret (same as frontend)
+  jwtSecret.grantRead(s3ReceiverRole)
+
+  const s3ReceiverFn = new lambda.Function(stack, 'emissary-s3-receiver-fn', {
+    runtime: lambda.Runtime.PROVIDED_AL2023,
+    architecture: lambda.Architecture.X86_64,
+    functionName: `emissary-${emissaryDomain.replaceAll(".", "-")}-s3-receiver`,
+    description: 'Processes inbound emails when written to S3',
+    code: lambda.Code.fromAsset(s3ReceiverAssetDirectory, { exclude: ['**', '!bootstrap'] }),
+    handler: 'bootstrap',
+    role: s3ReceiverRole,
+    logGroup: s3ReceiverLogGroup,
+    timeout: cdk.Duration.seconds(30),
+    memorySize: 256,
+    environment: {
+      // Same environment variables as the frontend/api lambda
+      USERNAME: authUsername,
+      DOMAIN: emissaryDomain,
+      USER_MANAGER: env.USER_MANAGER || 'none',
+      STORAGE: 's3',
+      S3_BUCKET: inboundEmailBucketName,
+      SENDER: 'aws-ses',
+      SES_FROM: env.SES_FROM || `no-reply@${emissaryDomain}`,
+      METADATA: 'ddb',
+      TABLE_PREFIX: ddbTablePrefix,
+      DDB_TABLE: metadataTable.tableName,
+      METADATA_REGION: awsRegion,
+      ...(sessionTableName ? { SESSION: env.SESSION || 'ddb', SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
+      ...(userTableName ? { USER_TABLE: userTableName, USER_REGION: awsRegion } : {}),
+      ...(authPassword ? { PASSWORD: authPassword } : {}),
+      JWT_SECRET: jwtSecret.secretArn,
+      JWT_AUDIENCE: mailFromDomain,
+      JWT_ISSUER: `emissary-${emissaryDomain}`,
+    },
+  })
+
+  // Import the inbound email bucket from the email-in stack to add event notification
+  const inboundBucket = s3.Bucket.fromBucketAttributes(stack, 'emissary-inbound-bucket-ref', {
+    bucketArn: `arn:aws:s3:::${inboundEmailBucketName}`,
+  })
+
+  // Add S3 event notification to trigger the s3-receiver Lambda on object creation
+  inboundBucket.addEventNotification(
+    s3.EventType.OBJECT_CREATED,
+    new s3notifications.LambdaDestination(s3ReceiverFn),
+  )
 }
 
 // run with async support
