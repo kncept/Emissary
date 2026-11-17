@@ -46,6 +46,42 @@ func TestMemoryStorage_GetNotFound(t *testing.T) {
 	}
 }
 
+func TestMemoryStorage_ListAccountEmails(t *testing.T) {
+	s := NewMemoryStorage()
+	now := time.Now()
+	s.Add(&email.UserEmail{ID: "alice-inbox", AccountID: "alice@example.com", MailboxID: "inbox", Date: now})
+	s.Add(&email.UserEmail{ID: "alice-sent", AccountID: "alice@example.com", MailboxID: "sent", Date: now})
+	s.Add(&email.UserEmail{ID: "bob-inbox", AccountID: "bob@example.com", MailboxID: "inbox", Date: now})
+
+	aliceInbox, err := s.ListAccountEmails(context.Background(), "ALICE@example.com", "inbox")
+	if err != nil {
+		t.Fatalf("ListAccountEmails() error = %v", err)
+	}
+	if len(aliceInbox) != 1 || aliceInbox[0].ID != "alice-inbox" {
+		t.Fatalf("alice inbox = %v, want only alice-inbox", aliceInbox)
+	}
+
+	aliceAll, err := s.ListAccountEmails(context.Background(), "alice@example.com", "")
+	if err != nil {
+		t.Fatalf("ListAccountEmails() error = %v", err)
+	}
+	if len(aliceAll) != 2 {
+		t.Fatalf("alice all mailboxes = %v, want 2 emails", aliceAll)
+	}
+
+	bobInbox, err := s.ListAccountEmails(context.Background(), "bob@example.com", "inbox")
+	if err != nil {
+		t.Fatalf("ListAccountEmails() error = %v", err)
+	}
+	if len(bobInbox) != 1 || bobInbox[0].ID != "bob-inbox" {
+		t.Fatalf("bob inbox = %v, want only bob-inbox", bobInbox)
+	}
+
+	if _, err := s.ListAccountEmails(context.Background(), "", "inbox"); err == nil {
+		t.Error("ListAccountEmails() with empty accountID should fail")
+	}
+}
+
 func TestMemoryStorage_ListAllEmails(t *testing.T) {
 	s := NewMemoryStorage()
 

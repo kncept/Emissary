@@ -71,8 +71,9 @@ not generated from `users.yaml`: it is served directly by the configured
   `WWW-Authenticate: Bearer realm="emissary"`.
 - Errors are `{"error": "<message>"}`. Messages are generic; details
   are only logged server-side.
-- A message outside the caller's visibility returns `404`, the same as
-  a message that does not exist.
+- A message outside the selected account is not discoverable: it is
+  omitted from `Email/query` and reported in `Email/get`'s `notFound`
+  list, the same as a message that does not exist.
 
 ## Endpoints
 
@@ -106,7 +107,19 @@ not generated from `users.yaml`: it is served directly by the configured
 ## JMAP Mail Operations
 
 All email operations are performed via the JMAP batch endpoint (`POST /api/`).
-The following method combinations are used by the frontend:
+Mail is modeled with JMAP's **account → mailbox → email** hierarchy: the
+`accountId` selects the user's account and `filter.inMailbox` selects a
+JMAP mailbox such as `inbox`, `sent`, `drafts`, `trash`, `archive` or
+`junk`. The storage layer lists only that account's object-key prefix
+(`users/<accountId>/<mailboxId>/`), so other users' mail is never read.
+
+### Account selection and masquerade
+
+The default `accountId` is the authenticated JWT `sub`. A non-admin call
+that supplies a different `accountId` is rejected. An administrator may
+supply any `accountId` to read or act in that account's mailbox
+(masquerade); this applies to `Email/query`, `Email/get`, `Email/set`
+and `EmailSubmission/set`.
 
 ### List Emails
 - `Email/query` with filter `inMailbox: "inbox"`, sort by `receivedAt` descending
@@ -273,7 +286,10 @@ Example response:
     ["Email/query", {
       "accountId": "user@example.com",
       "queryState": "state123",
-      "ids": ["email-id-1", "email-id-2"],
+      "ids": [
+        "users/user@example.com/inbox/2026-11-17T10:30:45Z_01000192a3b4c5d6.eml",
+        "users/user@example.com/inbox/2026-11-17T09:12:00Z_01000192abcdef.eml"
+      ],
       "total": 2
     }, "query1"],
     ["Email/get", {
@@ -286,6 +302,11 @@ Example response:
   "sessionState": "state123"
 }
 ```
+
+Email IDs are the full delivered object keys, including the received
+timestamp and `.eml` suffix. They contain `/`, so clients must URL-encode
+them when placing an ID in a route. The `mailboxIds` returned by
+`Email/get` reflect the mailbox the message is actually stored in.
 
 ## Binary Upload/Download
 

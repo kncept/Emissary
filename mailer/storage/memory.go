@@ -3,7 +3,9 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/kncept/Emissary/mailer/email"
@@ -49,6 +51,36 @@ func (s *MemoryStorage) Add(e *email.UserEmail) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.emails[e.ID] = clone(e)
+}
+
+// ListAccountEmails implements the Storage interface. Messages are matched by
+// the account and mailbox recorded on them (derived from the delivered object
+// key), which is the in-memory equivalent of reading a user's mailbox prefix.
+func (s *MemoryStorage) ListAccountEmails(_ context.Context, accountID, mailboxID string) ([]*email.UserEmail, error) {
+	if strings.TrimSpace(accountID) == "" {
+		return nil, fmt.Errorf("accountID is required")
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	emails := make([]*email.UserEmail, 0, len(s.emails))
+	for _, e := range s.emails {
+		if !strings.EqualFold(e.AccountID, accountID) {
+			continue
+		}
+		if mailboxID != "" && !strings.EqualFold(e.MailboxID, mailboxID) {
+			continue
+		}
+		emails = append(emails, clone(e))
+	}
+	sort.Slice(emails, func(i, j int) bool {
+		if emails[i].Date.Equal(emails[j].Date) {
+			return emails[i].ID > emails[j].ID
+		}
+		return emails[i].Date.After(emails[j].Date)
+	})
+	return emails, nil
 }
 
 func (s *MemoryStorage) ListAllEmails(context.Context) ([]*email.UserEmail, error) {

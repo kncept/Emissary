@@ -125,7 +125,47 @@ func (s *S3Storage) ObjectExists(ctx context.Context, key string) (bool, error) 
 	return false, fmt.Errorf("failed to check object %q: %w", key, err)
 }
 
-// ListAllEmails implements the Storage interface.
+// ListAccountEmails implements the Storage interface. It limits ListObjectsV2
+// to the account's mailbox prefix so messages belonging to other accounts (and
+// unprocessed SES staging objects at the bucket root) are never read. Each
+// message is parsed from the exact object key, so the returned ID is the full
+// delivered key including the timestamp and .eml extension.
+func (s *S3Storage) ListAccountEmails(ctx context.Context, accountID, mailboxID string) ([]*email.UserEmail, error) {
+	mailboxPrefix := email.MailboxKeyPrefix(accountID, mailboxID)
+	if mailboxPrefix == "" {
+		return nil, fmt.Errorf("accountID is required")
+	}
+	prefix := s.listPrefix() + mailboxPrefix
+
+	var emails []*email.UserEmail
+	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucket),
+		Prefix: aws.String(prefix),
+	})
+
+	for paginator.HasMorePages() {
+		output, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list objects in %q: %w", prefix, err)
+		}
+
+		for _, obj := range output.Contents {
+			if obj.Key == nil || strings.HasSuffix(*obj.Key, "/") {
+				continue
+			}
+			message, err := s.getEmailByKey(ctx, *obj.Key)
+			if err != nil {
+				log.Printf("s3: skipping object %q: %v", *obj.Key, err)
+				continue
+			}
+			emails = append(emails, message)
+		}
+	}
+	return emails, nil
+}
+
+// ListAllEmails implements the Storage interface. It is retained for
+// administrative callers; request handling uses ListAccountEmails.
 func (s *S3Storage) ListAllEmails(ctx context.Context) ([]*email.UserEmail, error) {
 	var emails []*email.UserEmail
 	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{

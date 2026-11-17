@@ -65,7 +65,7 @@ function App() {
                 canMasquerade={auth.admin}
               >
                 <Routes>
-                  <Route path="/" element={<EmailList admin={auth.admin} />} />
+                  <Route path="/" element={<EmailList />} />
                   <Route path="/email/:id" element={<EmailView />} />
                   <Route path="/compose" element={<Compose admin={auth.admin} currentUser={auth.username} />} />
                   <Route path="/compose/:id" element={<Compose admin={auth.admin} currentUser={auth.username} />} />

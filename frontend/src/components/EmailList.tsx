@@ -4,37 +4,28 @@ import { formatDistanceToNow, parseISO } from 'date-fns';
 import { getEmails, deleteEmail } from '../api.ts';
 import type { Email } from '../types.ts';
 
-interface EmailListProps {
-  admin?: boolean;
-}
-
-export default function EmailList({ admin = false }: EmailListProps) {
+export default function EmailList() {
   const [emails, setEmails] = useState<Email[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [userFilter, setUserFilter] = useState('');
-  const [appliedFilter, setAppliedFilter] = useState('');
 
   useEffect(() => {
-    loadEmails(appliedFilter);
-  }, [appliedFilter]);
+    loadEmails();
+  }, []);
 
-  const loadEmails = async (filter: string) => {
+  const loadEmails = async () => {
     try {
       setLoading(true);
       setError('');
-      const data = await getEmails(admin ? filter : undefined);
+      // The JMAP client selects the account (including admin masquerade)
+      // through accountId; there is no separate user filter.
+      const data = await getEmails();
       setEmails(data);
     } catch (err) {
       setError('Failed to load emails');
     } finally {
       setLoading(false);
     }
-  };
-
-  const applyFilter = (e: React.FormEvent) => {
-    e.preventDefault();
-    setAppliedFilter(userFilter.trim());
   };
 
   const handleDelete = async (id: string) => {
@@ -85,33 +76,6 @@ export default function EmailList({ admin = false }: EmailListProps) {
           Compose
         </Link>
       </div>
-      {admin && (
-        <form className="admin-filter" onSubmit={applyFilter}>
-          <label htmlFor="user-filter">User filter</label>
-          <input
-            id="user-filter"
-            type="email"
-            value={userFilter}
-            onChange={(e) => setUserFilter(e.target.value)}
-            placeholder="All users"
-          />
-          <button type="submit" className="btn btn-secondary">
-            Apply
-          </button>
-          {appliedFilter && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => {
-                setUserFilter('');
-                setAppliedFilter('');
-              }}
-            >
-              Clear
-            </button>
-          )}
-        </form>
-      )}
       {emails.length === 0 ? (
         <div className="empty-state">
           <p>No emails yet</p>
@@ -126,7 +90,7 @@ export default function EmailList({ admin = false }: EmailListProps) {
               key={email.id}
               className={`email-item ${email.read ? 'read' : 'unread'} ${email.flagged ? 'flagged' : ''}`}
             >
-              <Link to={`/email/${email.id}`} className="email-link">
+              <Link to={`/email/${encodeURIComponent(email.id)}`} className="email-link">
                 <div className="email-sender">
                   <span className="sender-avatar">{getInitials(email.from)}</span>
                   <div className="sender-info">

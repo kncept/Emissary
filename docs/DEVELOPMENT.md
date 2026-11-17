@@ -100,8 +100,10 @@ Each pluggable seam is a small interface plus a selector switch. To
 add a new implementation, three places change:
 
 1. Implement the interface (in its package, next to the others):
-   - `storage.Storage` — `Name`, `ListAllEmails`, `GetEmail`,
-     `DeleteEmail` (`mailer/storage`)
+   - `storage.Storage` — `Name`, `ListAccountEmails`,
+     `ListAllEmails` (legacy/admin only), `GetEmail`, `DeleteEmail`
+     (`mailer/storage`). Listings must be scoped by JMAP `accountId`
+     and optional `mailboxId`.
    - `sender.Sender` — `Name`, `From`, `Send` (`mailer/sender`)
    - `metadata.MetadataStore` — `Get`, `SetRead`, `SetFlagged`, `Delete`,
      `List` (`mailer/metadata`)

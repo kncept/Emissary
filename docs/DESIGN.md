@@ -8,7 +8,7 @@ control. It turns AWS SES into a small webmail application:
 - **Receiving**: mail for `DOMAIN` is accepted by SES inbound, which
   stores each raw message (RFC 5322 EML) in an S3 bucket.
 - **Reading**: a single Go binary serves a React webmail client and a
-  JSON API that read those S3 objects directly.
+  JMAP API over HTTPS that reads those S3 objects as per-user mailboxes.
 - **Sending**: outbound mail is sent through the SES `SendEmail` API.
 
 There is no mail transfer agent, maildir, IMAP server or relational
@@ -51,23 +51,31 @@ application.
 | --- | --- |
 | Domain | The receiving domain (`DOMAIN`). SES is configured to accept mail for it (and, optionally, its subdomains). |
 | MAIL FROM subdomain | `mail.<DOMAIN>`. Used both for SES bounce handling and as the hostname the deployed application is served on. |
-| Email id | The S3 object key of a message. SES writes inbound mail at the bucket root keyed by its message id, so the id is the SES message id. |
-| Administrator | The single built-in user defined by `USERNAME`/`PASSWORD`. Sees every message and can send from any address. |
-| Ordinary user | Any user accepted by the configured user manager. Sees only mail sent by or addressed to them, and always sends as themselves. |
+| Email id | The full S3 object key of a delivered message: `users/<accountId>/<mailboxId>/<timestamp>_<ses-message-id>.eml`. The id encodes the account, JMAP mailbox, received time and SES message id; the timestamp is part of the id. |
+| Account | A JMAP account, identified by the user's email address. Storage reads are scoped to this account's prefix; `accountId` on a JMAP call selects it. |
+| Mailbox | A JMAP mailbox inside an account (`inbox`, `sent`, `drafts`, ...). `Email/query` can restrict the read with `filter.inMailbox`. |
+| Administrator | The single built-in user defined by `USERNAME`/`PASSWORD`. Can read another account's mailbox by passing that account's `accountId` (masquerade) and can send from any address. |
+| Ordinary user | Any user accepted by the configured user manager. Reads only their own account/mailboxes and always sends as themselves. |
 | Metadata | Small per-message state that is not part of the RFC 5322 message: read and flagged flags. Stored separately from S3. |
 
 ## Visibility and authorization model
 
 Authentication produces a JWT (HS256, Bearer token) whose `sub` claim is
 the user id (the user's email address) and which carries `admin: true`
-only for the built-in administrator. Authorization is enforced in the API handler:
+only for the built-in administrator. Authorization is enforced at both
+the JMAP dispatcher and the storage boundary:
 
-- Ordinary users only see messages where their address appears in
-  `From`, `To`, `Cc` or `Bcc`.
-- Administrators see everything, can filter the listing with
-  `GET /api/emails?user=<address>`, and can send as any address.
-- Messages outside a caller's visibility are reported as `404` (not
-  `403`) so the existence of other users' mail is not revealed.
+- The default `accountId` for a JMAP call is the authenticated `sub`.
+  Non-admins may not supply a different `accountId`; the dispatcher
+  rejects the call.
+- Administrators may masquerade by supplying any `accountId`. Listing,
+  getting, deleting and submitting are all scoped to that account.
+- `Email/query` reads only the selected account's mailbox prefix. An
+  `inMailbox` filter narrows it to one JMAP mailbox; without the filter
+  all of that account's mailboxes are searched.
+- A message in another account is not discoverable: it is absent from
+  query results and appears in `Email/get`'s `notFound` list, just like
+  a message that does not exist.
 - Blank `PASSWORD` disables administrator login without affecting the
   other user managers.
 

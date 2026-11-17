@@ -38,7 +38,9 @@ The user manager is selected with `USER_MANAGER`:
 | `ldap` | Reserved for proxying authentication to an LDAP server. |
 
 The JWT carries the user id (the user's email address) in the `sub` claim and
-only includes `admin: true` for the built-in administrator. Ordinary users only
-see mail addressed to them or sent by them. Administrators can filter messages
-with `GET /api/emails?user=<address>` (omit the filter to see every message) and
-can send as any address.
+only includes `admin: true` for the built-in administrator. Mail is exposed
+through JMAP as per-user **mailboxes**: ordinary users read only their own
+`accountId`, while an administrator can pass another account's `accountId` on a
+JMAP method call to masquerade for support. Administrators can send as any
+address. See [API.md](docs/API.md#jmap-mail-operations) and
+[S3.md](docs/S3.md#bucket-layout) for details.

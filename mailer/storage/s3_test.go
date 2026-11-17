@@ -143,6 +143,58 @@ func TestS3StorageObjectExists(t *testing.T) {
 	}
 }
 
+func TestS3StorageListAccountEmailsUsesMailboxPrefixAndFullKey(t *testing.T) {
+	const aliceKey = "users/alice@example.com/inbox/20261117T120000Z_ses-id.eml"
+	fake := newFakeS3(map[string]string{
+		"ses-staging-id": testMessage,
+		aliceKey:         testMessage,
+		"users/alice@example.com/sent/20261117_z.eml": testMessage,
+		"users/bob@example.com/inbox/20261117_b.eml":  testMessage,
+	})
+	store := &S3Storage{client: fake, bucket: "mail-bucket"}
+
+	emails, err := store.ListAccountEmails(context.Background(), "Alice@Example.com", "inbox")
+	if err != nil {
+		t.Fatalf("ListAccountEmails() error = %v", err)
+	}
+	if len(emails) != 1 {
+		t.Fatalf("ListAccountEmails() returned %d emails, want 1", len(emails))
+	}
+	if emails[0].ID != aliceKey {
+		t.Errorf("ID = %q, want full delivered key %q", emails[0].ID, aliceKey)
+	}
+	if emails[0].AccountID != "alice@example.com" || emails[0].MailboxID != "inbox" {
+		t.Errorf("account/mailbox = %q/%q, want alice@example.com/inbox", emails[0].AccountID, emails[0].MailboxID)
+	}
+	if len(fake.requested) != 1 || fake.requested[0] != aliceKey {
+		t.Errorf("requested keys = %v, want only [%s]", fake.requested, aliceKey)
+	}
+}
+
+func TestS3StorageListAccountEmailsHonorsConfiguredPrefix(t *testing.T) {
+	const key = "emails/users/bob@example.com/inbox/20261117_ses-id.eml"
+	fake := newFakeS3(map[string]string{
+		key:                                     testMessage,
+		"users/bob@example.com/inbox/other.eml": testMessage,
+	})
+	store := &S3Storage{client: fake, bucket: "mail-bucket", prefix: "emails"}
+
+	emails, err := store.ListAccountEmails(context.Background(), "bob@example.com", "inbox")
+	if err != nil {
+		t.Fatalf("ListAccountEmails() error = %v", err)
+	}
+	if len(emails) != 1 || emails[0].ID != key {
+		t.Fatalf("ListAccountEmails() = %v, want only %s", emails, key)
+	}
+}
+
+func TestS3StorageListAccountEmailsRequiresAccount(t *testing.T) {
+	store := &S3Storage{client: newFakeS3(nil), bucket: "mail-bucket"}
+	if _, err := store.ListAccountEmails(context.Background(), "", "inbox"); err == nil {
+		t.Error("ListAccountEmails() with empty accountID should fail")
+	}
+}
+
 func TestS3StorageListAllEmailsReadsSESMessageKeys(t *testing.T) {
 	const key = "4s5k9q1abc-amazon-ses-message-id"
 	fake := newFakeS3(map[string]string{key: testMessage})

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/mail"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,26 +20,26 @@ import (
 
 // EmailFilter represents the JMAP Email filter structure.
 type EmailFilter struct {
-	InMailbox              *string  `json:"inMailbox,omitempty"`
-	InMailboxOtherThan     []string `json:"inMailboxOtherThan,omitempty"`
-	Before                 *string  `json:"before,omitempty"`
-	After                  *string  `json:"after,omitempty"`
-	MinSize                *int     `json:"minSize,omitempty"`
-	MaxSize                *int     `json:"maxSize,omitempty"`
-	AllInThreadHaveKeyword *string  `json:"allInThreadHaveKeyword,omitempty"`
-	SomeInThreadHaveKeyword *string `json:"someInThreadHaveKeyword,omitempty"`
-	NoneInThreadHaveKeyword *string `json:"noneInThreadHaveKeyword,omitempty"`
-	HasKeyword             *string  `json:"hasKeyword,omitempty"`
-	NotKeyword             *string  `json:"notKeyword,omitempty"`
-	HasAttachment          *bool    `json:"hasAttachment,omitempty"`
-	Text                   *string  `json:"text,omitempty"`
-	From                   *string  `json:"from,omitempty"`
-	To                     *string  `json:"to,omitempty"`
-	Cc                     *string  `json:"cc,omitempty"`
-	Bcc                    *string  `json:"bcc,omitempty"`
-	Subject                *string  `json:"subject,omitempty"`
-	Body                   *string  `json:"body,omitempty"`
-	Header                 []string `json:"header,omitempty"`
+	InMailbox               *string  `json:"inMailbox,omitempty"`
+	InMailboxOtherThan      []string `json:"inMailboxOtherThan,omitempty"`
+	Before                  *string  `json:"before,omitempty"`
+	After                   *string  `json:"after,omitempty"`
+	MinSize                 *int     `json:"minSize,omitempty"`
+	MaxSize                 *int     `json:"maxSize,omitempty"`
+	AllInThreadHaveKeyword  *string  `json:"allInThreadHaveKeyword,omitempty"`
+	SomeInThreadHaveKeyword *string  `json:"someInThreadHaveKeyword,omitempty"`
+	NoneInThreadHaveKeyword *string  `json:"noneInThreadHaveKeyword,omitempty"`
+	HasKeyword              *string  `json:"hasKeyword,omitempty"`
+	NotKeyword              *string  `json:"notKeyword,omitempty"`
+	HasAttachment           *bool    `json:"hasAttachment,omitempty"`
+	Text                    *string  `json:"text,omitempty"`
+	From                    *string  `json:"from,omitempty"`
+	To                      *string  `json:"to,omitempty"`
+	Cc                      *string  `json:"cc,omitempty"`
+	Bcc                     *string  `json:"bcc,omitempty"`
+	Subject                 *string  `json:"subject,omitempty"`
+	Body                    *string  `json:"body,omitempty"`
+	Header                  []string `json:"header,omitempty"`
 }
 
 // Handler implements MethodHandler by bridging to the existing storage,
@@ -77,17 +78,17 @@ func (h *Handler) CoreEcho(ctx context.Context, accountID string, args json.RawM
 
 // Mailbox represents a JMAP Mailbox object.
 type Mailbox struct {
-	ID              string         `json:"id"`
-	Name            string         `json:"name"`
-	ParentID        *string        `json:"parentId,omitempty"`
-	Role            *string        `json:"role,omitempty"`
-	SortOrder       int            `json:"sortOrder"`
-	TotalEmails     int            `json:"totalEmails"`
-	UnreadEmails    int            `json:"unreadEmails"`
-	TotalThreads    int            `json:"totalThreads"`
-	UnreadThreads   int            `json:"unreadThreads"`
-	MyRights        MailboxRights  `json:"myRights"`
-	IsSubscribed    bool           `json:"isSubscribed"`
+	ID            string        `json:"id"`
+	Name          string        `json:"name"`
+	ParentID      *string       `json:"parentId,omitempty"`
+	Role          *string       `json:"role,omitempty"`
+	SortOrder     int           `json:"sortOrder"`
+	TotalEmails   int           `json:"totalEmails"`
+	UnreadEmails  int           `json:"unreadEmails"`
+	TotalThreads  int           `json:"totalThreads"`
+	UnreadThreads int           `json:"unreadThreads"`
+	MyRights      MailboxRights `json:"myRights"`
+	IsSubscribed  bool          `json:"isSubscribed"`
 }
 
 type MailboxRights struct {
@@ -111,7 +112,7 @@ func (h *Handler) MailboxGet(ctx context.Context, accountID string, args json.Ra
 		return nil, err
 	}
 
-	mailboxes := h.getMailboxes(ctx)
+	mailboxes := h.getMailboxes(ctx, accountID)
 	var list []Mailbox
 	var notFound []string
 
@@ -171,14 +172,14 @@ func (h *Handler) MailboxSet(ctx context.Context, accountID string, args json.Ra
 	}
 
 	resp := map[string]interface{}{
-		"accountId":  accountID,
-		"oldState":   h.getState(ctx),
-		"newState":   h.getState(ctx),
-		"created":    created,
-		"updated":    updated,
-		"destroyed":  destroyed,
-		"notCreated": notCreated,
-		"notUpdated": notUpdated,
+		"accountId":    accountID,
+		"oldState":     h.getState(ctx),
+		"newState":     h.getState(ctx),
+		"created":      created,
+		"updated":      updated,
+		"destroyed":    destroyed,
+		"notCreated":   notCreated,
+		"notUpdated":   notUpdated,
 		"notDestroyed": notDestroyed,
 	}
 	return json.Marshal(resp)
@@ -186,9 +187,9 @@ func (h *Handler) MailboxSet(ctx context.Context, accountID string, args json.Ra
 
 func (h *Handler) MailboxChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID     string `json:"accountId"`
-		SinceState    string `json:"sinceState"`
-		MaxChanges    *int   `json:"maxChanges,omitempty"`
+		AccountID  string `json:"accountId"`
+		SinceState string `json:"sinceState"`
+		MaxChanges *int   `json:"maxChanges,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
@@ -211,23 +212,23 @@ func (h *Handler) MailboxQuery(ctx context.Context, accountID string, args json.
 	var req struct {
 		AccountID string `json:"accountId"`
 		Filter    *struct {
-			ParentID      *string `json:"parentId,omitempty"`
-			Name          *string `json:"name,omitempty"`
-			Role          *string `json:"role,omitempty"`
-			HasAnyRole    *bool   `json:"hasAnyRole,omitempty"`
-			IsSubscribed  *bool   `json:"isSubscribed,omitempty"`
+			ParentID     *string `json:"parentId,omitempty"`
+			Name         *string `json:"name,omitempty"`
+			Role         *string `json:"role,omitempty"`
+			HasAnyRole   *bool   `json:"hasAnyRole,omitempty"`
+			IsSubscribed *bool   `json:"isSubscribed,omitempty"`
 		} `json:"filter,omitempty"`
-		Sort       []interface{} `json:"sort,omitempty"`
-		Position   *int          `json:"position,omitempty"`
-		Anchor     *string       `json:"anchor,omitempty"`
-		AnchorOffset *int        `json:"anchorOffset,omitempty"`
-		Limit      *int          `json:"limit,omitempty"`
+		Sort         []interface{} `json:"sort,omitempty"`
+		Position     *int          `json:"position,omitempty"`
+		Anchor       *string       `json:"anchor,omitempty"`
+		AnchorOffset *int          `json:"anchorOffset,omitempty"`
+		Limit        *int          `json:"limit,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
 
-	mailboxes := h.getMailboxes(ctx)
+	mailboxes := h.getMailboxes(ctx, accountID)
 
 	// Apply filter if provided
 	if req.Filter != nil {
@@ -277,33 +278,33 @@ func (h *Handler) MailboxQuery(ctx context.Context, accountID string, args json.
 	}
 
 	resp := map[string]interface{}{
-		"accountId": accountID,
+		"accountId":  accountID,
 		"queryState": h.getState(ctx),
-		"ids": ids,
-		"total": len(mailboxes),
+		"ids":        ids,
+		"total":      len(mailboxes),
 	}
 	return json.Marshal(resp)
 }
 
 func (h *Handler) MailboxQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID      string `json:"accountId"`
-		SinceQueryState string `json:"sinceQueryState"`
-		MaxChanges     *int   `json:"maxChanges,omitempty"`
-		UpToID         *string `json:"upToId,omitempty"`
+		AccountID       string  `json:"accountId"`
+		SinceQueryState string  `json:"sinceQueryState"`
+		MaxChanges      *int    `json:"maxChanges,omitempty"`
+		UpToID          *string `json:"upToId,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
 
 	resp := map[string]interface{}{
-		"accountId":       accountID,
-		"oldQueryState":   req.SinceQueryState,
-		"newQueryState":   h.getState(ctx),
-		"hasMoreChanges":  false,
-		"created":         []string{},
-		"updated":         []string{},
-		"destroyed":       []string{},
+		"accountId":      accountID,
+		"oldQueryState":  req.SinceQueryState,
+		"newQueryState":  h.getState(ctx),
+		"hasMoreChanges": false,
+		"created":        []string{},
+		"updated":        []string{},
+		"destroyed":      []string{},
 	}
 	return json.Marshal(resp)
 }
@@ -326,7 +327,7 @@ func (h *Handler) ThreadGet(ctx context.Context, accountID string, args json.Raw
 		return nil, err
 	}
 
-	threads := h.getThreads(ctx)
+	threads := h.getThreads(ctx, accountID)
 	var list []Thread
 	var notFound []string
 
@@ -383,32 +384,32 @@ func (h *Handler) ThreadChanges(ctx context.Context, accountID string, args json
 
 // JMAPEmail represents a JMAP Email object.
 type JMAPEmail struct {
-	ID            string                 `json:"id"`
-	BlobID        string                 `json:"blobId"`
-	ThreadID      string                 `json:"threadId"`
-	MailboxIDs    map[string]bool        `json:"mailboxIds"`
-	Keywords      map[string]bool        `json:"keywords"`
-	Size          int                    `json:"size"`
-	ReceivedAt    string                 `json:"receivedAt"`
-	MessageID     []string               `json:"messageId,omitempty"`
-	InReplyTo     []string               `json:"inReplyTo,omitempty"`
-	References    []string               `json:"references,omitempty"`
-	Sender        []EmailAddress         `json:"sender,omitempty"`
-	From          []EmailAddress         `json:"from,omitempty"`
-	To            []EmailAddress         `json:"to,omitempty"`
-	Cc            []EmailAddress         `json:"cc,omitempty"`
-	Bcc           []EmailAddress         `json:"bcc,omitempty"`
-	ReplyTo       []EmailAddress         `json:"replyTo,omitempty"`
-	Subject       string                 `json:"subject,omitempty"`
-	SentAt        *string                `json:"sentAt,omitempty"`
-	HasAttachment bool                   `json:"hasAttachment"`
-	Preview       string                 `json:"preview"`
-	BodyStructure *EmailBodyPart         `json:"bodyStructure,omitempty"`
+	ID            string                    `json:"id"`
+	BlobID        string                    `json:"blobId"`
+	ThreadID      string                    `json:"threadId"`
+	MailboxIDs    map[string]bool           `json:"mailboxIds"`
+	Keywords      map[string]bool           `json:"keywords"`
+	Size          int                       `json:"size"`
+	ReceivedAt    string                    `json:"receivedAt"`
+	MessageID     []string                  `json:"messageId,omitempty"`
+	InReplyTo     []string                  `json:"inReplyTo,omitempty"`
+	References    []string                  `json:"references,omitempty"`
+	Sender        []EmailAddress            `json:"sender,omitempty"`
+	From          []EmailAddress            `json:"from,omitempty"`
+	To            []EmailAddress            `json:"to,omitempty"`
+	Cc            []EmailAddress            `json:"cc,omitempty"`
+	Bcc           []EmailAddress            `json:"bcc,omitempty"`
+	ReplyTo       []EmailAddress            `json:"replyTo,omitempty"`
+	Subject       string                    `json:"subject,omitempty"`
+	SentAt        *string                   `json:"sentAt,omitempty"`
+	HasAttachment bool                      `json:"hasAttachment"`
+	Preview       string                    `json:"preview"`
+	BodyStructure *EmailBodyPart            `json:"bodyStructure,omitempty"`
 	BodyValues    map[string]EmailBodyValue `json:"bodyValues,omitempty"`
-	TextBody      []EmailBodyPart        `json:"textBody,omitempty"`
-	HTMLBody      []EmailBodyPart        `json:"htmlBody,omitempty"`
-	Attachments   []EmailBodyPart        `json:"attachments,omitempty"`
-	Headers       []EmailHeader          `json:"headers,omitempty"`
+	TextBody      []EmailBodyPart           `json:"textBody,omitempty"`
+	HTMLBody      []EmailBodyPart           `json:"htmlBody,omitempty"`
+	Attachments   []EmailBodyPart           `json:"attachments,omitempty"`
+	Headers       []EmailHeader             `json:"headers,omitempty"`
 }
 
 type EmailAddress struct {
@@ -417,23 +418,23 @@ type EmailAddress struct {
 }
 
 type EmailBodyPart struct {
-	PartID       *string `json:"partId,omitempty"`
-	BlobID       *string `json:"blobId,omitempty"`
-	Type         string  `json:"type"`
-	Size         int     `json:"size"`
-	Name         *string `json:"name,omitempty"`
-	Charset      *string `json:"charset,omitempty"`
-	Disposition  *string `json:"disposition,omitempty"`
-	CID          *string `json:"cid,omitempty"`
-	Language     []string `json:"language,omitempty"`
-	Location     *string `json:"location,omitempty"`
-	SubParts     []EmailBodyPart `json:"subParts,omitempty"`
+	PartID      *string         `json:"partId,omitempty"`
+	BlobID      *string         `json:"blobId,omitempty"`
+	Type        string          `json:"type"`
+	Size        int             `json:"size"`
+	Name        *string         `json:"name,omitempty"`
+	Charset     *string         `json:"charset,omitempty"`
+	Disposition *string         `json:"disposition,omitempty"`
+	CID         *string         `json:"cid,omitempty"`
+	Language    []string        `json:"language,omitempty"`
+	Location    *string         `json:"location,omitempty"`
+	SubParts    []EmailBodyPart `json:"subParts,omitempty"`
 }
 
 type EmailBodyValue struct {
-	Value              string `json:"value"`
-	IsEncodingProblem  bool   `json:"isEncodingProblem,omitempty"`
-	IsTruncated        bool   `json:"isTruncated,omitempty"`
+	Value             string `json:"value"`
+	IsEncodingProblem bool   `json:"isEncodingProblem,omitempty"`
+	IsTruncated       bool   `json:"isTruncated,omitempty"`
 }
 
 type EmailHeader struct {
@@ -443,15 +444,17 @@ type EmailHeader struct {
 
 func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID string   `json:"accountId"`
-		IDs       []string `json:"ids,omitempty"`
+		AccountID  string   `json:"accountId"`
+		IDs        []string `json:"ids,omitempty"`
 		Properties []string `json:"properties,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
 
-	emails, err := h.storage.ListAllEmails(ctx)
+	// Email/get must only expose messages in the requested account. When an
+	// admin masquerades, accountID is the target account supplied in the call.
+	emails, err := h.storage.ListAccountEmails(ctx, accountID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -514,20 +517,24 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 	notUpdated := make(map[string]interface{})
 	notDestroyed := make(map[string]interface{})
 
-	// Handle destroy
+	// Handle destroy. Verify the message belongs to the requested account so
+	// a crafted id cannot delete another user's mail.
 	for _, id := range req.Destroy {
-		err := h.storage.DeleteEmail(ctx, id)
-		if err != nil {
+		msg, err := h.storage.GetEmail(ctx, id)
+		if err != nil || !strings.EqualFold(msg.AccountID, accountID) {
+			notDestroyed[id] = map[string]string{"type": "notFound", "description": "Email not found"}
+			continue
+		}
+		if err := h.storage.DeleteEmail(ctx, id); err != nil {
 			if errors.Is(err, storage.ErrNotFound) {
 				notDestroyed[id] = map[string]string{"type": "notFound", "description": "Email not found"}
 			} else {
 				notDestroyed[id] = map[string]string{"type": "serverFail", "description": err.Error()}
 			}
-		} else {
-			// Also delete metadata
-			h.metadata.Delete(ctx, id)
-			destroyed = append(destroyed, id)
+			continue
 		}
+		h.metadata.Delete(ctx, id)
+		destroyed = append(destroyed, id)
 	}
 
 	// Handle create
@@ -610,6 +617,14 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 		if len(mailboxIDs) == 0 {
 			mailboxIDs["inbox"] = true
 		}
+		// A message belongs to one JMAP mailbox for storage purposes. Pick
+		// deterministically so the account/mailbox scoping is unambiguous.
+		mailboxID := "inbox"
+		for mb := range mailboxIDs {
+			if mailboxIDs[mb] && (mailboxID == "inbox" || mb < mailboxID) {
+				mailboxID = mb
+			}
+		}
 
 		keywords := map[string]bool{}
 		if kwMap, ok := createMap["keywords"].(map[string]interface{}); ok {
@@ -621,38 +636,40 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 		}
 
 		var inReplyTo []string
-	if irArr, ok := createMap["inReplyTo"].([]interface{}); ok {
-		for _, v := range irArr {
-			if s, ok := v.(string); ok {
-				inReplyTo = append(inReplyTo, s)
+		if irArr, ok := createMap["inReplyTo"].([]interface{}); ok {
+			for _, v := range irArr {
+				if s, ok := v.(string); ok {
+					inReplyTo = append(inReplyTo, s)
+				}
 			}
 		}
-	}
-	
-	var references []string
-	if refArr, ok := createMap["references"].([]interface{}); ok {
-		for _, v := range refArr {
-			if s, ok := v.(string); ok {
-				references = append(references, s)
+
+		var references []string
+		if refArr, ok := createMap["references"].([]interface{}); ok {
+			for _, v := range refArr {
+				if s, ok := v.(string); ok {
+					references = append(references, s)
+				}
 			}
 		}
-	}
-	
-	// Create the email
-	now := time.Now().UTC()
-	newEmail := &email.UserEmail{
-		ID:          newID,
-		From:        email.Address{Address: from},
-		To:          to,
-		Cc:          cc,
-		Bcc:         bcc,
-		Subject:     subject,
-		Date:        now,
-		Text:        text,
-		Size:        int64(textBodySize),
-		InReplyTo:   inReplyTo,
-		References:  references,
-	}
+
+		// Created mail is stored in the requested account's mailbox.
+		now := time.Now().UTC()
+		newEmail := &email.UserEmail{
+			ID:         newID,
+			AccountID:  accountID,
+			MailboxID:  mailboxID,
+			From:       email.Address{Address: from},
+			To:         to,
+			Cc:         cc,
+			Bcc:        bcc,
+			Subject:    subject,
+			Date:       now,
+			Text:       text,
+			Size:       int64(textBodySize),
+			InReplyTo:  inReplyTo,
+			References: references,
+		}
 
 		if err := h.storage.AddEmail(ctx, newEmail); err != nil {
 			notCreated[createID] = map[string]string{"type": "serverFail", "description": "Failed to save email: " + err.Error()}
@@ -679,32 +696,16 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 		notUpdated[id] = map[string]string{"type": "forbidden", "description": "Email update not supported"}
 	}
 
-	// Handle destroy
-	for _, id := range req.Destroy {
-		err := h.storage.DeleteEmail(ctx, id)
-		if err != nil {
-			if errors.Is(err, storage.ErrNotFound) {
-				notDestroyed[id] = map[string]string{"type": "notFound", "description": "Email not found"}
-			} else {
-				notDestroyed[id] = map[string]string{"type": "serverFail", "description": err.Error()}
-			}
-		} else {
-			// Also delete metadata
-			h.metadata.Delete(ctx, id)
-			destroyed = append(destroyed, id)
-		}
-	}
-
 	resp := map[string]interface{}{
-		"accountId":     accountID,
-		"oldState":      h.getState(ctx),
-		"newState":      h.getState(ctx),
-		"created":       created,
-		"updated":       updated,
-		"destroyed":     destroyed,
-		"notCreated":    notCreated,
-		"notUpdated":    notUpdated,
-		"notDestroyed":  notDestroyed,
+		"accountId":    accountID,
+		"oldState":     h.getState(ctx),
+		"newState":     h.getState(ctx),
+		"created":      created,
+		"updated":      updated,
+		"destroyed":    destroyed,
+		"notCreated":   notCreated,
+		"notUpdated":   notUpdated,
+		"notDestroyed": notDestroyed,
 	}
 	return json.Marshal(resp)
 }
@@ -734,21 +735,29 @@ func (h *Handler) EmailChanges(ctx context.Context, accountID string, args json.
 
 func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID string      `json:"accountId"`
-		Filter    *EmailFilter `json:"filter,omitempty"`
-		Sort      []interface{} `json:"sort,omitempty"`
-		Position  *int          `json:"position,omitempty"`
-		Anchor    *string       `json:"anchor,omitempty"`
-		AnchorOffset *int       `json:"anchorOffset,omitempty"`
-		Limit     *int          `json:"limit,omitempty"`
-		CalculateTotal *bool    `json:"calculateTotal,omitempty"`
-		CollapseThreads *bool   `json:"collapseThreads,omitempty"`
+		AccountID       string        `json:"accountId"`
+		Filter          *EmailFilter  `json:"filter,omitempty"`
+		Sort            []interface{} `json:"sort,omitempty"`
+		Position        *int          `json:"position,omitempty"`
+		Anchor          *string       `json:"anchor,omitempty"`
+		AnchorOffset    *int          `json:"anchorOffset,omitempty"`
+		Limit           *int          `json:"limit,omitempty"`
+		CalculateTotal  *bool         `json:"calculateTotal,omitempty"`
+		CollapseThreads *bool         `json:"collapseThreads,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
 
-	emails, err := h.storage.ListAllEmails(ctx)
+	// Read only from the requested account's mailbox. The accountId is the
+	// authenticated user's id, or the target account when an admin is
+	// masquerading. An inMailbox filter is pushed into storage so only that
+	// JMAP mailbox is listed.
+	mailboxID := ""
+	if req.Filter != nil && req.Filter.InMailbox != nil {
+		mailboxID = *req.Filter.InMailbox
+	}
+	emails, err := h.storage.ListAccountEmails(ctx, accountID, mailboxID)
 	if err != nil {
 		return nil, err
 	}
@@ -761,8 +770,31 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 		}
 	}
 
-	// Sort by date descending (newest first) by default
-	// TODO: implement proper sorting based on req.Sort
+	// JMAP defaults to receivedAt descending; honour an explicit receivedAt
+	// sort direction from the client.
+	ascending := false
+	for _, s := range req.Sort {
+		sortSpec, ok := s.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		property, _ := sortSpec["property"].(string)
+		if property != "receivedAt" && property != "date" {
+			continue
+		}
+		if v, ok := sortSpec["isAscending"].(bool); ok {
+			ascending = v
+		}
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		if filtered[i].Date.Equal(filtered[j].Date) {
+			return filtered[i].ID < filtered[j].ID
+		}
+		if ascending {
+			return filtered[i].Date.Before(filtered[j].Date)
+		}
+		return filtered[i].Date.After(filtered[j].Date)
+	})
 
 	// Apply position/limit for pagination
 	position := 0
@@ -790,37 +822,37 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 	}
 
 	resp := map[string]interface{}{
-		"accountId":   accountID,
-		"queryState":  h.getState(ctx),
-		"ids":         ids,
-		"total":       total,
+		"accountId":  accountID,
+		"queryState": h.getState(ctx),
+		"ids":        ids,
+		"total":      total,
 	}
 	return json.Marshal(resp)
 }
 
 func (h *Handler) EmailQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID       string `json:"accountId"`
-		SinceQueryState string `json:"sinceQueryState"`
-		Filter          interface{} `json:"filter,omitempty"`
+		AccountID       string        `json:"accountId"`
+		SinceQueryState string        `json:"sinceQueryState"`
+		Filter          interface{}   `json:"filter,omitempty"`
 		Sort            []interface{} `json:"sort,omitempty"`
-		MaxChanges      *int   `json:"maxChanges,omitempty"`
-		UpToID          *string `json:"upToId,omitempty"`
-		CalculateTotal  *bool  `json:"calculateTotal,omitempty"`
-		CollapseThreads *bool  `json:"collapseThreads,omitempty"`
+		MaxChanges      *int          `json:"maxChanges,omitempty"`
+		UpToID          *string       `json:"upToId,omitempty"`
+		CalculateTotal  *bool         `json:"calculateTotal,omitempty"`
+		CollapseThreads *bool         `json:"collapseThreads,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
 
 	resp := map[string]interface{}{
-		"accountId":        accountID,
-		"oldQueryState":    req.SinceQueryState,
-		"newQueryState":    h.getState(ctx),
-		"hasMoreChanges":   false,
-		"created":          []string{},
-		"updated":          []string{},
-		"destroyed":        []string{},
+		"accountId":      accountID,
+		"oldQueryState":  req.SinceQueryState,
+		"newQueryState":  h.getState(ctx),
+		"hasMoreChanges": false,
+		"created":        []string{},
+		"updated":        []string{},
+		"destroyed":      []string{},
 	}
 	return json.Marshal(resp)
 }
@@ -850,14 +882,14 @@ func (h *Handler) SearchSnippetGet(ctx context.Context, accountID string, args j
 // ============================================================================
 
 type Identity struct {
-	ID             string         `json:"id"`
-	Name           string         `json:"name"`
-	Email          string         `json:"email"`
-	ReplyTo        []EmailAddress `json:"replyTo,omitempty"`
-	Bcc            []EmailAddress `json:"bcc,omitempty"`
-	TextSignature  string         `json:"textSignature"`
-	HTMLSignature  string         `json:"htmlSignature"`
-	MayDelete      bool           `json:"mayDelete"`
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`
+	Email         string         `json:"email"`
+	ReplyTo       []EmailAddress `json:"replyTo,omitempty"`
+	Bcc           []EmailAddress `json:"bcc,omitempty"`
+	TextSignature string         `json:"textSignature"`
+	HTMLSignature string         `json:"htmlSignature"`
+	MayDelete     bool           `json:"mayDelete"`
 }
 
 func (h *Handler) IdentityGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
@@ -978,9 +1010,10 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 
 	// For each submission to create
 	for createID, submission := range req.Create {
-		// Get the email to send
+		// Get the email to send. Only an email in the requested account may be
+		// submitted, even when an admin is masquerading as that account.
 		emailMsg, err := h.storage.GetEmail(ctx, submission.EmailID)
-		if err != nil {
+		if err != nil || !strings.EqualFold(emailMsg.AccountID, accountID) {
 			notCreated[createID] = map[string]string{"type": "notFound", "description": "Email not found"}
 			continue
 		}
@@ -1109,10 +1142,10 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 	}
 
 	resp := map[string]interface{}{
-		"accountId": req.AccountID,
-		"oldState":  h.getState(ctx),
-		"newState":  h.getState(ctx),
-		"created":   created,
+		"accountId":  req.AccountID,
+		"oldState":   h.getState(ctx),
+		"newState":   h.getState(ctx),
+		"created":    created,
 		"notCreated": notCreated,
 	}
 	return json.Marshal(resp)
@@ -1166,20 +1199,24 @@ func (h *Handler) PushSubscriptionChanges(ctx context.Context, accountID string,
 // Helper methods
 // ============================================================================
 
-func (h *Handler) getMailboxes(ctx context.Context) []Mailbox {
-	// Return standard mailboxes
-	// In a real implementation, these would come from storage/metadata
+func (h *Handler) getMailboxes(ctx context.Context, accountID string) []Mailbox {
+	// Return standard JMAP mailboxes. Counts are scoped to the requested
+	// account so a masquerading admin sees the target user's mailbox state.
+
+	count := func(mailboxID string) int { return h.countEmailsInMailbox(ctx, accountID, mailboxID) }
+	unread := func(mailboxID string) int { return h.countUnreadInMailbox(ctx, accountID, mailboxID) }
+	threads := func(mailboxID string) int { return h.countThreadsInMailbox(ctx, accountID, mailboxID) }
 
 	return []Mailbox{
 		{
-			ID:           "inbox",
-			Name:         "Inbox",
-			ParentID:     nil,
-			Role:         stringPtr("inbox"),
-			SortOrder:    0,
-			TotalEmails:  h.countEmailsInMailbox(ctx, "inbox"),
-			UnreadEmails: h.countUnreadInMailbox(ctx, "inbox"),
-			TotalThreads: h.countThreadsInMailbox(ctx, "inbox"),
+			ID:            "inbox",
+			Name:          "Inbox",
+			ParentID:      nil,
+			Role:          stringPtr("inbox"),
+			SortOrder:     0,
+			TotalEmails:   count("inbox"),
+			UnreadEmails:  unread("inbox"),
+			TotalThreads:  threads("inbox"),
 			UnreadThreads: 0,
 			MyRights: MailboxRights{
 				MayReadItems:   true,
@@ -1195,14 +1232,14 @@ func (h *Handler) getMailboxes(ctx context.Context) []Mailbox {
 			IsSubscribed: true,
 		},
 		{
-			ID:           "sent",
-			Name:         "Sent",
-			ParentID:     nil,
-			Role:         stringPtr("sent"),
-			SortOrder:    1,
-			TotalEmails:  h.countEmailsInMailbox(ctx, "sent"),
-			UnreadEmails: 0,
-			TotalThreads: h.countThreadsInMailbox(ctx, "sent"),
+			ID:            "sent",
+			Name:          "Sent",
+			ParentID:      nil,
+			Role:          stringPtr("sent"),
+			SortOrder:     1,
+			TotalEmails:   count("sent"),
+			UnreadEmails:  0,
+			TotalThreads:  threads("sent"),
 			UnreadThreads: 0,
 			MyRights: MailboxRights{
 				MayReadItems:   true,
@@ -1218,14 +1255,14 @@ func (h *Handler) getMailboxes(ctx context.Context) []Mailbox {
 			IsSubscribed: true,
 		},
 		{
-			ID:           "drafts",
-			Name:         "Drafts",
-			ParentID:     nil,
-			Role:         stringPtr("drafts"),
-			SortOrder:    2,
-			TotalEmails:  h.countEmailsInMailbox(ctx, "drafts"),
-			UnreadEmails: 0,
-			TotalThreads: h.countThreadsInMailbox(ctx, "drafts"),
+			ID:            "drafts",
+			Name:          "Drafts",
+			ParentID:      nil,
+			Role:          stringPtr("drafts"),
+			SortOrder:     2,
+			TotalEmails:   count("drafts"),
+			UnreadEmails:  0,
+			TotalThreads:  threads("drafts"),
 			UnreadThreads: 0,
 			MyRights: MailboxRights{
 				MayReadItems:   true,
@@ -1241,14 +1278,14 @@ func (h *Handler) getMailboxes(ctx context.Context) []Mailbox {
 			IsSubscribed: true,
 		},
 		{
-			ID:           "trash",
-			Name:         "Trash",
-			ParentID:     nil,
-			Role:         stringPtr("trash"),
-			SortOrder:    3,
-			TotalEmails:  h.countEmailsInMailbox(ctx, "trash"),
-			UnreadEmails: 0,
-			TotalThreads: h.countThreadsInMailbox(ctx, "trash"),
+			ID:            "trash",
+			Name:          "Trash",
+			ParentID:      nil,
+			Role:          stringPtr("trash"),
+			SortOrder:     3,
+			TotalEmails:   count("trash"),
+			UnreadEmails:  0,
+			TotalThreads:  threads("trash"),
 			UnreadThreads: 0,
 			MyRights: MailboxRights{
 				MayReadItems:   true,
@@ -1264,14 +1301,14 @@ func (h *Handler) getMailboxes(ctx context.Context) []Mailbox {
 			IsSubscribed: true,
 		},
 		{
-			ID:           "archive",
-			Name:         "Archive",
-			ParentID:     nil,
-			Role:         stringPtr("archive"),
-			SortOrder:    4,
-			TotalEmails:  h.countEmailsInMailbox(ctx, "archive"),
-			UnreadEmails: h.countUnreadInMailbox(ctx, "archive"),
-			TotalThreads: h.countThreadsInMailbox(ctx, "archive"),
+			ID:            "archive",
+			Name:          "Archive",
+			ParentID:      nil,
+			Role:          stringPtr("archive"),
+			SortOrder:     4,
+			TotalEmails:   count("archive"),
+			UnreadEmails:  unread("archive"),
+			TotalThreads:  threads("archive"),
 			UnreadThreads: 0,
 			MyRights: MailboxRights{
 				MayReadItems:   true,
@@ -1287,14 +1324,14 @@ func (h *Handler) getMailboxes(ctx context.Context) []Mailbox {
 			IsSubscribed: true,
 		},
 		{
-			ID:           "junk",
-			Name:         "Junk",
-			ParentID:     nil,
-			Role:         stringPtr("junk"),
-			SortOrder:    5,
-			TotalEmails:  h.countEmailsInMailbox(ctx, "junk"),
-			UnreadEmails: h.countUnreadInMailbox(ctx, "junk"),
-			TotalThreads: h.countThreadsInMailbox(ctx, "junk"),
+			ID:            "junk",
+			Name:          "Junk",
+			ParentID:      nil,
+			Role:          stringPtr("junk"),
+			SortOrder:     5,
+			TotalEmails:   count("junk"),
+			UnreadEmails:  unread("junk"),
+			TotalThreads:  threads("junk"),
 			UnreadThreads: 0,
 			MyRights: MailboxRights{
 				MayReadItems:   true,
@@ -1312,10 +1349,10 @@ func (h *Handler) getMailboxes(ctx context.Context) []Mailbox {
 	}
 }
 
-func (h *Handler) getThreads(ctx context.Context) []Thread {
+func (h *Handler) getThreads(ctx context.Context, accountID string) []Thread {
 	// For now, each email is its own thread
 	// A real implementation would group by thread ID (References/In-Reply-To headers)
-	emails, err := h.storage.ListAllEmails(ctx)
+	emails, err := h.storage.ListAccountEmails(ctx, accountID, "")
 	if err != nil {
 		return []Thread{}
 	}
@@ -1336,39 +1373,32 @@ func (h *Handler) getState(ctx context.Context) string {
 	return fmt.Sprintf("%d", time.Now().Unix())
 }
 
-func (h *Handler) countEmailsInMailbox(ctx context.Context, mailboxID string) int {
-	// For now, all emails are in INBOX
-	if mailboxID == "inbox" {
-		emails, err := h.storage.ListAllEmails(ctx)
-		if err != nil {
-			return 0
-		}
-		return len(emails)
+func (h *Handler) countEmailsInMailbox(ctx context.Context, accountID, mailboxID string) int {
+	emails, err := h.storage.ListAccountEmails(ctx, accountID, mailboxID)
+	if err != nil {
+		return 0
 	}
-	return 0
+	return len(emails)
 }
 
-func (h *Handler) countUnreadInMailbox(ctx context.Context, mailboxID string) int {
-	if mailboxID == "inbox" || mailboxID == "archive" || mailboxID == "junk" {
-		emails, err := h.storage.ListAllEmails(ctx)
-		if err != nil {
-			return 0
-		}
-		count := 0
-		for _, e := range emails {
-			meta, err := h.metadata.Get(ctx, e.ID)
-			if err == nil && !meta.Read {
-				count++
-			}
-		}
-		return count
+func (h *Handler) countUnreadInMailbox(ctx context.Context, accountID, mailboxID string) int {
+	emails, err := h.storage.ListAccountEmails(ctx, accountID, mailboxID)
+	if err != nil {
+		return 0
 	}
-	return 0
+	count := 0
+	for _, e := range emails {
+		meta, err := h.metadata.Get(ctx, e.ID)
+		if err == nil && !meta.Read {
+			count++
+		}
+	}
+	return count
 }
 
-func (h *Handler) countThreadsInMailbox(ctx context.Context, mailboxID string) int {
+func (h *Handler) countThreadsInMailbox(ctx context.Context, accountID, mailboxID string) int {
 	// For now, each email is its own thread
-	return h.countEmailsInMailbox(ctx, mailboxID)
+	return h.countEmailsInMailbox(ctx, accountID, mailboxID)
 }
 
 func (h *Handler) toJMAPEmail(ctx context.Context, e *email.UserEmail) (*JMAPEmail, error) {
@@ -1386,9 +1416,15 @@ func (h *Handler) toJMAPEmail(ctx context.Context, e *email.UserEmail) (*JMAPEma
 		keywords["$flagged"] = true
 	}
 
-	// Determine mailbox IDs
+	// Determine mailbox IDs from the mailbox the message was delivered to.
+	// The delivered key records it (users/<account>/<mailbox>/<file>.eml);
+	// locally created messages use their requested mailbox.
+	mailboxID := e.MailboxID
+	if mailboxID == "" {
+		mailboxID = "inbox"
+	}
 	mailboxIDs := map[string]bool{
-		"inbox": true, // Default to inbox
+		mailboxID: true,
 	}
 
 	// Convert addresses
@@ -1456,15 +1492,19 @@ func (h *Handler) matchesFilter(e *email.UserEmail, filter *EmailFilter) bool {
 		return true
 	}
 
-	// InMailbox filter
-	if filter.InMailbox != nil && *filter.InMailbox != "inbox" {
+	// InMailbox filter. Storage resolves this into a mailbox prefix; when the
+	// mailbox is known on the message, verify it as well so a stale or
+	// hand-crafted id cannot be used to read from another mailbox.
+	if filter.InMailbox != nil && e.MailboxID != "" && !strings.EqualFold(e.MailboxID, *filter.InMailbox) {
 		return false
 	}
 
 	// InMailboxOtherThan filter
-	for _, mb := range filter.InMailboxOtherThan {
-		if mb == "inbox" {
-			return false
+	if e.MailboxID != "" {
+		for _, mb := range filter.InMailboxOtherThan {
+			if strings.EqualFold(mb, e.MailboxID) {
+				return false
+			}
 		}
 	}
 

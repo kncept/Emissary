@@ -30,7 +30,7 @@ Deployed on AWS, Emissary looks like this:
    browser ── React SPA ──────────────────────►│  /api/*  JSON API           │
                                                │  /*      embedded frontend  │
                                                └─────────────────────────────┘
-        outbound mail ◄──────────────────── SES SendEmail ◄──── POST /api/emails/send
+        outbound mail ◄──────────────────── SES SendEmail ◄──── EmailSubmission/set
 ```
 
 The same `http.Handler` runs without AWS when started natively: it
@@ -73,7 +73,7 @@ listens with `net/http` and uses the memory/log implementations.
 | `awsutil` | Lambda detection and Secrets Manager access. |
 | `auth` | JWT issue/validate (`Claims`: `sub`, `sid`, `admin`, `iat`, `exp`, optional `aud`/`iss`). |
 | `usermanager` | Pluggable login backends; every backend also knows the built-in admin. |
-| `storage` | Mail source: `ListAllEmails`, `GetEmail`, `DeleteEmail`. |
+| `storage` | Mail source: `ListAccountEmails` (scoped by JMAP `accountId`/`mailboxId`), plus `GetEmail`, `DeleteEmail` and a legacy `ListAllEmails` for admin/support callers. |
 | `sender` | Write side of mail: `Send`. |
 | `metadata` | Per-message read/flag state, discarded when a message is deleted. |
 | `email` | RFC 5322 parsing: `WireFormatEmail` (full structure) and `UserEmail` (simplified). |
@@ -107,14 +107,21 @@ instantiated in `handler.New`:
    - For each valid recipient, the message is copied to `users/<recipient-email>/inbox/<timestamp>_<ses-message-id>.eml`
    - The timestamp is derived from the message's `Date` header or `Received` headers (ISO 8601 UTC)
    - The staging object is deleted after successful delivery to all recipients
-5. When a user lists or opens mail, `storage.S3Storage` paginates
-   `ListObjectsV2` over their `users/<user-id>/<mailboxId>/` prefix,
-   `GetObject`s each message, and parses it with `email.Parse`. Unparseable objects are logged and
-   skipped, not fatal.
+5. When a JMAP call lists or opens mail, `storage.S3Storage` paginates
+   `ListObjectsV2` over the prefix for the call's `accountId`:
+   `users/<accountId>/<mailboxId>/`. The account comes from the JWT
+   `sub`, or from the target account supplied by an administrator
+   (masquerade). An `inMailbox` filter narrows the read to one JMAP
+   mailbox; without it every mailbox in the account is searched.
+   `GetObject`s each message, and parses it with `email.Parse`.
+   Unparseable objects are logged and skipped, not fatal.
 6. `handler` merges read/flag state from the metadata store into each
-   response and filters the result by the caller's visibility.
+   response. JMAP never calls the cross-account `ListAllEmails`.
 
-The email ID used throughout the API is the full S3 object key (e.g., `users/alice@example.com/inbox/2026-11-17T10:30:45Z_01000192a3b4c5d6...eml`), which encodes the user, mailbox, received time, and SES message ID.
+The email ID used throughout the JMAP API is the full delivered S3 object key
+(e.g., `users/alice@example.com/inbox/2026-11-17T10:30:45Z_01000192a3b4c5d6.eml`),
+including the timestamp and `.eml` suffix. It encodes the account, JMAP
+mailbox, received time and SES message ID.
 
 ### Recipient validation and delivery
 
@@ -163,11 +170,13 @@ enabling independent management (move, delete, flag) per user.
 
 ## Outbound mail flow
 
-1. The client posts to `POST /api/emails/send`.
-2. The handler resolves the From address: administrators may specify
-   one (defaulting, on a reply, to the original recipient); ordinary
-   users always send as their own address; otherwise the sender's
-   configured `From` (`SES_FROM`) is used.
+1. The client creates a draft with `Email/set` and submits it with
+   `EmailSubmission/set`, both on the JMAP batch endpoint.
+2. The handler verifies the submitted email belongs to the request's
+   `accountId`, then resolves the From address: administrators may
+   specify one (defaulting, on a reply, to the original recipient);
+   ordinary users always send as their own address; otherwise the
+   sender's configured `From` (`SES_FROM`) is used.
 3. The message is handed to the sender — in production the SES v2
    `SendEmail` API, in development a log line.
 
@@ -181,11 +190,15 @@ enabling independent management (move, delete, flag) per user.
   `Authorization: Bearer <token>`.
 - `requireAuth` middleware validates the signature, expiry, audience
   and issuer, then stashes the claims in the request context.
-- Listing/opening/deleting applies `canAccessEmail`: admins see everything
-  (optionally filtered by `?user=`), users see only their own
-  conversations, and anything else is a `404`. Deleting a message removes
-  the single underlying object, so it takes effect for every user who
-  could see it.
+- The JMAP dispatcher uses the JWT `sub` as the default `accountId` and
+  rejects a different one for non-admins. An admin may supply any
+  `accountId` to masquerade.
+- `Email/query`, `Email/get`, `Email/set` and `EmailSubmission/set` are
+  scoped to that account. Storage uses a mailbox-key prefix rather than a
+  header-based `canAccessEmail` filter; messages outside the account are
+  absent from query results and reported as `notFound` by `Email/get`.
+- Each delivered message has one object per recipient mailbox, so
+  deleting a message affects only that account's copy.
 
 ## Request handling details
 
@@ -204,7 +217,8 @@ enabling independent management (move, delete, flag) per user.
   (headers, MIME tree, transfer encodings, charsets, folded headers).
   Parse errors are collected, not fatal. It can serialize back to wire
   format. MIME parts are capped at 10 MiB.
-- `email.UserEmail` — the simplified view used everywhere else: id,
+- `email.UserEmail` — the simplified view used everywhere else: the full
+  delivered object key as id, its derived `AccountID`/`MailboxID`,
   addresses, subject, date, text and HTML bodies.
 - `email.Parse` is the convenience path used by storage; attachments
   and other non-text parts are ignored.
@@ -212,16 +226,18 @@ enabling independent management (move, delete, flag) per user.
 ## Frontend
 
 - React 19 + Vite + TypeScript SPA (React Router): `/login`,
-  `/` (inbox with an admin user filter), `/email/:id`, `/compose`,
+  `/` (inbox of the current JMAP account), `/email/:id`, `/compose`,
   `/compose/:id` (reply).
 - The API client (`frontend/src/api.ts`) keeps the JWT in
   `localStorage` under `emissary_token`, attaches the Bearer header,
-  and redirects to `/login` on a `401`.
+  and redirects to `/login` on a `401`. JMAP calls use the masquerade
+  target from `localStorage['masquerade_as']` as their `accountId` when
+  an administrator has selected one.
 - Vite builds into `mailer/gui/frontend/dist`, which `mailer/gui`
   embeds; the Go binary serves the SPA from the same origin and port
   as the API, so there are no CORS concerns.
-- `email.EncodeID`/`DecodeID` exist to make storage keys URL-safe, but
-  the current S3 layout uses raw SES message ids directly as API ids.
+- Delivered email ids are full object keys and contain `/`, so the SPA
+  URL-encodes them when building `/email/:id` links.
 
 ## Generated interface stubs
 

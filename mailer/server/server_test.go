@@ -28,6 +28,23 @@ type mockStorage struct {
 
 func (m *mockStorage) Name() string { return "MockStorage" }
 
+func (m *mockStorage) ListAccountEmails(ctx context.Context, accountID, mailboxID string) ([]*email.UserEmail, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	var result []*email.UserEmail
+	for _, e := range m.emails {
+		if !strings.EqualFold(e.AccountID, accountID) {
+			continue
+		}
+		if mailboxID != "" && !strings.EqualFold(e.MailboxID, mailboxID) {
+			continue
+		}
+		result = append(result, e)
+	}
+	return result, nil
+}
+
 func (m *mockStorage) ListAllEmails(ctx context.Context) ([]*email.UserEmail, error) {
 	return m.emails, m.err
 }
@@ -78,10 +95,12 @@ type mockSender struct {
 	err  error
 }
 
-func (m *mockSender) Name() string { return "MockSender" }
-func (m *mockSender) From() string { return m.from }
+func (m *mockSender) Name() string                                         { return "MockSender" }
+func (m *mockSender) From() string                                         { return m.from }
 func (m *mockSender) Send(ctx context.Context, msg *email.UserEmail) error { return m.err }
-func (m *mockSender) SendBounce(ctx context.Context, originalMessageID, bounceSender, recipient, bounceType string, originalMessage *email.UserEmail) error { return m.err }
+func (m *mockSender) SendBounce(ctx context.Context, originalMessageID, bounceSender, recipient, bounceType string, originalMessage *email.UserEmail) error {
+	return m.err
+}
 
 type mockMetadata struct {
 	readMap    map[string]bool

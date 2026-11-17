@@ -308,11 +308,11 @@ func (wfe *WireFormatEmail) parseBody(bodyData []byte) {
 	}
 
 	wfe.BodyStructure = &BodyPart{
-		Headers:       wfe.getHeadersForType("Content-Type"),
-		MediaType:     mediaType,
-		Params:        params,
-		Charset:       strings.ToLower(strings.TrimSpace(params["charset"])),
-		Parts:         []*BodyPart{}, // Initialize Parts slice for multipart
+		Headers:   wfe.getHeadersForType("Content-Type"),
+		MediaType: mediaType,
+		Params:    params,
+		Charset:   strings.ToLower(strings.TrimSpace(params["charset"])),
+		Parts:     []*BodyPart{}, // Initialize Parts slice for multipart
 	}
 
 	// Get transfer encoding from headers
@@ -455,13 +455,13 @@ func (wfe *WireFormatEmail) parseMultipart(body []byte, mediaType string, params
 		}
 
 		partStruct := &BodyPart{
-			Headers:           partHeaders,
-			MediaType:         partMediaType,
-			Params:            partParams,
-			TransferEncoding:  partTransferEncoding,
-			Charset:           strings.ToLower(strings.TrimSpace(partParams["charset"])),
-			Disposition:       disposition,
-			Filename:          filename,
+			Headers:          partHeaders,
+			MediaType:        partMediaType,
+			Params:           partParams,
+			TransferEncoding: partTransferEncoding,
+			Charset:          strings.ToLower(strings.TrimSpace(partParams["charset"])),
+			Disposition:      disposition,
+			Filename:         filename,
 		}
 
 		if strings.HasPrefix(partMediaType, "multipart/") {
@@ -476,12 +476,12 @@ func (wfe *WireFormatEmail) parseMultipart(body []byte, mediaType string, params
 				}
 				// Initialize BodyStructure for the sub-parser
 				subWFE.BodyStructure = &BodyPart{
-					Headers:       partHeaders,
-					MediaType:     partMediaType,
-					Params:        subParams,
-					Charset:       strings.ToLower(strings.TrimSpace(subParams["charset"])),
-					Parts:         []*BodyPart{},
-					Boundary:      subBoundary,
+					Headers:   partHeaders,
+					MediaType: partMediaType,
+					Params:    subParams,
+					Charset:   strings.ToLower(strings.TrimSpace(subParams["charset"])),
+					Parts:     []*BodyPart{},
+					Boundary:  subBoundary,
 				}
 				subWFE.parseMultipart(partDecoded, partMediaType, subParams)
 				if subWFE.BodyStructure != nil {
@@ -608,17 +608,24 @@ func parseDate(value string) time.Time {
 // preferring text/plain and text/html parts. Non-text parts are ignored.
 func (wfe *WireFormatEmail) ToUserEmail(id string) *UserEmail {
 	text, html := wfe.extractTextAndHTML()
+	// The id is the object key the message was stored under. Delivered mail
+	// uses users/<accountId>/<mailboxId>/<timestamp>_<ses-id>.eml, so the
+	// account and JMAP mailbox can be recovered from it. Staging objects at
+	// the bucket root simply have no account/mailbox yet.
+	accountID, mailboxID, _ := MailboxFromID(id)
 
 	return &UserEmail{
-		ID:      id,
-		From:    addressPtrToValue(wfe.From),
-		To:      wfe.To,
-		Cc:      wfe.Cc,
-		Bcc:     wfe.Bcc,
-		Subject: wfe.Subject,
-		Date:    wfe.Date,
-		Text:    strings.TrimSpace(text),
-		HTML:    strings.TrimSpace(html),
+		ID:        id,
+		AccountID: accountID,
+		MailboxID: mailboxID,
+		From:      addressPtrToValue(wfe.From),
+		To:        wfe.To,
+		Cc:        wfe.Cc,
+		Bcc:       wfe.Bcc,
+		Subject:   wfe.Subject,
+		Date:      wfe.Date,
+		Text:      strings.TrimSpace(text),
+		HTML:      strings.TrimSpace(html),
 	}
 }
 

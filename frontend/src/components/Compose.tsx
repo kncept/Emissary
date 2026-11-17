@@ -10,6 +10,16 @@ interface ComposeProps {
 
 export default function Compose({ admin = false, currentUser }: ComposeProps) {
   const { id } = useParams<{ id: string }>();
+  // Reply links encode the full delivered object key; decode only when a
+  // router left the escaped form intact.
+  const emailID = (() => {
+    if (!id || !/%2f/i.test(id)) return id;
+    try {
+      return decodeURIComponent(id);
+    } catch {
+      return id;
+    }
+  })();
   const navigate = useNavigate();
   const [from, setFrom] = useState(admin ? '' : currentUser || '');
   const [to, setTo] = useState('');
@@ -20,13 +30,13 @@ export default function Compose({ admin = false, currentUser }: ComposeProps) {
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
-    if (!id) {
+    if (!emailID) {
       setFrom(admin ? '' : currentUser || '');
       return;
     }
 
     let active = true;
-    getEmail(id)
+    getEmail(emailID)
       .then((original: Email) => {
         if (!active) return;
         setTo(original.from);
@@ -45,7 +55,7 @@ export default function Compose({ admin = false, currentUser }: ComposeProps) {
     return () => {
       active = false;
     };
-  }, [id, admin, currentUser]);
+  }, [emailID, admin, currentUser]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

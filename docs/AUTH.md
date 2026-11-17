@@ -76,6 +76,11 @@ attributes: `Subscribed` (boolean), `Admin` (boolean),
 apply to the authenticated user; `Admin` is true only for the
 built-in administrator.
 
+The `sub` claim is also the default JMAP `accountId`: mail operations are
+scoped to that account's mailbox prefix. A non-admin cannot override it;
+a token with `Admin: true` may supply another `accountId` on a JMAP method
+call to masquerade (see [USERS.md](USERS.md#admin-masquerade)).
+
 ### Refresh token
 
 The refresh token must contain:

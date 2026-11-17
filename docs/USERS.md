@@ -152,7 +152,11 @@ Verification works by inspecting the salt prefix:
 
 ## Admin Masquerade
 
-Administrators with the `EmissaryUserManagement` JWT claim can **masquerade as another user** to view and act in the application on their behalf for support and administration purposes.
+Administrators can **masquerade as another user** to view and act in that
+user's JMAP account/mailboxes for support and administration purposes.
+Selecting a target requires the `EmissaryUserManagement` claim (the
+autocomplete endpoint), and the JMAP dispatcher accepts the target
+`accountId` only when the access token has the `Admin` claim.
 
 ### Frontend UI
 
@@ -201,12 +205,18 @@ The endpoint follows shared API conventions from [API.md](API.md) (error body `{
 
 ### Activation & Session
 
-After selecting a user from autocomplete, the admin initiates masquerade via the existing token exchange mechanism (consistent with `docs/AUTH.md` and `/api/auth/*`). The selected user becomes the effective user context for subsequent requests.
+After selecting a user from autocomplete, the SPA stores the address in
+`window.localStorage['masquerade_as']`. JMAP calls include it as the
+method call's `accountId`, which is the effective mailbox context for
+listing, getting, deleting and submitting mail. The JWT is unchanged and
+still identifies the administrator; the JMAP dispatcher authorizes the
+masquerade by checking the `admin` claim.
 
-**Open items for future enhancement:**
-- **Exit masquerade:** How an admin stops masquerading and returns to their own identity.
-- **Active indicator:** Persistent banner/indicator while masquerading.
-- **Search semantics:** Prefix vs. substring match, case sensitivity, exclusion of current user or disabled accounts.
+- **Exit masquerade:** Clear `masquerade_as` from localStorage; JMAP calls
+  revert to the JWT `sub` as `accountId`.
+- **Active indicator:** The header shows the masquerade target while it is set.
+- **Search semantics:** Prefix vs. substring match, case sensitivity,
+  exclusion of current user or disabled accounts.
 
 ## Status
 

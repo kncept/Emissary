@@ -100,8 +100,9 @@ no automated browser test today.
   implement the same method set (`fakeS3` in
   `mailer/storage/s3_test.go`) and return real SDK output/error types
   (`types.NoSuchKey`, ...). The fakes record what was requested so
-  tests can assert wire-level behavior — e.g. that SES keys are
-  fetched without an `.eml` suffix.
+  tests can assert wire-level behavior — e.g. that delivered messages
+  are fetched by their full `.eml` object key, while legacy SES staging
+  keys are fetched without an `.eml` suffix.
 - **`captureSender`** (in `mailer/handler/handler_test.go`) records
   sent messages so from-address rules can be asserted without SES.
 - **No mocking framework** — the standard `testing` package, plain
@@ -121,15 +122,17 @@ it. When renaming tests, keep this table in sync.
 
 | Invariant | Pinned by |
 | --- | --- |
-| Ordinary users see only mail sent by or addressed to them | `handler` `TestUserModeFiltersEmailsByOwner` |
-| Out-of-visibility messages return `404`, not `403` (no existence leak) | `handler` `TestUserModeFiltersEmailsByOwner`, `TestDeleteEmailVisibilityAndRemoval` |
-| Admins see everything and can filter with `?user=` | `handler` `TestAdminCanFilterAndSeeAllUsers` |
+| Ordinary users read only their own account's mailbox | `handler` `TestUserReadsOnlyOwnMailbox`, `jmap` `TestHandler_EmailQueryScopesToAccountAndMailbox` |
+| Cross-account mail is absent from queries and `notFound` in `Email/get` (no existence leak) | `jmap` `TestHandler_EmailQueryScopesToAccountAndMailbox` |
+| A non-admin cannot access another `accountId` | `handler` `TestNonAdminCannotReadAnotherAccount` |
+| Admins masquerade by supplying the target `accountId` | `handler` `TestAdminMasqueradesViaAccountID` |
 | JWT `sub` is the user id (the user's email address); `admin: true` only for the built-in admin | `handler` `TestJWTIncludesUserIDAndAdminOnlyForAdmin`, `auth` tests |
 | Blank `PASSWORD` disables admin login without affecting other managers | `handler` `TestBlankAdminPasswordDisablesAdminLogin`, `usermanager` tests |
 | Ordinary users always send as themselves; admins as anyone; replies default to the original recipient | `handler` `TestSendEmailFromRules` |
 | Deleting an email also removes its metadata | `handler` `TestDeleteEmailAlsoDeletesMetadata` |
 | Expired, future and wrong-audience/issuer tokens are rejected | `auth` `TestAuthenticator_Validate_*` |
-| S3 keys are SES message ids: no `.eml` suffix; bare ids resolve against the prefix | `storage` `TestS3Storage*` |
+| Delivered ids are full object keys (timestamp + `.eml`) and account/mailbox are derived from them | `email` `TestMailboxFromID`, `TestParse_DerivesAccountAndMailboxFromDeliveredKey`, `storage` `TestS3StorageListAccountEmails*` |
+| S3 `ListAccountEmails` is limited to the account/mailbox prefix; legacy SES staging keys still resolve without an `.eml` suffix | `storage` `TestS3StorageListAccountEmails*`, `TestS3StorageListAllEmailsReadsSESMessageKeys` |
 | Unknown selector values and missing companion variables fail at startup | `config` `TestLoad_Unknown*`, `TestLoad_*Requires*` |
 
 ## Running

@@ -3,6 +3,7 @@ package jmap
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -20,13 +21,15 @@ func TestHandler_EmailGet(t *testing.T) {
 	// Create test storage with an email
 	memStorage := storage.NewMemoryStorage()
 	testEmail := &email.UserEmail{
-		ID:      "test1",
-		From:    email.Address{Name: "Test Sender", Address: "sender@example.com"},
-		To:      []email.Address{{Name: "Test Recipient", Address: "recipient@example.com"}},
-		Subject: "Test Subject",
-		Date:    time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
-		Text:    "Test email body",
-		Size:    100,
+		ID:        "test1",
+		AccountID: "test",
+		MailboxID: "inbox",
+		From:      email.Address{Name: "Test Sender", Address: "sender@example.com"},
+		To:        []email.Address{{Name: "Test Recipient", Address: "recipient@example.com"}},
+		Subject:   "Test Subject",
+		Date:      time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
+		Text:      "Test email body",
+		Size:      100,
 	}
 	memStorage.Add(testEmail)
 
@@ -140,13 +143,15 @@ func TestHandler_EmailQuery(t *testing.T) {
 	// Add multiple test emails
 	for i := 1; i <= 5; i++ {
 		testEmail := &email.UserEmail{
-			ID:      string(rune('a' + i - 1)),
-			From:    email.Address{Name: "Sender", Address: "sender@example.com"},
-			To:      []email.Address{{Name: "Recipient", Address: "recipient@example.com"}},
-			Subject: "Test Subject " + string(rune('a'+i-1)),
-			Date:    time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
-			Text:    "Test email body",
-			Size:    100,
+			ID:        string(rune('a' + i - 1)),
+			AccountID: "test",
+			MailboxID: "inbox",
+			From:      email.Address{Name: "Sender", Address: "sender@example.com"},
+			To:        []email.Address{{Name: "Recipient", Address: "recipient@example.com"}},
+			Subject:   "Test Subject " + string(rune('a'+i-1)),
+			Date:      time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
+			Text:      "Test email body",
+			Size:      100,
 		}
 		memStorage.Add(testEmail)
 	}
@@ -178,4 +183,84 @@ func TestHandler_EmailQuery(t *testing.T) {
 	}
 
 	t.Logf("EmailQuery result: %s", string(result))
+}
+
+// TestHandler_EmailQueryScopesToAccountAndMailbox verifies that JMAP reads are
+// limited to the requested account's mailbox, including delivered .eml IDs.
+func TestHandler_EmailQueryScopesToAccountAndMailbox(t *testing.T) {
+	ctx := context.Background()
+	memStorage := storage.NewMemoryStorage()
+	const (
+		aliceInbox = "users/alice@example.com/inbox/20261117T120000Z_a.eml"
+		aliceSent  = "users/alice@example.com/sent/20261117T130000Z_s.eml"
+		bobInbox   = "users/bob@example.com/inbox/20261117T140000Z_b.eml"
+	)
+	receivedAt := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	for _, msg := range []*email.UserEmail{
+		{ID: aliceInbox, AccountID: "alice@example.com", MailboxID: "inbox", Subject: "Alice inbox", Date: receivedAt},
+		{ID: aliceSent, AccountID: "alice@example.com", MailboxID: "sent", Subject: "Alice sent", Date: receivedAt},
+		{ID: bobInbox, AccountID: "bob@example.com", MailboxID: "inbox", Subject: "Bob inbox", Date: receivedAt},
+	} {
+		memStorage.Add(msg)
+	}
+
+	handler := NewHandler(memStorage, metadata.NewMemoryMetadata(),
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender("test@example.com"))
+
+	queryIDs := func(t *testing.T, accountID, mailboxID string) []string {
+		t.Helper()
+		args := map[string]interface{}{"accountId": accountID}
+		if mailboxID != "" {
+			args["filter"] = map[string]string{"inMailbox": mailboxID}
+		}
+		raw, err := json.Marshal(args)
+		if err != nil {
+			t.Fatalf("marshal args: %v", err)
+		}
+		result, err := handler.EmailQuery(ctx, accountID, raw)
+		if err != nil {
+			t.Fatalf("EmailQuery(%q, %q) error = %v", accountID, mailboxID, err)
+		}
+		var resp struct {
+			IDs []string `json:"ids"`
+		}
+		if err := json.Unmarshal(result, &resp); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		return resp.IDs
+	}
+
+	assertIDs := func(t *testing.T, got, want []string) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("ids = %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("ids = %v, want %v", got, want)
+			}
+		}
+	}
+
+	assertIDs(t, queryIDs(t, "alice@example.com", "inbox"), []string{aliceInbox})
+	assertIDs(t, queryIDs(t, "bob@example.com", "inbox"), []string{bobInbox})
+	assertIDs(t, queryIDs(t, "ALICE@example.com", ""), []string{aliceInbox, aliceSent})
+
+	// Email/get must not expose another account's message either.
+	getArgs := json.RawMessage(fmt.Sprintf(`{"accountId":"alice@example.com","ids":[%q]}`, bobInbox))
+	getResult, err := handler.EmailGet(ctx, "alice@example.com", getArgs)
+	if err != nil {
+		t.Fatalf("EmailGet() error = %v", err)
+	}
+	var getResp struct {
+		List     []JMAPEmail `json:"list"`
+		NotFound []string    `json:"notFound"`
+	}
+	if err := json.Unmarshal(getResult, &getResp); err != nil {
+		t.Fatalf("unmarshal Email/get response: %v", err)
+	}
+	if len(getResp.List) != 0 || len(getResp.NotFound) != 1 || getResp.NotFound[0] != bobInbox {
+		t.Fatalf("Email/get response = %+v, want bob's id in notFound", getResp)
+	}
 }

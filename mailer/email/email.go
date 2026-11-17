@@ -10,6 +10,9 @@ import (
 
 const maxPartSize = 10 << 20 // 10 MiB per MIME part
 
+// MailboxKeyRoot is the S3 key prefix that holds per-user mailboxes.
+const MailboxKeyRoot = "users/"
+
 // Address is a mail address with an optional display name.
 type Address struct {
 	Name    string `json:"name,omitempty"`
@@ -23,19 +26,65 @@ type Address struct {
 // To parse a raw RFC 5322 message into a UserEmail, use ParseWireFormat()
 // followed by WireFormatEmail.ToUserEmail(), or use the convenience function Parse().
 type UserEmail struct {
-	ID           string    `json:"id"`
-	From         Address   `json:"from"`
-	To           []Address `json:"to"`
-	Cc           []Address `json:"cc,omitempty"`
-	Bcc          []Address `json:"bcc,omitempty"`
-	Subject      string    `json:"subject"`
-	Date         time.Time `json:"date"`
-	Text         string    `json:"text"`
-	HTML         string    `json:"html,omitempty"`
-	Read         bool      `json:"read"`
-	Size         int64     `json:"size,omitempty"`
-	InReplyTo    []string  `json:"inReplyTo,omitempty"`
-	References   []string  `json:"references,omitempty"`
+	ID         string    `json:"id"`
+	AccountID  string    `json:"accountId,omitempty"`
+	MailboxID  string    `json:"mailboxId,omitempty"`
+	From       Address   `json:"from"`
+	To         []Address `json:"to"`
+	Cc         []Address `json:"cc,omitempty"`
+	Bcc        []Address `json:"bcc,omitempty"`
+	Subject    string    `json:"subject"`
+	Date       time.Time `json:"date"`
+	Text       string    `json:"text"`
+	HTML       string    `json:"html,omitempty"`
+	Read       bool      `json:"read"`
+	Size       int64     `json:"size,omitempty"`
+	InReplyTo  []string  `json:"inReplyTo,omitempty"`
+	References []string  `json:"references,omitempty"`
+}
+
+// MailboxKeyPrefix returns the object-key prefix that holds the messages in a
+// JMAP account's mailbox. The layout is:
+//
+//	users/<accountId>/<mailboxId>/<timestamp>_<ses-message-id>.eml
+//
+// An empty mailboxID returns the prefix for every mailbox in the account.
+// Callers must supply a non-empty accountID; an empty one never produces a
+// prefix that could accidentally match the whole bucket.
+func MailboxKeyPrefix(accountID, mailboxID string) string {
+	accountID = strings.ToLower(strings.TrimSpace(accountID))
+	if accountID == "" {
+		return ""
+	}
+	prefix := MailboxKeyRoot + accountID + "/"
+	if mailboxID = strings.ToLower(strings.TrimSpace(mailboxID)); mailboxID != "" {
+		prefix += mailboxID + "/"
+	}
+	return prefix
+}
+
+// MailboxFromID extracts the account and mailbox from a delivered message ID.
+// A delivered ID is the full object key of the .eml file (including the
+// timestamp), so it also identifies which account's mailbox the message lives
+// in. Keys at the bucket root (SES staging objects) have no mailbox and return
+// ok == false.
+func MailboxFromID(id string) (accountID, mailboxID string, ok bool) {
+	id = strings.TrimPrefix(id, "/")
+
+	// Tolerate an optional storage-level prefix before "users/" (e.g.
+	// "emails/users/alice@example.com/inbox/...").
+	if idx := strings.LastIndex(id, "/"+MailboxKeyRoot); idx >= 0 {
+		id = id[idx+1:]
+	}
+	if !strings.HasPrefix(id, MailboxKeyRoot) {
+		return "", "", false
+	}
+
+	parts := strings.SplitN(strings.TrimPrefix(id, MailboxKeyRoot), "/", 3)
+	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", false
+	}
+	return strings.ToLower(parts[0]), strings.ToLower(parts[1]), true
 }
 
 // EncodeID turns a storage key into an opaque, URL-safe identifier.

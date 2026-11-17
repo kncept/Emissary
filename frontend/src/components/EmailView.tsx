@@ -11,16 +11,30 @@ export default function EmailView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // Delivered ids are full object keys such as
+  // users/alice@example.com/inbox/<timestamp>_<ses-id>.eml. Links encode
+  // them; older links (or routers that do not decode params) may still
+  // contain %2F, so decode only in that case.
+  const emailID = (() => {
+    if (!id) return '';
+    if (!/%2f/i.test(id)) return id;
+    try {
+      return decodeURIComponent(id);
+    } catch {
+      return id;
+    }
+  })();
+
   useEffect(() => {
-    if (id) {
+    if (emailID) {
       loadEmail();
     }
-  }, [id]);
+  }, [emailID]);
 
   const loadEmail = async () => {
     try {
       setLoading(true);
-      const data = await getEmail(id!);
+      const data = await getEmail(emailID);
       setEmail(data);
     } catch (err) {
       setError('Failed to load email');
@@ -117,7 +131,7 @@ export default function EmailView() {
           >
             {email.flagged ? 'Unflag' : 'Flag'}
           </button>
-          <Link to={`/compose/${email.id}`} className="btn btn-secondary">
+          <Link to={`/compose/${encodeURIComponent(email.id)}`} className="btn btn-secondary">
             Reply
           </Link>
           <button className="btn btn-danger" onClick={handleDelete}>

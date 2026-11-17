@@ -38,6 +38,64 @@ func TestDecodeID_Invalid(t *testing.T) {
 	}
 }
 
+func TestMailboxKeyPrefix(t *testing.T) {
+	tests := []struct {
+		accountID string
+		mailboxID string
+		want      string
+	}{
+		{"Alice@Example.com", "inbox", "users/alice@example.com/inbox/"},
+		{"alice@example.com", "", "users/alice@example.com/"},
+		{"  alice@example.com  ", "Sent", "users/alice@example.com/sent/"},
+		{"", "inbox", ""},
+	}
+	for _, tt := range tests {
+		if got := MailboxKeyPrefix(tt.accountID, tt.mailboxID); got != tt.want {
+			t.Errorf("MailboxKeyPrefix(%q, %q) = %q, want %q", tt.accountID, tt.mailboxID, got, tt.want)
+		}
+	}
+}
+
+func TestMailboxFromID(t *testing.T) {
+	tests := []struct {
+		id          string
+		wantAccount string
+		wantMailbox string
+		wantOK      bool
+	}{
+		{"users/alice@example.com/inbox/20261117T120000Z_ses-id.eml", "alice@example.com", "inbox", true},
+		{"emails/users/bob@example.com/sent/20261117_ses-id.eml", "bob@example.com", "sent", true},
+		{"users/carol@example.com/inbox/", "", "", false},
+		{"ses-staging-message-id", "", "", false},
+	}
+	for _, tt := range tests {
+		account, mailbox, ok := MailboxFromID(tt.id)
+		if ok != tt.wantOK || account != tt.wantAccount || mailbox != tt.wantMailbox {
+			t.Errorf("MailboxFromID(%q) = (%q, %q, %v), want (%q, %q, %v)",
+				tt.id, account, mailbox, ok, tt.wantAccount, tt.wantMailbox, tt.wantOK)
+		}
+	}
+}
+
+func TestParse_DerivesAccountAndMailboxFromDeliveredKey(t *testing.T) {
+	const key = "users/alice@example.com/inbox/20261117T120000Z_ses-id.eml"
+	raw := "From: sender@example.com\r\nSubject: Hello\r\nDate: Mon, 1 Jan 2024 12:00:00 +0000\r\n\r\nBody\r\n"
+
+	msg, err := Parse(key, strings.NewReader(raw))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if msg.ID != key {
+		t.Errorf("ID = %q, want full object key %q", msg.ID, key)
+	}
+	if msg.AccountID != "alice@example.com" {
+		t.Errorf("AccountID = %q, want alice@example.com", msg.AccountID)
+	}
+	if msg.MailboxID != "inbox" {
+		t.Errorf("MailboxID = %q, want inbox", msg.MailboxID)
+	}
+}
+
 func TestParse_SimpleTextEmail(t *testing.T) {
 	raw := `From: sender@example.com
 To: recipient@example.com

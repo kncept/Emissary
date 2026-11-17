@@ -92,13 +92,19 @@ func addEmail(store *storage.MemoryStorage, id, from string, to ...string) {
 	for _, address := range to {
 		recipients = append(recipients, email.Address{Address: address})
 	}
+	accountID := ""
+	if len(recipients) > 0 {
+		accountID = recipients[0].Address
+	}
 	store.Add(&email.UserEmail{
-		ID:      id,
-		From:    email.Address{Address: from},
-		To:      recipients,
-		Subject: "subject " + id,
-		Date:    time.Now(),
-		Text:    "body " + id,
+		ID:        id,
+		AccountID: accountID,
+		MailboxID: "inbox",
+		From:      email.Address{Address: from},
+		To:        recipients,
+		Subject:   "subject " + id,
+		Date:      time.Now(),
+		Text:      "body " + id,
 	})
 }
 
@@ -136,11 +142,11 @@ func jmapRequest(t *testing.T, h http.Handler, token string, using []string, met
 
 type JmapMethodCall []interface{} // [methodName, args, clientId]
 
-func getEmailsJMAP(t *testing.T, h http.Handler, token string) []EmailResponse {
+func getEmailsJMAP(t *testing.T, h http.Handler, token, accountID string) []EmailResponse {
 	// First, query for email IDs
 	queryResp := jmapRequest(t, h, token, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
 		{"Email/query", map[string]interface{}{
-			"accountId":       "bob@example.com",
+			"accountId":       accountID,
 			"filter":          map[string]string{"inMailbox": "inbox"},
 			"sort":            []interface{}{map[string]interface{}{"property": "receivedAt", "isAscending": false}},
 			"collapseThreads": false,
@@ -182,7 +188,7 @@ func getEmailsJMAP(t *testing.T, h http.Handler, token string) []EmailResponse {
 	// Now get the emails with the IDs
 	getResp := jmapRequest(t, h, token, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
 		{"Email/get", map[string]interface{}{
-			"accountId":  "bob@example.com",
+			"accountId":  accountID,
 			"ids":        idStrings,
 			"properties": []string{"id", "from", "to", "subject", "preview", "receivedAt", "keywords", "mailboxIds"},
 		}, "g1"},
@@ -277,13 +283,13 @@ func TestListEmailsEmptyInboxReturnsArray(t *testing.T) {
 		t.Fatalf("login status = %d, want %d", status, http.StatusOK)
 	}
 
-	emails := getEmailsJMAP(t, h, token)
+	emails := getEmailsJMAP(t, h, token, "bob@example.com")
 	if len(emails) != 0 {
 		t.Errorf("expected empty inbox, got %d emails", len(emails))
 	}
 }
 
-func TestUserModeFiltersEmailsByOwner(t *testing.T) {
+func TestUserReadsOnlyOwnMailbox(t *testing.T) {
 	h, store, _ := newHandlerForTest(t, "any", "example.com", "secret")
 	addEmail(store, "received", "alice@example.com", "bob@example.com")
 	addEmail(store, "sent", "bob@example.com", "carol@example.com")
@@ -294,19 +300,18 @@ func TestUserModeFiltersEmailsByOwner(t *testing.T) {
 		t.Fatalf("login status = %d, want %d", status, http.StatusOK)
 	}
 
-	emails := getEmailsJMAP(t, h, token)
+	emails := getEmailsJMAP(t, h, token, "bob@example.com")
 	ids := make(map[string]bool)
 	for _, e := range emails {
 		ids[e.ID] = true
 	}
-	// In the current JMAP implementation, all emails in the inbox are visible
-	// to all users (no user-level filtering). All three emails should be visible.
-	if !ids["received"] || !ids["sent"] || !ids["unrelated"] {
-		t.Errorf("list ids = %v, want all three emails (no user filtering in JMAP)", ids)
+	// JMAP reads come from the requesting account's mailbox only.
+	if len(ids) != 1 || !ids["received"] {
+		t.Errorf("list ids = %v, want only bob's received email", ids)
 	}
 }
 
-func TestAdminCanFilterAndSeeAllUsers(t *testing.T) {
+func TestAdminMasqueradesViaAccountID(t *testing.T) {
 	h, store, _ := newHandlerForTest(t, "any", "example.com", "secret")
 	addEmail(store, "received", "alice@example.com", "bob@example.com")
 	addEmail(store, "sent", "bob@example.com", "carol@example.com")
@@ -317,7 +322,7 @@ func TestAdminCanFilterAndSeeAllUsers(t *testing.T) {
 		t.Fatalf("admin login status = %d, want %d", status, http.StatusOK)
 	}
 
-	// Verify the token has admin claim
+	// Verify the token has admin claim.
 	authenticator := auth.New("admin", "secret", "secret", time.Hour, "", "")
 	claims, err := authenticator.ValidateClaims(token)
 	if err != nil {
@@ -327,14 +332,51 @@ func TestAdminCanFilterAndSeeAllUsers(t *testing.T) {
 		t.Errorf("admin flag = %v, want true", claims.Admin)
 	}
 
-	// Admin sees all emails in the inbox (no user filtering in current JMAP impl)
-	emails := getEmailsJMAP(t, h, token)
-	ids := make(map[string]bool)
-	for _, e := range emails {
-		ids[e.ID] = true
+	cases := map[string]string{
+		"bob@example.com":   "received",
+		"carol@example.com": "sent",
+		"dave@example.com":  "unrelated",
+		"admin":             "",
 	}
-	if len(ids) != 3 {
-		t.Errorf("admin unfiltered ids = %v, want all 3 emails", ids)
+	for accountID, wantID := range cases {
+		emails := getEmailsJMAP(t, h, token, accountID)
+		ids := make(map[string]bool)
+		for _, e := range emails {
+			ids[e.ID] = true
+		}
+		if wantID == "" {
+			if len(ids) != 0 {
+				t.Errorf("account %s ids = %v, want empty mailbox", accountID, ids)
+			}
+			continue
+		}
+		if len(ids) != 1 || !ids[wantID] {
+			t.Errorf("account %s ids = %v, want only %s", accountID, ids, wantID)
+		}
+	}
+}
+
+func TestNonAdminCannotReadAnotherAccount(t *testing.T) {
+	h, store, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	addEmail(store, "private", "alice@example.com", "bob@example.com")
+
+	_, token, _ := login(t, h, "bob@example.com", "anything")
+	resp := jmapRequest(t, h, token, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
+		{"Email/query", map[string]interface{}{
+			"accountId": "carol@example.com",
+		}, "q1"},
+	})
+	methodResponses, _ := resp["methodResponses"].([]interface{})
+	if len(methodResponses) != 1 {
+		t.Fatalf("methodResponses = %v, want one error response", methodResponses)
+	}
+	call, ok := methodResponses[0].([]interface{})
+	if !ok || len(call) < 2 {
+		t.Fatalf("method response = %v, want [name, args]", methodResponses[0])
+	}
+	errObj, ok := call[1].(map[string]interface{})
+	if !ok || errObj["type"] == nil {
+		t.Fatalf("response = %v, want an error", call[1])
 	}
 }
 
@@ -349,7 +391,7 @@ func TestDeleteEmailVisibilityAndRemoval(t *testing.T) {
 	// (would require JMAP Email/set destroy with the unrelated ID)
 
 	// First get emails to find the received email ID
-	emails := getEmailsJMAP(t, h, token)
+	emails := getEmailsJMAP(t, h, token, "bob@example.com")
 	var receivedID string
 	for _, e := range emails {
 		if e.ID == "received" {
@@ -361,28 +403,31 @@ func TestDeleteEmailVisibilityAndRemoval(t *testing.T) {
 		t.Fatal("received email not found")
 	}
 
-	// Deleting a visible message succeeds and removes it for everyone,
-	// including the administrator.
+	// The unrelated message belongs to another account and is not visible here.
+	ids := make(map[string]bool)
+	for _, e := range emails {
+		ids[e.ID] = true
+	}
+	if ids["unrelated"] {
+		t.Error("unrelated email from another account was visible to bob")
+	}
+
+	// Deleting a message in bob's mailbox removes it from that mailbox only.
 	jmapDelete(t, h, token, receivedID)
 
-	// Verify it's gone for the owner
-	emails = getEmailsJMAP(t, h, token)
-	ids := make(map[string]bool)
+	emails = getEmailsJMAP(t, h, token, "bob@example.com")
+	ids = make(map[string]bool)
 	for _, e := range emails {
 		ids[e.ID] = true
 	}
 	if ids["received"] {
 		t.Error("deleted email still listed for owner")
 	}
-	if !ids["unrelated"] {
-		t.Error("unrelated email should still exist")
+
+	// The other account's message is untouched.
+	if _, err := store.GetEmail(context.Background(), "unrelated"); err != nil {
+		t.Errorf("unrelated email should still exist: %v", err)
 	}
-
-	// An email that is already gone is reported like any other missing one.
-	// (JMAP Email/set destroy on already-deleted ID would return notDestroyed error)
-
-	// The administrator can delete any message (would require admin JMAP access)
-	// Note: Full admin delete via JMAP would require querying other account IDs
 }
 
 func TestDeleteEmailAlsoDeletesMetadata(t *testing.T) {
@@ -407,7 +452,7 @@ func TestDeleteEmailAlsoDeletesMetadata(t *testing.T) {
 	_, token, _ := login(t, h, "bob@example.com", "anything")
 
 	// First get emails to find the received email ID
-	emails := getEmailsJMAP(t, h, token)
+	emails := getEmailsJMAP(t, h, token, "bob@example.com")
 	var receivedID string
 	for _, e := range emails {
 		if e.ID == "received" {
@@ -635,7 +680,7 @@ func TestSendEmailFromRules(t *testing.T) {
 
 	// Replying without an explicit From defaults to the original recipient.
 	// First get the original email to find its ID
-	emails := getEmailsJMAP(t, h, adminToken)
+	emails := getEmailsJMAP(t, h, adminToken, "bob@example.com")
 	var originalID string
 	for _, e := range emails {
 		if e.ID == "original" {
