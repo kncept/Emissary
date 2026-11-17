@@ -68,7 +68,11 @@ the invariants that must stay covered — is documented in
   `sender`, `metadata`, `email`, `config`, `cmd/frontend`, ...).
   Storage/sender tests use small fakes or the in-memory
   implementations, so they do not call AWS.
-- `npm run test` in `frontend/` — vitest (`*.test.ts(x)`).
+- `npm run lint` in `frontend/` — oxlint. `no-alert` is an error, so a
+  new `alert()`, `confirm()` or `prompt()` call fails CI (see
+  [DESIGN.md](DESIGN.md#frontend-ui-conventions)).
+- `npm run test` in `frontend/` — vitest (`*.test.ts(x)`). The shared
+  setup makes any surviving native browser dialog throw.
 
 CI (`.github/workflows/ci.yml`) runs `./run.sh test` on every push and
 pull request. Tagging `v*` triggers the release workflow, which runs

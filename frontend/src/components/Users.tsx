@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getUsers, createUser, updateUser, deleteUser, changeUserPassword } from '../api.ts';
+import ConfirmDialog from './ConfirmDialog.tsx';
 
 interface User {
   email: string;
@@ -31,6 +32,7 @@ export default function Users() {
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
 
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const parseRules = (value: string) =>
@@ -116,17 +118,19 @@ export default function Users() {
     }
   };
 
-  const onDelete = async (email: string) => {
-    if (!window.confirm(`Delete user ${email}? This cannot be undone.`)) return;
+  const onDelete = async () => {
+    if (!deleteTarget) return;
     setBusy(true);
     setError('');
     setMessage('');
     try {
-      await deleteUser(email);
+      await deleteUser(deleteTarget);
       setMessage('User deleted');
+      setDeleteTarget(null);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete user');
+      setDeleteTarget(null);
     } finally {
       setBusy(false);
     }
@@ -254,7 +258,7 @@ export default function Users() {
                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                       <button className="btn btn-secondary" onClick={() => openEdit(u)} disabled={busy}>Edit</button>
                       <button className="btn btn-secondary" onClick={() => { setPasswordFor(u.email); setOldPassword(''); setNewPassword(''); setMessage(''); setError(''); }} disabled={busy}>Password</button>
-                      <button className="btn btn-danger" onClick={() => void onDelete(u.email)} disabled={busy}>Delete</button>
+                      <button className="btn btn-danger" onClick={() => { setDeleteTarget(u.email); setMessage(''); setError(''); }} disabled={busy}>Delete</button>
                     </div>
                   </td>
                 </tr>
@@ -270,6 +274,14 @@ export default function Users() {
           )}
         </div>
       )}
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="Delete user"
+        message={`Delete user ${deleteTarget ?? ''}? This cannot be undone.`}
+        busy={busy}
+        onConfirm={onDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

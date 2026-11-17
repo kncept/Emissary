@@ -106,6 +106,13 @@ test() {
 	)
 
 	echo ""
+	echo "=== Linting frontend ==="
+	(
+		cd frontend
+		npm run lint
+	)
+
+	echo ""
 	echo "=== Running TypeScript tests ==="
 	(
 		cd frontend

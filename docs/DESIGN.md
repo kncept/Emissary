@@ -92,6 +92,31 @@ the JMAP dispatcher and the storage boundary:
 | Auth | Hand-rolled HS256 JWT | No external dependency; the claim set is small (`sub`, `admin`, `iat`, `exp`, optional `aud`/`iss`). |
 | Infrastructure | AWS CDK (TypeScript) in `deploy/` | The stack is mostly DNS records + SES configuration, which is awkward to hand-manage; CDK also activates the receipt rule set via a custom resource. |
 
+## Frontend UI conventions
+
+**There must be no native browser dialogs anywhere in the app:**
+`alert()`, `confirm()` and `prompt()` are never called (including as
+`window.alert`, `window.confirm` or `window.prompt`). Errors and status
+messages render as in-app elements; asking the user to approve an action
+renders an in-app modal instead.
+
+Destructive actions — deleting an email from the inbox, deleting an email
+from the message view, and deleting a user — use the shared
+`ConfirmDialog` component in
+`frontend/src/components/ConfirmDialog.tsx`. It renders the existing
+`.modal-*` styles and has these rules:
+
+- Nothing is deleted until the **Delete** button is clicked.
+- **Cancel**, clicking the backdrop (outside the modal card), or pressing
+  **Escape** cancels the action.
+- While a delete request is in flight, both buttons and all dismissal
+  paths are disabled.
+
+This is enforced in three places: oxlint's `no-alert` rule is an error in
+`frontend/.oxlintrc.json`, `npm run lint` runs in CI via `./run.sh test`,
+and vitest replaces the native dialog methods with throwing stubs in
+`frontend/src/test-setup.ts`.
+
 ## Repository layout
 
 ```

@@ -66,6 +66,11 @@ The management operations deal with `*EmissaryUser` values:
 | `Delete` | Delete a user by email address. |
 | `ChangePassword` | Change a user's password. Requires the old password for verification. |
 
+In the admin web UI, **Delete** opens an in-app confirmation modal: the
+account is removed only after **Delete** is clicked, and clicking the
+backdrop cancels. No browser dialog is used (see
+[DESIGN.md](DESIGN.md#frontend-ui-conventions)).
+
 ## Change Password
 
 Any authenticated user can change their own password via `POST /api/user/{email}/password`. The endpoint requires the current password (for verification) and the new password.

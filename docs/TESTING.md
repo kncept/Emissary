@@ -41,7 +41,7 @@ this document explains the reasoning behind them.
 | Pure units | `go test` | `mailer/email`, `mailer/auth`, `mailer/config` | RFC 5322 parsing, JWT issue/validate, env-var defaults and validation |
 | Seam implementations | `go test` | `mailer/storage`, `mailer/metadata`, `mailer/usermanager`, `mailer/sender` | each backend behind its interface |
 | HTTP handler | `go test` + `httptest` | `mailer/handler`, `mailer/cmd/frontend`, `mailer/server` | the whole API: routing, middleware, auth, visibility, sends |
-| Frontend | vitest + jsdom | `frontend/src/*.test.{ts,tsx}` | API client, app rendering and routing |
+| Frontend | vitest + jsdom | `frontend/src/*.test.{ts,tsx}` | API client, app rendering/routing, and in-app confirmation modals |
 | End-to-end | manual | `STORAGE=memory ./run.sh run` | the real binary with the embedded UI, exercised in a browser |
 
 ### Pure units
@@ -83,6 +83,12 @@ Vitest with jsdom (see `frontend/vitest.config.ts`; shared setup in
 `App.test.tsx` renders the app with `createRoot` inside `act()` and
 checks the stored-token → inbox flow (the auth state is derived from
 the JWT in localStorage; there is no server-side auth check call).
+`ConfirmDialog.test.tsx` covers cancel, backdrop click, Escape, confirm
+and the busy state; `DeleteConfirmation.test.tsx` drives the inbox,
+message-view and user-management Delete buttons through the same modal.
+The shared setup in `src/test-setup.ts` replaces
+`window.alert`, `window.confirm` and `window.prompt` with throwing
+stubs, so any native dialog in a test fails immediately.
 
 ### End-to-end (manual)
 
@@ -134,6 +140,7 @@ it. When renaming tests, keep this table in sync.
 | Delivered ids are full object keys (timestamp + `.eml`) and account/mailbox are derived from them | `email` `TestMailboxFromID`, `TestParse_DerivesAccountAndMailboxFromDeliveredKey`, `storage` `TestS3StorageListAccountEmails*` |
 | S3 `ListAccountEmails` is limited to the account/mailbox prefix; legacy SES staging keys still resolve without an `.eml` suffix | `storage` `TestS3StorageListAccountEmails*`, `TestS3StorageListAllEmailsReadsSESMessageKeys` |
 | Unknown selector values and missing companion variables fail at startup | `config` `TestLoad_Unknown*`, `TestLoad_*Requires*` |
+| Frontend uses no native browser dialogs; destructive actions require an in-app confirmation | `.oxlintrc.json` `no-alert` (CI via `run.sh test`), throwing stubs in `src/test-setup.ts`, `ConfirmDialog` and `DeleteConfirmation` tests |
 
 ## Running
 
@@ -176,6 +183,9 @@ it. When renaming tests, keep this table in sync.
   `beforeEach`.
 - Wrap renders and state updates in `act()` (the shared setup in
   `src/test-setup.ts` configures the act environment).
+- Never call `alert()`, `confirm()` or `prompt()` — the shared setup
+  makes them throw and oxlint reports them as errors. Use
+  `ConfirmDialog` for user confirmations.
 
 ## Gaps and direction
 

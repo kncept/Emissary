@@ -812,6 +812,10 @@ input, textarea {
   padding: 1rem 1.25rem;
 }
 
+.confirm-message {
+  color: var(--color-text-muted);
+}
+
 .modal-label {
   display: block;
   font-size: 0.875rem;

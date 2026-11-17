@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { parseISO, format } from 'date-fns';
 import { getEmail, markRead, markFlagged, deleteEmail } from '../api.ts';
 import type { Email } from '../types.ts';
+import ConfirmDialog from './ConfirmDialog.tsx';
 
 export default function EmailView() {
   const { id } = useParams<{ id: string }>();
@@ -10,6 +11,8 @@ export default function EmailView() {
   const [email, setEmail] = useState<Email | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // Delivered ids are full object keys such as
   // users/alice@example.com/inbox/<timestamp>_<ses-id>.eml. Links encode
@@ -65,12 +68,15 @@ export default function EmailView() {
 
   const handleDelete = async () => {
     if (!email) return;
-    if (!window.confirm('Delete this email? This cannot be undone.')) return;
+    setDeleting(true);
     try {
       await deleteEmail(email.id);
       navigate('/');
     } catch {
       setError('Failed to delete email');
+      setConfirmDelete(false);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -134,7 +140,7 @@ export default function EmailView() {
           <Link to={`/compose/${encodeURIComponent(email.id)}`} className="btn btn-secondary">
             Reply
           </Link>
-          <button className="btn btn-danger" onClick={handleDelete}>
+          <button className="btn btn-danger" onClick={() => setConfirmDelete(true)}>
             Delete
           </button>
           <Link to="/" className="btn btn-secondary">
@@ -145,6 +151,14 @@ export default function EmailView() {
       <div className="email-body">
         <pre>{email.body}</pre>
       </div>
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete email"
+        message="Delete this email? This cannot be undone."
+        busy={deleting}
+        onConfirm={handleDelete}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </article>
   );
 }

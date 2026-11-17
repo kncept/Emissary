@@ -182,7 +182,9 @@ has the `Admin` claim. It shows:
 - The configuration section list with its implementation; selecting a section
   shows its settings.
 - The bucket root with unprocessed staging messages.
-- A **Process** action for each staging object, with a confirmation prompt.
+- A **Process** action for each staging object, with a `Processing…` busy
+  state. It does not use a browser dialog; see
+  [DESIGN.md](DESIGN.md#frontend-ui-conventions) for the no-native-dialog rule.
 
 Non-admin users do not see the Settings entry and are redirected away from
 `/support`; the API also enforces the `Admin` claim regardless of the client.

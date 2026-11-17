@@ -3,11 +3,14 @@ import { Link } from 'react-router-dom';
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { getEmails, deleteEmail } from '../api.ts';
 import type { Email } from '../types.ts';
+import ConfirmDialog from './ConfirmDialog.tsx';
 
 export default function EmailList() {
   const [emails, setEmails] = useState<Email[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     loadEmails();
@@ -28,13 +31,18 @@ export default function EmailList() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('Delete this email? This cannot be undone.')) return;
+  const handleDelete = async () => {
+    if (!deleteId) return;
+    setDeleting(true);
     try {
-      await deleteEmail(id);
-      setEmails((prev) => prev.filter((email) => email.id !== id));
+      await deleteEmail(deleteId);
+      setEmails((prev) => prev.filter((email) => email.id !== deleteId));
+      setDeleteId(null);
     } catch {
       setError('Failed to delete email');
+      setDeleteId(null);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -133,7 +141,7 @@ export default function EmailList() {
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    handleDelete(email.id);
+                    setDeleteId(email.id);
                   }}
                   aria-label="Delete email"
                 >
@@ -144,6 +152,14 @@ export default function EmailList() {
           ))}
         </ul>
       )}
+      <ConfirmDialog
+        open={deleteId !== null}
+        title="Delete email"
+        message="Delete this email? This cannot be undone."
+        busy={deleting}
+        onConfirm={handleDelete}
+        onCancel={() => setDeleteId(null)}
+      />
     </div>
   );
 }
