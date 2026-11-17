@@ -871,3 +871,61 @@ func TestSendEmailWithCCAndBCC(t *testing.T) {
 		t.Errorf("multi to = %+v, want [alice@example.com, carol@example.com]", msg.To)
 	}
 }
+
+func TestJMAPAccountIdValidationNonAdmin(t *testing.T) {
+	h, _, _ := newHandlerForTest(t, "any", "example.com", "secret")
+
+	// Login as bob (non-admin)
+	_, bobToken, _ := login(t, h, "bob@example.com", "anything")
+
+	// Try to access alice's account - should fail
+	resp := jmapRequest(t, h, bobToken, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
+		{"Email/query", map[string]interface{}{
+			"accountId": "alice@example.com",
+			"filter":    map[string]string{"inMailbox": "inbox"},
+		}, "q1"},
+	})
+
+	// Should get an error response
+	methodResponsesRaw, ok := resp["methodResponses"].([]interface{})
+	if !ok {
+		t.Fatalf("no methodResponses in response: %v", resp)
+	}
+	call := methodResponsesRaw[0].([]interface{})
+	if call[0] != "error" {
+		t.Errorf("expected error response, got %v", call[0])
+	}
+	errorArgs := call[1].(map[string]interface{})
+	if errorArgs["type"] != "forbidden" {
+		t.Errorf("error type = %v, want forbidden", errorArgs["type"])
+	}
+}
+
+func TestJMAPAccountIdValidationAdmin(t *testing.T) {
+	h, store, _ := newHandlerForTest(t, "any", "example.com", "secret")
+	addEmail(store, "alice-email", "sender@example.com", "alice@example.com")
+
+	// Login as admin
+	_, adminToken, _ := login(t, h, "admin", "secret")
+
+	// Admin should be able to access alice's account
+	resp := jmapRequest(t, h, adminToken, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
+		{"Email/query", map[string]interface{}{
+			"accountId": "alice@example.com",
+			"filter":    map[string]string{"inMailbox": "inbox"},
+		}, "q1"},
+	})
+
+	// Should succeed
+	methodResponsesRaw, ok := resp["methodResponses"].([]interface{})
+	if !ok {
+		t.Fatalf("no methodResponses in response: %v", resp)
+	}
+	call := methodResponsesRaw[0].([]interface{})
+	if call[0] == "error" {
+		t.Errorf("admin should be able to access alice's account, got error: %v", call[1])
+	}
+	if call[0] != "Email/query" {
+		t.Errorf("expected Email/query response, got %v", call[0])
+	}
+}

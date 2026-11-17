@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 import MasqueradeModal from './MasqueradeModal';
+import { MASQUERADE_AS_KEY } from '../api/jmap-client';
 
 interface LayoutProps {
   children?: React.ReactNode;
@@ -8,8 +9,6 @@ interface LayoutProps {
   canManageUsers?: boolean;
   canMasquerade?: boolean;
 }
-
-const MASQUERADE_AS_KEY = 'masquerade_as';
 
 export default function Layout({
   children,

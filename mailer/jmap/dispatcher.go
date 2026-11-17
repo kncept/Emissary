@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+
+	"github.com/kncept/Emissary/mailer/auth"
 )
 
 // UnmarshalJSON implements custom JSON unmarshaling for Invocation.
@@ -86,10 +89,28 @@ type Response struct {
 }
 
 // DispatchRequest processes a batch of method calls and returns the responses.
-func (d *Dispatcher) DispatchRequest(ctx context.Context, accountID string, req *Request) (*Response, error) {
+func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID string, claims *auth.Claims, req *Request) (*Response, error) {
 	responses := make([]Invocation, 0, len(req.MethodCalls))
 
 	for _, call := range req.MethodCalls {
+		// Extract accountId from method arguments, fallback to default
+		accountID := defaultAccountID
+		if call.Arguments != nil {
+			if accountIDRaw, ok := call.Arguments["accountId"]; ok {
+				var extracted string
+				if err := json.Unmarshal(accountIDRaw, &extracted); err == nil && extracted != "" {
+					accountID = extracted
+				}
+			}
+		}
+
+		// Validate accountId: non-admin users can only access their own account
+		if claims != nil && !claims.Admin && accountID != claims.Subject {
+			resp := d.errorResponse(call, fmt.Errorf("forbidden: insufficient permissions to access account %s", accountID))
+			responses = append(responses, resp)
+			continue
+		}
+
 		resp, err := d.dispatchCall(ctx, accountID, call)
 		if err != nil {
 			// Return an error response for this method call
@@ -228,8 +249,20 @@ func (d *Dispatcher) errorResponse(call Invocation, err error) Invocation {
 func (d *Dispatcher) errorResponseFromError(methodName, clientID string, err error) Invocation {
 	// JMAP error response format: ["error", {type: "...", description: "..."}, clientId]
 	description, _ := json.Marshal(err.Error())
+
+	// Determine error type from error message
+	errorType := "unknownMethod"
+	errMsg := err.Error()
+	if strings.HasPrefix(errMsg, "forbidden:") {
+		errorType = "forbidden"
+	} else if strings.HasPrefix(errMsg, "notFound:") {
+		errorType = "notFound"
+	} else if strings.HasPrefix(errMsg, "invalidArguments:") {
+		errorType = "invalidArguments"
+	}
+
 	errorArgs := map[string]json.RawMessage{
-		"type":        json.RawMessage(`"unknownMethod"`),
+		"type":        json.RawMessage(`"` + errorType + `"`),
 		"description": json.RawMessage(description),
 	}
 	return Invocation{

@@ -547,9 +547,16 @@ func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jm
 	}
 
 	claims := currentClaims(r)
+	if claims == nil {
+		writeJMAPError(w, "unauthorized", "Authentication required")
+		return
+	}
+
+	// Use the authenticated user's accountId as the default for dispatch
+	// The dispatcher will validate accountId per method call using the claims
 	accountID := claims.Subject
 
-	resp, err := dispatcher.DispatchRequest(r.Context(), accountID, &req)
+	resp, err := dispatcher.DispatchRequest(r.Context(), accountID, claims, &req)
 	if err != nil {
 		writeJMAPError(w, "serverError", err.Error())
 		return
