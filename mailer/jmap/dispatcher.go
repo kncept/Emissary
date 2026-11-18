@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kncept/Emissary/mailer/auth"
+	"github.com/kncept/Emissary/mailer/storage"
 )
 
 // UnmarshalJSON implements custom JSON unmarshaling for Invocation.
@@ -61,12 +62,15 @@ func ClaimsFromContext(ctx context.Context) *auth.Claims {
 
 // Dispatcher handles routing JMAP method calls to the appropriate handler.
 type Dispatcher struct {
-	handler MethodHandler
+	handler      MethodHandler
+	sessionState storage.SessionStateStore
 }
 
-// NewDispatcher creates a new method dispatcher.
-func NewDispatcher(handler MethodHandler) *Dispatcher {
-	return &Dispatcher{handler: handler}
+// NewDispatcher creates a new method dispatcher. sessionState persists the
+// creation-id map per session so references survive across Lambda invocations;
+// it may be nil when no durable session state is configured.
+func NewDispatcher(handler MethodHandler, sessionState storage.SessionStateStore) *Dispatcher {
+	return &Dispatcher{handler: handler, sessionState: sessionState}
 }
 
 // MethodCall represents a single JMAP method call from the batch request.
@@ -210,11 +214,29 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 	// belong to the caller (or the caller must be allowed to masquerade).
 	ctx = ContextWithClaims(ctx, claims)
 
-	// Seed the creation-id map from the request so a client can continue a
-	// batch that was interrupted before it received the previous response.
+	// Seed the creation-id map from durable per-session state and from the
+	// request. The session copy lets a client continue after a Lambda cold
+	// start; the request copy follows RFC 8620's createdIds argument.
+	sessionID := ""
+	if claims != nil {
+		sessionID = claims.SID
+	}
 	createdIDs := make(map[string]string, len(req.CreatedIDs))
+	if sessionID != "" && d.sessionState != nil {
+		stored, err := d.sessionState.LoadCreatedIDs(ctx, sessionID)
+		if err != nil {
+			return nil, fmt.Errorf("load created ids: %w", err)
+		}
+		for creationID, id := range stored {
+			createdIDs[creationID] = id
+		}
+	}
 	for creationID, id := range req.CreatedIDs {
 		createdIDs[creationID] = id
+	}
+	initial := make(map[string]string, len(createdIDs))
+	for creationID, id := range createdIDs {
+		initial[creationID] = id
 	}
 
 	responses := make([]Invocation, 0, len(req.MethodCalls))
@@ -258,11 +280,31 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 		responses = append(responses, resp)
 	}
 
+	// Persist only when the map actually changed, so read-only JMAP requests
+	// do not write to the session store.
+	if sessionID != "" && d.sessionState != nil && !sameStringMap(createdIDs, initial) {
+		if err := d.sessionState.SaveCreatedIDs(ctx, sessionID, createdIDs); err != nil {
+			return nil, fmt.Errorf("save created ids: %w", err)
+		}
+	}
+
 	return &Response{
 		MethodResponses: responses,
 		CreatedIDs:      createdIDs,
 		SessionState:    "", // Will be set by caller
 	}, nil
+}
+
+func sameStringMap(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, value := range a {
+		if b[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func (d *Dispatcher) dispatchCall(ctx context.Context, accountID string, call Invocation) (Invocation, error) {

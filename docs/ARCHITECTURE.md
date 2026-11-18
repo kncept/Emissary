@@ -122,6 +122,12 @@ The email ID used throughout the JMAP API is the full delivered S3 object key
 including the timestamp and `.eml` suffix. It encodes the account, JMAP
 mailbox, received time and SES message ID.
 
+Durable per-session scratch state lives separately at `_storage/<sid>/`. JMAP
+drafts are JSON objects under `_storage/<sid>/drafts/`, and the creation-id map
+is `_storage/<sid>/created-ids.json`. `<sid>` is the server-generated JWT
+`sid`, so drafts and creation references survive across Lambda invocations and
+never appear in mailbox listings.
+
 ### Recipient validation and delivery
 
 When an inbound message is processed for delivery (by a consumer
@@ -169,7 +175,11 @@ enabling independent management (move, delete, flag) per user.
 ## Outbound mail flow
 
 1. The client creates a draft with `Email/set` and submits it with
-   `EmailSubmission/set`, both on the JMAP batch endpoint.
+   `EmailSubmission/set`, both on the JMAP batch endpoint. With a JWT `sid`,
+   `Email/set` writes the draft to `_storage/<sid>/drafts/` instead of trying
+   to add a message to the delivered-mail tree (which `S3Storage` does not
+   support). `EmailSubmission/set` reads that draft first and falls back to
+   delivered mail.
 2. The handler verifies the submitted email belongs to the request's
    `accountId`, then resolves the From address from the envelope sender, the
    draft's From header, or (on a reply) the original recipient, falling back
@@ -182,6 +192,8 @@ enabling independent management (move, delete, flag) per user.
 4. The message is handed to the configured `sender.Sender` implementation —
    in production the SES v2 `SendEmail` API (including Reply-To addresses), in
    development a log line.
+5. On success, the session draft is deleted; on failure it is kept so the
+   client can retry without re-entering the message.
 
 ## Authentication and visibility
 

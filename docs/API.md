@@ -138,8 +138,11 @@ in that account's mailbox (masquerade); this applies to `Email/query`,
 - `Email/set` with destroy containing the email ID
 
 ### Send Email
-- `Email/set` create to store the email in the `drafts` mailbox
-- `EmailSubmission/set` create to submit the email for delivery
+- `Email/set` create to store the email in the `drafts` mailbox. With a JWT
+  `sid`, the draft is written to durable per-session storage rather than the
+  delivered-mail tree, so the flow works with `STORAGE=s3` in Lambda.
+- `EmailSubmission/set` create to submit the email for delivery. The submitted
+  `emailId` may be the session-relative draft id returned by `Email/set`.
 - The resolved From address (envelope sender, draft From header, or reply
   recipient) must be the authenticated user's own address; a caller with
   `EmissaryUserManagement` may send with another address because it can
@@ -147,8 +150,9 @@ in that account's mailbox (masquerade); this applies to `Email/query`,
 - When masquerading (From differs from the caller's own address), Reply-To
   must match From. It defaults to From when omitted; a conflicting Reply-To
   is rejected with `invalidProperties`.
-- `onSuccessUpdateEmail` to move from drafts to sent
-- `onSuccessDestroyEmail` to remove the draft
+- The session draft is deleted after `EmailSubmission/set` sends successfully.
+  `onSuccessUpdateEmail` and `onSuccessDestroyEmail` are accepted for JMAP
+  compatibility but the server performs the cleanup itself.
 
 ## `POST /api/auth/login`
 
@@ -323,7 +327,10 @@ are reported as `notFound` by the method handler.
 
 The response includes a `createdIds` map of every creation id used in the
 batch to its server-assigned id. A client may send that map back as the
-request's `createdIds` to continue a batch after a dropped connection.
+request's `createdIds` to continue a batch after a dropped connection. For
+authenticated requests with a JWT `sid`, the map is also persisted under
+`_storage/<sid>/created-ids.json`, so a later Lambda invocation can resolve
+earlier references without the client echoing the map.
 
 Email IDs are the full delivered object keys, including the received
 timestamp (ISO 8601 basic UTC, e.g. `20240308T143000`) and `.eml` suffix.

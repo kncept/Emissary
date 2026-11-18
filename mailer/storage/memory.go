@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -16,12 +17,18 @@ var _ Storage = (*MemoryStorage)(nil)
 // MemoryStorage is a small in-memory store. It is useful for local
 // development and tests; messages are lost when the process exits.
 type MemoryStorage struct {
-	mu     sync.RWMutex
-	emails map[string]*email.UserEmail
+	mu         sync.RWMutex
+	emails     map[string]*email.UserEmail
+	drafts     map[string]map[string][]byte
+	sessionIDs map[string]map[string]string
 }
 
 func NewMemoryStorage() *MemoryStorage {
-	return &MemoryStorage{emails: make(map[string]*email.UserEmail)}
+	return &MemoryStorage{
+		emails:     make(map[string]*email.UserEmail),
+		drafts:     make(map[string]map[string][]byte),
+		sessionIDs: make(map[string]map[string]string),
+	}
 }
 
 func (s *MemoryStorage) Name() string {
@@ -106,8 +113,87 @@ func (s *MemoryStorage) DeleteEmail(_ context.Context, id string) error {
 	return nil
 }
 
+// PutDraft implements DraftStorage. Drafts are kept per session so a warm or
+// cold Lambda can read them on the next request.
+func (s *MemoryStorage) PutDraft(_ context.Context, sessionID, creationID string, message *email.UserEmail) (string, error) {
+	id, err := draftKey(creationID)
+	if err != nil {
+		return "", err
+	}
+	body, err := json.Marshal(message)
+	if err != nil {
+		return "", fmt.Errorf("marshal draft: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.drafts[sessionID] == nil {
+		s.drafts[sessionID] = make(map[string][]byte)
+	}
+	s.drafts[sessionID][id] = body
+	return id, nil
+}
+
+// GetDraft implements DraftStorage.
+func (s *MemoryStorage) GetDraft(_ context.Context, sessionID, id string) (*email.UserEmail, error) {
+	key, err := sessionObjectKey(sessionID, id)
+	if err != nil {
+		return nil, err
+	}
+	relative := strings.TrimPrefix(key, sessionRoot+"/"+sessionID+"/")
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	body, ok := s.drafts[sessionID][relative]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	var message email.UserEmail
+	if err := json.Unmarshal(body, &message); err != nil {
+		return nil, fmt.Errorf("unmarshal draft: %w", err)
+	}
+	return &message, nil
+}
+
+// DeleteDraft implements DraftStorage. It is idempotent.
+func (s *MemoryStorage) DeleteDraft(_ context.Context, sessionID, id string) error {
+	key, err := sessionObjectKey(sessionID, id)
+	if err != nil {
+		return err
+	}
+	relative := strings.TrimPrefix(key, sessionRoot+"/"+sessionID+"/")
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.drafts[sessionID], relative)
+	return nil
+}
+
+// LoadCreatedIDs implements SessionStateStore.
+func (s *MemoryStorage) LoadCreatedIDs(_ context.Context, sessionID string) (map[string]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ids := make(map[string]string, len(s.sessionIDs[sessionID]))
+	for id, real := range s.sessionIDs[sessionID] {
+		ids[id] = real
+	}
+	return ids, nil
+}
+
+// SaveCreatedIDs implements SessionStateStore.
+func (s *MemoryStorage) SaveCreatedIDs(_ context.Context, sessionID string, ids map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copy := make(map[string]string, len(ids))
+	for id, real := range ids {
+		copy[id] = real
+	}
+	s.sessionIDs[sessionID] = copy
+	return nil
+}
+
 func clone(e *email.UserEmail) *email.UserEmail {
 	copied := *e
+	copied.ReplyTo = append([]email.Address(nil), e.ReplyTo...)
 	copied.To = append([]email.Address(nil), e.To...)
 	copied.Cc = append([]email.Address(nil), e.Cc...)
 	copied.Bcc = append([]email.Address(nil), e.Bcc...)

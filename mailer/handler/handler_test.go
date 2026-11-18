@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -972,8 +973,13 @@ func TestSendEmailFromVerification(t *testing.T) {
 // the JMAP creation reference "#create1" instead of the real (server-assigned)
 // id. Before creation references were resolved this failed with notFound.
 func TestSendEmailWithCreationReference(t *testing.T) {
-	h, _, capture := newHandlerForTest(t, "secret")
+	h, store, capture := newHandlerForTest(t, "secret")
 	_, bobToken, _ := login(t, h, "bob@example.com", "anything")
+	bobClaims := decodeClaims(t, bobToken)
+	bobSID, _ := bobClaims["sid"].(string)
+	if bobSID == "" {
+		t.Fatal("login token has no session id")
+	}
 
 	resp := jmapRequest(t, h, bobToken,
 		[]string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"},
@@ -1037,6 +1043,11 @@ func TestSendEmailWithCreationReference(t *testing.T) {
 	}
 	if got := createdIDs["submission1"]; got != emailID {
 		t.Errorf("submission1 createdId = %v, want %q", got, emailID)
+	}
+
+	// The draft is session-scoped and must be removed after a successful send.
+	if _, err := store.GetDraft(context.Background(), bobSID, emailID); !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("GetDraft() error = %v, want %v", err, storage.ErrNotFound)
 	}
 }
 

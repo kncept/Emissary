@@ -189,7 +189,7 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 
 	// Create JMAP handler with sender for EmailSubmission
 	jmapHandler := jmap.NewHandler(emailStore, metaStore, userManager, mailSender)
-	dispatcher := jmap.NewDispatcher(jmapHandler)
+	dispatcher := jmap.NewDispatcher(jmapHandler, emailStore)
 
 	mux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {

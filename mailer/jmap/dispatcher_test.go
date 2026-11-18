@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kncept/Emissary/mailer/auth"
+	"github.com/kncept/Emissary/mailer/storage"
 )
 
 func TestResolveCreationIDs(t *testing.T) {
@@ -90,7 +91,7 @@ func (s *stubMethodHandler) EmailSubmissionSet(_ context.Context, _ string, args
 
 func TestDispatchRequestResolvesCreationReferences(t *testing.T) {
 	handler := &stubMethodHandler{}
-	dispatcher := NewDispatcher(handler)
+	dispatcher := NewDispatcher(handler, nil)
 
 	req := &Request{
 		// A seeded reference (e.g. from a resumed request) must resolve too.
@@ -155,5 +156,57 @@ func TestDispatchRequestResolvesCreationReferences(t *testing.T) {
 		if got := resp.CreatedIDs[id]; got != expected {
 			t.Errorf("createdIds[%q] = %q, want %q", id, got, expected)
 		}
+	}
+}
+
+func TestDispatchRequestPersistsCreatedIDsPerSession(t *testing.T) {
+	store := storage.NewMemoryStorage()
+	handler := &stubMethodHandler{}
+	dispatcher := NewDispatcher(handler, store)
+	claims := &auth.Claims{Subject: "alice@example.com", SID: "session-1"}
+	ctx := context.Background()
+
+	first := &Request{
+		MethodCalls: []Invocation{{
+			Name:     "Email/set",
+			ClientID: "c1",
+			Arguments: map[string]json.RawMessage{
+				"accountId": json.RawMessage(`"alice@example.com"`),
+				"create":    json.RawMessage(`{"create1":{"from":[{"email":"alice@example.com"}],"to":[]}}`),
+			},
+		}},
+	}
+	if _, err := dispatcher.DispatchRequest(ctx, "alice@example.com", claims, first); err != nil {
+		t.Fatalf("first DispatchRequest() error = %v", err)
+	}
+
+	stored, err := store.LoadCreatedIDs(ctx, claims.SID)
+	if err != nil {
+		t.Fatalf("LoadCreatedIDs() error = %v", err)
+	}
+	if got := stored["create1"]; got != "real-email-id" {
+		t.Fatalf("persisted create1 = %q, want real-email-id (map %v)", got, stored)
+	}
+
+	// A fresh request with no createdIds must still resolve the earlier
+	// reference after a simulated Lambda restart.
+	handler = &stubMethodHandler{}
+	dispatcher = NewDispatcher(handler, store)
+	second := &Request{
+		MethodCalls: []Invocation{{
+			Name:     "EmailSubmission/set",
+			ClientID: "c2",
+			Arguments: map[string]json.RawMessage{
+				"accountId": json.RawMessage(`"alice@example.com"`),
+				"create":    json.RawMessage(`{"submission1":{"emailId":"#create1"}}`),
+			},
+		}},
+	}
+	if _, err := dispatcher.DispatchRequest(ctx, "alice@example.com", claims, second); err != nil {
+		t.Fatalf("second DispatchRequest() error = %v", err)
+	}
+	submission := string(handler.submissionSetArgs["create"])
+	if !strings.Contains(submission, `"emailId":"real-email-id"`) {
+		t.Errorf("persisted reference was not resolved: %s", submission)
 	}
 }

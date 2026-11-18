@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/mail"
 	"sort"
@@ -615,9 +616,6 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			}
 		}
 
-		// Generate a new ID for the email
-		newID := generateEmailID()
-
 		mailboxIDs := map[string]bool{}
 		if mbMap, ok := createMap["mailboxIds"].(map[string]interface{}); ok {
 			for k, v := range mbMap {
@@ -665,10 +663,13 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			}
 		}
 
-		// Created mail is stored in the requested account's mailbox.
+		// Created mail is stored in the requested account's mailbox. When a
+		// session id is available, use durable per-session draft storage so
+		// the draft survives across Lambda invocations (S3Storage cannot add
+		// messages to the delivered-mail tree).
 		now := time.Now().UTC()
 		newEmail := &email.UserEmail{
-			ID:         newID,
+			ID:         createID,
 			AccountID:  accountID,
 			MailboxID:  mailboxID,
 			From:       email.Address{Address: from},
@@ -684,10 +685,23 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			References: references,
 		}
 
-		if err := h.storage.AddEmail(ctx, newEmail); err != nil {
-			notCreated[createID] = map[string]string{"type": "serverFail", "description": "Failed to save email: " + err.Error()}
-			continue
+		var newID string
+		if claims := ClaimsFromContext(ctx); claims != nil && claims.SID != "" {
+			var err error
+			newID, err = h.storage.PutDraft(ctx, claims.SID, createID, newEmail)
+			if err != nil {
+				notCreated[createID] = map[string]string{"type": "serverFail", "description": "Failed to save draft: " + err.Error()}
+				continue
+			}
+		} else {
+			newID = generateEmailID()
+			newEmail.ID = newID
+			if err := h.storage.AddEmail(ctx, newEmail); err != nil {
+				notCreated[createID] = map[string]string{"type": "serverFail", "description": "Failed to save email: " + err.Error()}
+				continue
+			}
 		}
+		newEmail.ID = newID
 
 		// Initialize metadata
 		if err := h.metadata.Save(ctx, metadata.EmailMetadata{
@@ -1026,10 +1040,26 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 	notCreated := make(map[string]interface{})
 
 	// For each submission to create
+	sessionID := ""
+	if claims != nil {
+		sessionID = claims.SID
+	}
 	for createID, submission := range req.Create {
-		// Get the email to send. Only an email in the requested account may be
-		// submitted, even when masquerading as that account.
-		emailMsg, err := h.storage.GetEmail(ctx, submission.EmailID)
+		// Get the email to send. Session drafts take precedence: they live in
+		// per-session durable storage rather than the delivered-mail tree.
+		// Fall back to regular stored mail for submissions that reference an
+		// already delivered message. Only an email in the requested account
+		// may be submitted, even when masquerading as that account.
+		var emailMsg *email.UserEmail
+		var err error
+		if sessionID != "" {
+			emailMsg, err = h.storage.GetDraft(ctx, sessionID, submission.EmailID)
+			if errors.Is(err, storage.ErrNotFound) {
+				emailMsg, err = h.storage.GetEmail(ctx, submission.EmailID)
+			}
+		} else {
+			emailMsg, err = h.storage.GetEmail(ctx, submission.EmailID)
+		}
 		if err != nil || !strings.EqualFold(emailMsg.AccountID, accountID) {
 			notCreated[createID] = map[string]string{"type": "notFound", "description": "Email not found"}
 			continue
@@ -1180,6 +1210,15 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 		if err := h.sender.Send(ctx, message); err != nil {
 			notCreated[createID] = map[string]string{"type": "serverFail", "description": "Failed to send email: " + err.Error()}
 			continue
+		}
+
+		// A session draft has served its purpose once the message is sent.
+		// Deletion failures must not turn a successful send into a client
+		// error, since that would encourage a duplicate submission.
+		if sessionID != "" {
+			if err := h.storage.DeleteDraft(ctx, sessionID, submission.EmailID); err != nil {
+				log.Printf("failed to delete JMAP draft %q: %v", submission.EmailID, err)
+			}
 		}
 
 		// Success - create the submission object

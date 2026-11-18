@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/kncept/Emissary/mailer/email"
 )
 
 const testMessage = "From: alice@example.com\r\n" +
@@ -331,5 +332,78 @@ func TestS3StorageDeleteEmailReturnsErrNotFound(t *testing.T) {
 	// Nothing else was touched.
 	if _, err := store.GetEmail(context.Background(), "present"); err != nil {
 		t.Errorf("GetEmail() error = %v, want nil", err)
+	}
+}
+
+func TestS3StorageSessionDraftsAndCreatedIDs(t *testing.T) {
+	fake := newFakeS3(map[string]string{})
+	store := &S3Storage{client: fake, bucket: "mail-bucket"}
+	ctx := context.Background()
+	message := &email.UserEmail{
+		ID:        "create1",
+		AccountID: "alice@example.com",
+		Subject:   "draft subject",
+		Text:      "draft body",
+	}
+
+	id, err := store.PutDraft(ctx, "session-1", "create1", message)
+	if err != nil {
+		t.Fatalf("PutDraft() error = %v", err)
+	}
+	if id != "drafts/create1.json" {
+		t.Errorf("draft id = %q, want drafts/create1.json", id)
+	}
+	objectKey := "_storage/session-1/drafts/create1.json"
+	if _, ok := fake.objects[objectKey]; !ok {
+		t.Fatalf("draft was not stored under %q: %v", objectKey, fake.objects)
+	}
+
+	loaded, err := store.GetDraft(ctx, "session-1", id)
+	if err != nil {
+		t.Fatalf("GetDraft() error = %v", err)
+	}
+	if loaded.Subject != message.Subject || loaded.Text != message.Text {
+		t.Errorf("loaded draft = %+v, want subject %q and text %q", loaded, message.Subject, message.Text)
+	}
+
+	if err := store.SaveCreatedIDs(ctx, "session-1", map[string]string{"create1": id}); err != nil {
+		t.Fatalf("SaveCreatedIDs() error = %v", err)
+	}
+	createdKey := "_storage/session-1/created-ids.json"
+	if _, ok := fake.objects[createdKey]; !ok {
+		t.Fatalf("created ids were not stored under %q: %v", createdKey, fake.objects)
+	}
+	ids, err := store.LoadCreatedIDs(ctx, "session-1")
+	if err != nil {
+		t.Fatalf("LoadCreatedIDs() error = %v", err)
+	}
+	if got := ids["create1"]; got != id {
+		t.Errorf("created id = %q, want %q", got, id)
+	}
+
+	if err := store.DeleteDraft(ctx, "session-1", id); err != nil {
+		t.Fatalf("DeleteDraft() error = %v", err)
+	}
+	if _, ok := fake.objects[objectKey]; ok {
+		t.Error("draft object still exists after DeleteDraft()")
+	}
+	if _, err := store.GetDraft(ctx, "session-1", id); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetDraft() after delete error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestS3StorageSessionKeysRejectTraversal(t *testing.T) {
+	fake := newFakeS3(map[string]string{})
+	store := &S3Storage{client: fake, bucket: "mail-bucket"}
+	message := &email.UserEmail{ID: "create1"}
+
+	if _, err := store.PutDraft(context.Background(), "../bad", "create1", message); err == nil {
+		t.Error("PutDraft() with traversal session id succeeded")
+	}
+	if _, err := store.PutDraft(context.Background(), "session-1", "../create1", message); err == nil {
+		t.Error("PutDraft() with traversal creation id succeeded")
+	}
+	if _, err := store.GetDraft(context.Background(), "session-1", "_storage/session-1/../../outside.json"); err == nil {
+		t.Error("GetDraft() with traversal id succeeded")
 	}
 }
