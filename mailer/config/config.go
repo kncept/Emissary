@@ -28,13 +28,12 @@ type ServerConfig struct {
 }
 
 // Validate checks that the server configuration is complete and consistent.
-// A blank password is valid: it disables the built-in administrator login
-// without preventing other user managers from working.
+// A blank username or password is valid: it disables the built-in administrator
+// login without preventing other user managers from working.
 func (c *ServerConfig) Validate() error {
 	var errs []error
-	if c.Username == "" {
-		errs = append(errs, errors.New("username is not configured (set USERNAME)"))
-	}
+	// Username and Password are optional - if either is missing, the admin
+	// user is simply not created. Other user managers continue to work.
 	return errors.Join(errs...)
 }
 
