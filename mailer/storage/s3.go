@@ -125,19 +125,19 @@ func (s *S3Storage) ObjectExists(ctx context.Context, key string) (bool, error) 
 	return false, fmt.Errorf("failed to check object %q: %w", key, err)
 }
 
-// ListAccountEmails implements the Storage interface. It limits ListObjectsV2
-// to the account's mailbox prefix so messages belonging to other accounts (and
+// ListEmails implements the Storage interface. It limits ListObjectsV2 to the
+// account's mailbox prefix so messages belonging to other accounts (and
 // unprocessed SES staging objects at the bucket root) are never read. Each
-// message is parsed from the exact object key, so the returned ID is the full
-// delivered key including the timestamp and .eml extension.
-func (s *S3Storage) ListAccountEmails(ctx context.Context, accountID, mailboxID string) ([]*email.UserEmail, error) {
+// message is parsed from the exact object key, so the returned ref ID is the
+// full delivered key including the timestamp and .eml extension.
+func (s *S3Storage) ListEmails(ctx context.Context, accountID, mailboxID string) ([]*email.ListedEmail, error) {
 	mailboxPrefix := email.MailboxKeyPrefix(accountID, mailboxID)
 	if mailboxPrefix == "" {
 		return nil, fmt.Errorf("accountID is required")
 	}
 	prefix := s.listPrefix() + mailboxPrefix
 
-	var emails []*email.UserEmail
+	var emails []*email.ListedEmail
 	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(s.bucket),
 		Prefix: aws.String(prefix),
@@ -203,7 +203,7 @@ func (s *S3Storage) emailKeyCandidates(id string) []string {
 }
 
 // GetEmail implements the Storage interface.
-func (s *S3Storage) GetEmail(ctx context.Context, id string) (*email.UserEmail, error) {
+func (s *S3Storage) GetEmail(ctx context.Context, id string) (*email.ListedEmail, error) {
 	for _, key := range s.emailKeyCandidates(id) {
 		message, err := s.getEmailByKey(ctx, key)
 		if err == nil {
@@ -218,7 +218,7 @@ func (s *S3Storage) GetEmail(ctx context.Context, id string) (*email.UserEmail, 
 	return nil, ErrNotFound
 }
 
-func (s *S3Storage) getEmailByKey(ctx context.Context, key string) (*email.UserEmail, error) {
+func (s *S3Storage) getEmailByKey(ctx context.Context, key string) (*email.ListedEmail, error) {
 	body, err := s.getRawByKey(ctx, key)
 	if err != nil {
 		return nil, err
@@ -228,7 +228,8 @@ func (s *S3Storage) getEmailByKey(ctx context.Context, key string) (*email.UserE
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse email %q: %w", key, err)
 	}
-	return parsedEmail, nil
+	ref := email.EmailRefFromID(key)
+	return &email.ListedEmail{Ref: &ref, Email: parsedEmail}, nil
 }
 
 // getRawByKey reads the exact bytes of an S3 object. Storage-level prefixes
@@ -359,11 +360,10 @@ func parseEmail(key, raw string) Email {
 	return email
 }
 
-// AddEmail implements the Storage interface.
-// S3Storage is primarily for receiving emails; adding emails is not fully supported.
-// This implementation returns an error indicating the operation is not supported.
-func (s *S3Storage) AddEmail(ctx context.Context, email *email.UserEmail) error {
-	return errors.New("AddEmail not supported on S3Storage")
+// AddEmail implements the Storage interface. S3Storage is primarily for
+// receiving emails; adding emails is not supported by this implementation.
+func (s *S3Storage) AddEmail(_ context.Context, _ string, _ *email.UserEmail) (string, error) {
+	return "", errors.New("AddEmail not supported on S3Storage")
 }
 
 // DeleteEmail implements the Storage interface. It resolves the id the same

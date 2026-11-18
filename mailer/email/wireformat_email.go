@@ -606,26 +606,17 @@ func parseDate(value string) time.Time {
 //
 // The conversion extracts the text and HTML bodies from the MIME structure,
 // preferring text/plain and text/html parts. Non-text parts are ignored.
-func (wfe *WireFormatEmail) ToUserEmail(id string) *UserEmail {
+func (wfe *WireFormatEmail) ToUserEmail() *UserEmail {
 	text, html := wfe.extractTextAndHTML()
-	// The id is the object key the message was stored under. Delivered mail
-	// uses users/<accountId>/<mailboxId>/<timestamp>_<ses-id>.eml, so the
-	// account and JMAP mailbox can be recovered from it. Staging objects at
-	// the bucket root simply have no account/mailbox yet.
-	accountID, mailboxID, _ := MailboxFromID(id)
-
 	return &UserEmail{
-		ID:        id,
-		AccountID: accountID,
-		MailboxID: mailboxID,
-		From:      addressPtrToValue(wfe.From),
-		To:        wfe.To,
-		Cc:        wfe.Cc,
-		Bcc:       wfe.Bcc,
-		Subject:   wfe.Subject,
-		Date:      wfe.Date,
-		Text:      strings.TrimSpace(text),
-		HTML:      strings.TrimSpace(html),
+		From:    addressPtrToValue(wfe.From),
+		To:      wfe.To,
+		Cc:      wfe.Cc,
+		Bcc:     wfe.Bcc,
+		Subject: wfe.Subject,
+		Date:    wfe.Date,
+		Text:    strings.TrimSpace(text),
+		HTML:    strings.TrimSpace(html),
 	}
 }
 

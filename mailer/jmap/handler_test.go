@@ -15,24 +15,27 @@ import (
 	"github.com/kncept/Emissary/mailer/usermanager"
 )
 
+func addTestEmail(store *storage.MemoryStorage, id, accountID, mailboxID string, message *email.UserEmail) {
+	store.Add(&email.ListedEmail{
+		Ref:   &email.EmailRef{ID: id, AccountID: accountID, MailboxID: mailboxID},
+		Email: message,
+	})
+}
+
 // TestHandler_EmailGet tests the Email/get method
 func TestHandler_EmailGet(t *testing.T) {
 	ctx := context.Background()
 
 	// Create test storage with an email
 	memStorage := storage.NewMemoryStorage()
-	testEmail := &email.UserEmail{
-		ID:        "test1",
-		AccountID: "test",
-		MailboxID: "inbox",
-		From:      email.Address{Name: "Test Sender", Address: "sender@example.com"},
-		To:        []email.Address{{Name: "Test Recipient", Address: "recipient@example.com"}},
-		Subject:   "Test Subject",
-		Date:      time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
-		Text:      "Test email body",
-		Size:      100,
-	}
-	memStorage.Add(testEmail)
+	addTestEmail(memStorage, "test1", "test", "inbox", &email.UserEmail{
+		From:    email.Address{Name: "Test Sender", Address: "sender@example.com"},
+		To:      []email.Address{{Name: "Test Recipient", Address: "recipient@example.com"}},
+		Subject: "Test Subject",
+		Date:    time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
+		Text:    "Test email body",
+		Size:    100,
+	})
 
 	// Create test metadata
 	memMeta := metadata.NewMemoryMetadata()
@@ -143,18 +146,15 @@ func TestHandler_EmailQuery(t *testing.T) {
 	memStorage := storage.NewMemoryStorage()
 	// Add multiple test emails
 	for i := 1; i <= 5; i++ {
-		testEmail := &email.UserEmail{
-			ID:        string(rune('a' + i - 1)),
-			AccountID: "test",
-			MailboxID: "inbox",
-			From:      email.Address{Name: "Sender", Address: "sender@example.com"},
-			To:        []email.Address{{Name: "Recipient", Address: "recipient@example.com"}},
-			Subject:   "Test Subject " + string(rune('a'+i-1)),
-			Date:      time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
-			Text:      "Test email body",
-			Size:      100,
-		}
-		memStorage.Add(testEmail)
+		id := string(rune('a' + i - 1))
+		addTestEmail(memStorage, id, "test", "inbox", &email.UserEmail{
+			From:    email.Address{Name: "Sender", Address: "sender@example.com"},
+			To:      []email.Address{{Name: "Recipient", Address: "recipient@example.com"}},
+			Subject: "Test Subject " + id,
+			Date:    time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
+			Text:    "Test email body",
+			Size:    100,
+		})
 	}
 
 	memMeta := metadata.NewMemoryMetadata()
@@ -197,13 +197,9 @@ func TestHandler_EmailQueryScopesToAccountAndMailbox(t *testing.T) {
 		bobInbox   = "users/bob@example.com/inbox/20261117T140000_b.eml"
 	)
 	receivedAt := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
-	for _, msg := range []*email.UserEmail{
-		{ID: aliceInbox, AccountID: "alice@example.com", MailboxID: "inbox", Subject: "Alice inbox", Date: receivedAt},
-		{ID: aliceSent, AccountID: "alice@example.com", MailboxID: "sent", Subject: "Alice sent", Date: receivedAt},
-		{ID: bobInbox, AccountID: "bob@example.com", MailboxID: "inbox", Subject: "Bob inbox", Date: receivedAt},
-	} {
-		memStorage.Add(msg)
-	}
+	addTestEmail(memStorage, aliceInbox, "alice@example.com", "inbox", &email.UserEmail{Subject: "Alice inbox", Date: receivedAt})
+	addTestEmail(memStorage, aliceSent, "alice@example.com", "sent", &email.UserEmail{Subject: "Alice sent", Date: receivedAt})
+	addTestEmail(memStorage, bobInbox, "bob@example.com", "inbox", &email.UserEmail{Subject: "Bob inbox", Date: receivedAt})
 
 	handler := NewHandler(memStorage, metadata.NewMemoryMetadata(),
 		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
@@ -295,8 +291,8 @@ func TestEmailSetStoresReplyTo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEmail(%q) error = %v", created.ID, err)
 	}
-	if len(draft.ReplyTo) != 1 || draft.ReplyTo[0].Address != "bob@example.com" {
-		t.Fatalf("stored Reply-To = %+v, want [bob@example.com]", draft.ReplyTo)
+	if len(draft.Email.ReplyTo) != 1 || draft.Email.ReplyTo[0].Address != "bob@example.com" {
+		t.Fatalf("stored Reply-To = %+v, want [bob@example.com]", draft.Email.ReplyTo)
 	}
 }
 
@@ -336,8 +332,8 @@ func TestEmailSetStoresHTMLBodyAndEmailGetReturnsIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEmail(%q) error = %v", id, err)
 	}
-	if draft.Text != "hello" || draft.HTML != "<p>hello</p>" {
-		t.Fatalf("stored bodies = text %q, html %q", draft.Text, draft.HTML)
+	if draft.Email.Text != "hello" || draft.Email.HTML != "<p>hello</p>" {
+		t.Fatalf("stored bodies = text %q, html %q", draft.Email.Text, draft.Email.HTML)
 	}
 
 	getResult, err := handler.EmailGet(ctx, "alice@example.com", json.RawMessage(
@@ -382,14 +378,12 @@ func (s *recordingSender) SendBounce(_ context.Context, _, _, _, _ string, _ *em
 func TestEmailSubmissionSetForwardsHTMLBody(t *testing.T) {
 	const accountID = "alice@example.com"
 	store := storage.NewMemoryStorage()
-	store.Add(&email.UserEmail{
-		ID:        "draft1",
-		AccountID: accountID,
-		From:      email.Address{Address: accountID},
-		To:        []email.Address{{Address: "bob@example.com"}},
-		Subject:   "HTML mail",
-		Text:      "hello",
-		HTML:      "<p>hello</p>",
+	addTestEmail(store, "draft1", accountID, "inbox", &email.UserEmail{
+		From:    email.Address{Address: accountID},
+		To:      []email.Address{{Address: "bob@example.com"}},
+		Subject: "HTML mail",
+		Text:    "hello",
+		HTML:    "<p>hello</p>",
 	})
 	capture := &recordingSender{}
 	handler := NewHandler(store, metadata.NewMemoryMetadata(),
@@ -462,13 +456,11 @@ func TestEmailSubmissionSetFromVerification(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := storage.NewMemoryStorage()
-			store.Add(&email.UserEmail{
-				ID:        "draft1",
-				AccountID: accountID,
-				From:      email.Address{Address: tc.from},
-				To:        []email.Address{{Address: "dave@example.com"}},
-				Subject:   "subject",
-				Text:      "body",
+			addTestEmail(store, "draft1", accountID, "inbox", &email.UserEmail{
+				From:    email.Address{Address: tc.from},
+				To:      []email.Address{{Address: "dave@example.com"}},
+				Subject: "subject",
+				Text:    "body",
 			})
 			capture := &recordingSender{}
 			handler := NewHandler(store, metadata.NewMemoryMetadata(),
@@ -543,14 +535,12 @@ func TestEmailSubmissionSetMasqueradeReplyTo(t *testing.T) {
 			for _, addr := range tc.replyTo {
 				replyTo = append(replyTo, email.Address{Address: addr})
 			}
-			store.Add(&email.UserEmail{
-				ID:        "draft1",
-				AccountID: accountID,
-				From:      email.Address{Address: from},
-				ReplyTo:   replyTo,
-				To:        []email.Address{{Address: "dave@example.com"}},
-				Subject:   "subject",
-				Text:      "body",
+			addTestEmail(store, "draft1", accountID, "inbox", &email.UserEmail{
+				From:    email.Address{Address: from},
+				ReplyTo: replyTo,
+				To:      []email.Address{{Address: "dave@example.com"}},
+				Subject: "subject",
+				Text:    "body",
 			})
 			capture := &recordingSender{}
 			handler := NewHandler(store, metadata.NewMemoryMetadata(),

@@ -140,9 +140,10 @@ it. When renaming tests, keep this table in sync.
 | Drafts and creation ids use durable per-session storage, and the draft is deleted after a successful send | `storage` `TestS3StorageSessionDraftsAndCreatedIDs`, `TestS3StorageSessionKeysRejectTraversal`; `jmap` `TestDispatchRequestPersistsCreatedIDsPerSession`; `handler` `TestSendEmailWithCreationReference` |
 | Deleting an email also removes its metadata | `handler` `TestDeleteEmailAlsoDeletesMetadata` |
 | Expired, future and wrong-audience/issuer tokens are rejected | `auth` `TestAuthenticator_Validate_*` |
-| Delivered ids are full object keys (timestamp + `.eml`) and account/mailbox are derived from them | `email` `TestMailboxFromID`, `TestParse_DerivesAccountAndMailboxFromDeliveredKey`, `storage` `TestS3StorageListAccountEmails*` |
+| Delivered ids are full object keys (timestamp + `.eml`) and account/mailbox are derived into an `email.EmailRef` | `email` `TestMailboxFromID`, `TestEmailRefFromID_DerivesAccountAndMailboxFromDeliveredKey`, `storage` `TestS3StorageListEmails*` |
 | Delivered keys use ISO 8601 basic UTC timestamps (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`), including when the `Date` header is missing | `email` `TestFormatDeliveredTimestamp`, `receiver` `TestProcessMessageSavesWithISO8601BasicTimestamp`, `TestProcessMessageFallbackTimestampUsesISO8601BasicFormat` |
-| S3 `ListAccountEmails` is limited to the account/mailbox prefix and skips non-`.eml` system files; legacy SES staging keys still resolve by exact key without an `.eml` suffix | `storage` `TestS3StorageListAccountEmails*`, `TestS3StorageGetEmailReadsSESMessageKey` |
+| S3 `ListEmails` is limited to the account/mailbox prefix and skips non-`.eml` system files; legacy SES staging keys still resolve by exact key without an `.eml` suffix | `storage` `TestS3StorageListEmails*`, `TestS3StorageGetEmailReadsSESMessageKey` |
+| `AddEmail` generates the id and stores new mail in the account's inbox so metadata can be created from the returned id | `storage` `TestMemoryStorage_AddEmailGeneratesIDAndUsesInbox` |
 | Unknown selector values and missing companion variables fail at startup | `config` `TestLoad_Unknown*`, `TestLoad_*Requires*` |
 | Frontend uses no native browser dialogs; destructive actions require an in-app confirmation | `.oxlintrc.json` `no-alert` (CI via `run.sh test`), throwing stubs in `src/test-setup.ts`, `ConfirmDialog` and `DeleteConfirmation` tests |
 

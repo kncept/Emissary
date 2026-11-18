@@ -30,16 +30,30 @@ type Address struct {
 	Address string `json:"address"`
 }
 
-// UserEmail is the simplified email representation used by the storage, sender,
+// EmailRef identifies a stored message: its storage id and the JMAP
+// account/mailbox that own it. These are metadata about where a message
+// lives, separate from the message content held by UserEmail.
+type EmailRef struct {
+	ID        string `json:"id"`
+	AccountID string `json:"accountId,omitempty"`
+	MailboxID string `json:"mailboxId,omitempty"`
+}
+
+// ListedEmail is one entry returned by a storage listing: the ref (ids) the
+// message is stored under together with its content.
+type ListedEmail struct {
+	Ref   *EmailRef
+	Email *UserEmail
+}
+
+// UserEmail is the simplified email content used by the storage, sender,
 // metadata and HTTP layers. It contains only the fields needed for display
-// and search, extracted from the full wire format.
+// and search, extracted from the full wire format. Where a message lives is
+// described by EmailRef instead.
 //
 // To parse a raw RFC 5322 message into a UserEmail, use ParseWireFormat()
 // followed by WireFormatEmail.ToUserEmail(), or use the convenience function Parse().
 type UserEmail struct {
-	ID         string    `json:"id"`
-	AccountID  string    `json:"accountId,omitempty"`
-	MailboxID  string    `json:"mailboxId,omitempty"`
 	From       Address   `json:"from"`
 	ReplyTo    []Address `json:"replyTo,omitempty"`
 	To         []Address `json:"to"`
@@ -115,6 +129,14 @@ func MailboxFromID(id string) (accountID, mailboxID string, ok bool) {
 	return strings.ToLower(parts[0]), strings.ToLower(parts[1]), true
 }
 
+// EmailRefFromID builds the metadata ref for a message from its id. For
+// delivered mail the id is the full object key, which encodes the account and
+// mailbox; other ids keep only the id itself.
+func EmailRefFromID(id string) EmailRef {
+	accountID, mailboxID, _ := MailboxFromID(id)
+	return EmailRef{ID: id, AccountID: accountID, MailboxID: mailboxID}
+}
+
 // EncodeID turns a storage key into an opaque, URL-safe identifier.
 func EncodeID(key string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(key))
@@ -168,12 +190,14 @@ func addressString(a Address) string {
 	return (&mail.Address{Name: a.Name, Address: a.Address}).String()
 }
 
-// Parse reads a raw RFC 5322 message and returns a UserEmail.
+// Parse reads a raw RFC 5322 message and returns its content as a UserEmail.
 // This is a convenience function that combines ParseWireFormat and ToUserEmail.
-// Attachments and other non-text parts are intentionally ignored.
-func Parse(id string, r io.Reader) (*UserEmail, error) {
-	wfe := ParseWireFormat(id, r)
-	return wfe.ToUserEmail(id), nil
+// Attachments and other non-text parts are intentionally ignored. The id is
+// accepted for compatibility with delivered object keys; use EmailRefFromID
+// when the account/mailbox metadata is needed.
+func Parse(_ string, r io.Reader) (*UserEmail, error) {
+	wfe := ParseWireFormat("", r)
+	return wfe.ToUserEmail(), nil
 }
 
 // ParseWireFormat parses a raw RFC 5322 message into a WireFormatEmail,

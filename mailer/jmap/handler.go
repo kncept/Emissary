@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/rand"
 	"net/mail"
 	"sort"
 	"strings"
@@ -471,15 +470,15 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 	// Email/get must only expose messages in the requested account. When a
 	// user with EmissaryUserManagement masquerades, accountID is the target
 	// account supplied in the call.
-	emails, err := h.storage.ListAccountEmails(ctx, accountID, "")
+	emails, err := h.storage.ListEmails(ctx, accountID, "")
 	if err != nil {
 		return nil, err
 	}
 
 	// Build email map
-	emailMap := make(map[string]*email.UserEmail)
+	emailMap := make(map[string]*email.ListedEmail)
 	for _, e := range emails {
-		emailMap[e.ID] = e
+		emailMap[e.Ref.ID] = e
 	}
 
 	var list []JMAPEmail
@@ -492,7 +491,7 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 				if err != nil {
 					return nil, err
 				}
-				jmapEmail.setBodyValues(e, req.FetchTextBodyValues, req.FetchHTMLBodyValues)
+				jmapEmail.setBodyValues(e.Email, req.FetchTextBodyValues, req.FetchHTMLBodyValues)
 				list = append(list, *jmapEmail)
 			} else {
 				notFound = append(notFound, id)
@@ -504,7 +503,7 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 			if err != nil {
 				return nil, err
 			}
-			jmapEmail.setBodyValues(e, req.FetchTextBodyValues, req.FetchHTMLBodyValues)
+			jmapEmail.setBodyValues(e.Email, req.FetchTextBodyValues, req.FetchHTMLBodyValues)
 			list = append(list, *jmapEmail)
 		}
 	}
@@ -539,8 +538,8 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 	// Handle destroy. Verify the message belongs to the requested account so
 	// a crafted id cannot delete another user's mail.
 	for _, id := range req.Destroy {
-		msg, err := h.storage.GetEmail(ctx, id)
-		if err != nil || !strings.EqualFold(msg.AccountID, accountID) {
+		listed, err := h.storage.GetEmail(ctx, id)
+		if err != nil || listed.Ref == nil || !strings.EqualFold(listed.Ref.AccountID, accountID) {
 			notDestroyed[id] = map[string]string{"type": "notFound", "description": "Email not found"}
 			continue
 		}
@@ -659,26 +658,6 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			}
 		}
 
-		mailboxIDs := map[string]bool{}
-		if mbMap, ok := createMap["mailboxIds"].(map[string]interface{}); ok {
-			for k, v := range mbMap {
-				if b, ok := v.(bool); ok && b {
-					mailboxIDs[k] = true
-				}
-			}
-		}
-		if len(mailboxIDs) == 0 {
-			mailboxIDs["inbox"] = true
-		}
-		// A message belongs to one JMAP mailbox for storage purposes. Pick
-		// deterministically so the account/mailbox scoping is unambiguous.
-		mailboxID := "inbox"
-		for mb := range mailboxIDs {
-			if mailboxIDs[mb] && (mailboxID == "inbox" || mb < mailboxID) {
-				mailboxID = mb
-			}
-		}
-
 		keywords := map[string]bool{}
 		if kwMap, ok := createMap["keywords"].(map[string]interface{}); ok {
 			for k, v := range kwMap {
@@ -706,15 +685,12 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			}
 		}
 
-		// Created mail is stored in the requested account's mailbox. When a
-		// session id is available, use durable per-session draft storage so
-		// the draft survives across Lambda invocations (S3Storage cannot add
-		// messages to the delivered-mail tree).
+		// Created mail is stored in the account's inbox (AddEmail assigns the
+		// mailbox itself). When a session id is available, use durable
+		// per-session draft storage so the draft survives across Lambda
+		// invocations (S3Storage cannot add to the delivered-mail tree).
 		now := time.Now().UTC()
 		newEmail := &email.UserEmail{
-			ID:         createID,
-			AccountID:  accountID,
-			MailboxID:  mailboxID,
 			From:       email.Address{Address: from},
 			ReplyTo:    replyTo,
 			To:         to,
@@ -738,14 +714,13 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 				continue
 			}
 		} else {
-			newID = generateEmailID()
-			newEmail.ID = newID
-			if err := h.storage.AddEmail(ctx, newEmail); err != nil {
+			var err error
+			newID, err = h.storage.AddEmail(ctx, accountID, newEmail)
+			if err != nil {
 				notCreated[createID] = map[string]string{"type": "serverFail", "description": "Failed to save email: " + err.Error()}
 				continue
 			}
 		}
-		newEmail.ID = newID
 
 		// Initialize metadata
 		if err := h.metadata.Save(ctx, metadata.EmailMetadata{
@@ -828,13 +803,13 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 	if req.Filter != nil && req.Filter.InMailbox != nil {
 		mailboxID = *req.Filter.InMailbox
 	}
-	emails, err := h.storage.ListAccountEmails(ctx, accountID, mailboxID)
+	emails, err := h.storage.ListEmails(ctx, accountID, mailboxID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Apply filter
-	filtered := make([]*email.UserEmail, 0)
+	filtered := make([]*email.ListedEmail, 0)
 	for _, e := range emails {
 		if h.matchesFilter(e, req.Filter) {
 			filtered = append(filtered, e)
@@ -858,13 +833,13 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 		}
 	}
 	sort.SliceStable(filtered, func(i, j int) bool {
-		if filtered[i].Date.Equal(filtered[j].Date) {
-			return filtered[i].ID < filtered[j].ID
+		if filtered[i].Email.Date.Equal(filtered[j].Email.Date) {
+			return filtered[i].Ref.ID < filtered[j].Ref.ID
 		}
 		if ascending {
-			return filtered[i].Date.Before(filtered[j].Date)
+			return filtered[i].Email.Date.Before(filtered[j].Email.Date)
 		}
-		return filtered[i].Date.After(filtered[j].Date)
+		return filtered[i].Email.Date.After(filtered[j].Email.Date)
 	})
 
 	// Apply position/limit for pagination
@@ -884,7 +859,7 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 	result := filtered[position : position+limit]
 	ids := make([]string, len(result))
 	for i, e := range result {
-		ids[i] = e.ID
+		ids[i] = e.Ref.ID
 	}
 
 	total := len(filtered)
@@ -1095,16 +1070,33 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 		// already delivered message. Only an email in the requested account
 		// may be submitted, even when masquerading as that account.
 		var emailMsg *email.UserEmail
+		var ref *email.EmailRef
+		var fromDraft bool
 		var err error
 		if sessionID != "" {
 			emailMsg, err = h.storage.GetDraft(ctx, sessionID, submission.EmailID)
-			if errors.Is(err, storage.ErrNotFound) {
-				emailMsg, err = h.storage.GetEmail(ctx, submission.EmailID)
+			if err == nil {
+				// Drafts are scoped to the session, so their ref has no
+				// account to compare against the requested one.
+				draftRef := email.EmailRefFromID(submission.EmailID)
+				ref, fromDraft = &draftRef, true
+			} else if errors.Is(err, storage.ErrNotFound) {
+				var listed *email.ListedEmail
+				listed, err = h.storage.GetEmail(ctx, submission.EmailID)
+				if listed != nil {
+					emailMsg, ref = listed.Email, listed.Ref
+				}
 			}
 		} else {
-			emailMsg, err = h.storage.GetEmail(ctx, submission.EmailID)
+			var listed *email.ListedEmail
+			listed, err = h.storage.GetEmail(ctx, submission.EmailID)
+			if listed != nil {
+				emailMsg, ref = listed.Email, listed.Ref
+			}
 		}
-		if err != nil || !strings.EqualFold(emailMsg.AccountID, accountID) {
+		// Delivered mail must carry an account matching the request. Drafts
+		// have no account on their ref; their session scope is the check.
+		if err != nil || emailMsg == nil || (!fromDraft && (ref == nil || !strings.EqualFold(ref.AccountID, accountID))) {
 			notCreated[createID] = map[string]string{"type": "notFound", "description": "Email not found"}
 			continue
 		}
@@ -1127,8 +1119,8 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 				inReplyTo = emailMsg.References[0]
 			}
 			if inReplyTo != "" {
-				if original, err := h.storage.GetEmail(ctx, inReplyTo); err == nil && len(original.To) > 0 {
-					from = original.To[0].Address
+				if original, err := h.storage.GetEmail(ctx, inReplyTo); err == nil && original.Email != nil && len(original.Email.To) > 0 {
+					from = original.Email.To[0].Address
 				}
 			}
 		}
@@ -1487,7 +1479,7 @@ func (h *Handler) getMailboxes(ctx context.Context, accountID string) []Mailbox 
 func (h *Handler) getThreads(ctx context.Context, accountID string) []Thread {
 	// For now, each email is its own thread
 	// A real implementation would group by thread ID (References/In-Reply-To headers)
-	emails, err := h.storage.ListAccountEmails(ctx, accountID, "")
+	emails, err := h.storage.ListEmails(ctx, accountID, "")
 	if err != nil {
 		return []Thread{}
 	}
@@ -1495,8 +1487,8 @@ func (h *Handler) getThreads(ctx context.Context, accountID string) []Thread {
 	threads := make([]Thread, 0, len(emails))
 	for _, e := range emails {
 		threads = append(threads, Thread{
-			ID:       e.ID,
-			EmailIDs: []string{e.ID},
+			ID:       e.Ref.ID,
+			EmailIDs: []string{e.Ref.ID},
 		})
 	}
 	return threads
@@ -1509,7 +1501,7 @@ func (h *Handler) getState(ctx context.Context) string {
 }
 
 func (h *Handler) countEmailsInMailbox(ctx context.Context, accountID, mailboxID string) int {
-	emails, err := h.storage.ListAccountEmails(ctx, accountID, mailboxID)
+	emails, err := h.storage.ListEmails(ctx, accountID, mailboxID)
 	if err != nil {
 		return 0
 	}
@@ -1517,13 +1509,13 @@ func (h *Handler) countEmailsInMailbox(ctx context.Context, accountID, mailboxID
 }
 
 func (h *Handler) countUnreadInMailbox(ctx context.Context, accountID, mailboxID string) int {
-	emails, err := h.storage.ListAccountEmails(ctx, accountID, mailboxID)
+	emails, err := h.storage.ListEmails(ctx, accountID, mailboxID)
 	if err != nil {
 		return 0
 	}
 	count := 0
 	for _, e := range emails {
-		meta, err := h.metadata.Get(ctx, e.ID)
+		meta, err := h.metadata.Get(ctx, e.Ref.ID)
 		if err == nil && !meta.Read {
 			count++
 		}
@@ -1536,11 +1528,14 @@ func (h *Handler) countThreadsInMailbox(ctx context.Context, accountID, mailboxI
 	return h.countEmailsInMailbox(ctx, accountID, mailboxID)
 }
 
-func (h *Handler) toJMAPEmail(ctx context.Context, e *email.UserEmail) (*JMAPEmail, error) {
+func (h *Handler) toJMAPEmail(ctx context.Context, listed *email.ListedEmail) (*JMAPEmail, error) {
+	e := listed.Email
+	id := listed.Ref.ID
+
 	// Get metadata for read/flagged status
-	meta, err := h.metadata.Get(ctx, e.ID)
+	meta, err := h.metadata.Get(ctx, id)
 	if err != nil {
-		meta = metadata.EmailMetadata{ID: e.ID}
+		meta = metadata.EmailMetadata{ID: id}
 	}
 
 	keywords := map[string]bool{}
@@ -1552,9 +1547,8 @@ func (h *Handler) toJMAPEmail(ctx context.Context, e *email.UserEmail) (*JMAPEma
 	}
 
 	// Determine mailbox IDs from the mailbox the message was delivered to.
-	// The delivered key records it (users/<account>/<mailbox>/<file>.eml);
-	// locally created messages use their requested mailbox.
-	mailboxID := e.MailboxID
+	// Locally created messages are stored in the inbox by AddEmail.
+	mailboxID := listed.Ref.MailboxID
 	if mailboxID == "" {
 		mailboxID = "inbox"
 	}
@@ -1609,9 +1603,9 @@ func (h *Handler) toJMAPEmail(ctx context.Context, e *email.UserEmail) (*JMAPEma
 	sentAt := e.Date.UTC().Format(time.RFC3339)
 
 	return &JMAPEmail{
-		ID:            e.ID,
-		BlobID:        e.ID, // Use ID as blobId for now
-		ThreadID:      e.ID, // Each email is its own thread for now
+		ID:            id,
+		BlobID:        id, // Use ID as blobId for now
+		ThreadID:      id, // Each email is its own thread for now
 		MailboxIDs:    mailboxIDs,
 		Keywords:      keywords,
 		Size:          int(e.Size),
@@ -1638,22 +1632,24 @@ func (h *Handler) toJMAPEmail(ctx context.Context, e *email.UserEmail) (*JMAPEma
 	}, nil
 }
 
-func (h *Handler) matchesFilter(e *email.UserEmail, filter *EmailFilter) bool {
+func (h *Handler) matchesFilter(listed *email.ListedEmail, filter *EmailFilter) bool {
 	if filter == nil {
 		return true
 	}
+	e := listed.Email
+	mailboxID := listed.Ref.MailboxID
 
 	// InMailbox filter. Storage resolves this into a mailbox prefix; when the
 	// mailbox is known on the message, verify it as well so a stale or
 	// hand-crafted id cannot be used to read from another mailbox.
-	if filter.InMailbox != nil && e.MailboxID != "" && !strings.EqualFold(e.MailboxID, *filter.InMailbox) {
+	if filter.InMailbox != nil && mailboxID != "" && !strings.EqualFold(mailboxID, *filter.InMailbox) {
 		return false
 	}
 
 	// InMailboxOtherThan filter
-	if e.MailboxID != "" {
+	if mailboxID != "" {
 		for _, mb := range filter.InMailboxOtherThan {
-			if strings.EqualFold(mb, e.MailboxID) {
+			if strings.EqualFold(mb, mailboxID) {
 				return false
 			}
 		}
@@ -1752,11 +1748,4 @@ func (h *Handler) matchesFilter(e *email.UserEmail, filter *EmailFilter) bool {
 
 func stringPtr(s string) *string {
 	return &s
-}
-
-func generateEmailID() string {
-	// Generate a simple unique ID using timestamp and random bytes
-	b := make([]byte, 8)
-	rand.Read(b)
-	return fmt.Sprintf("%x%d", b, time.Now().UnixNano())
 }

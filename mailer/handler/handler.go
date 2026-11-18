@@ -634,11 +634,14 @@ func rawEmailAccount(ctx context.Context, store storage.Storage, id string) (str
 	if accountID, _, ok := email.MailboxFromID(id); ok && accountID != "" {
 		return accountID, nil
 	}
-	msg, err := store.GetEmail(ctx, id)
+	listed, err := store.GetEmail(ctx, id)
 	if err != nil {
 		return "", err
 	}
-	return msg.AccountID, nil
+	if listed.Ref == nil {
+		return "", storage.ErrNotFound
+	}
+	return listed.Ref.AccountID, nil
 }
 
 func handleJMAPPush(w http.ResponseWriter, r *http.Request) {

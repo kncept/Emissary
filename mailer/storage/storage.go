@@ -37,20 +37,22 @@ type SessionStateStore interface {
 type Storage interface {
 	Name() string
 
-	// ListAccountEmails lists messages in a JMAP account's mailbox. accountID
-	// is the account id (the user's email address) and mailboxID is the JMAP
-	// mailbox id (for example "inbox"). An empty mailboxID lists every mailbox
+	// ListEmails lists messages in a JMAP account's mailbox. accountID is the
+	// account id (the user's email address) and mailboxID is the JMAP mailbox
+	// id (for example "inbox"). An empty mailboxID lists every mailbox
 	// belonging to the account. Implementations must never read outside the
 	// account's own storage.
-	ListAccountEmails(ctx context.Context, accountID, mailboxID string) ([]*email.UserEmail, error)
-	GetEmail(ctx context.Context, id string) (*email.UserEmail, error)
+	ListEmails(ctx context.Context, accountID, mailboxID string) ([]*email.ListedEmail, error)
+	// GetEmail returns a message by id, together with the ref describing the
+	// account and mailbox that own it.
+	GetEmail(ctx context.Context, id string) (*email.ListedEmail, error)
 	// GetEmailRaw returns the original RFC 5322 message bytes for id, without
 	// parsing them. It returns ErrNotFound when no such message exists. Stores
 	// that only keep a parsed representation return a best-effort rendering.
 	GetEmailRaw(ctx context.Context, id string) ([]byte, error)
-	// AddEmail adds a new email to the store. Returns ErrNotFound if
-	// an email with the same ID already exists.
-	AddEmail(ctx context.Context, email *email.UserEmail) error
+	// AddEmail stores a new message in the account's inbox and returns the
+	// generated id. The caller uses the returned id to create its metadata.
+	AddEmail(ctx context.Context, accountID string, message *email.UserEmail) (string, error)
 	// DeleteEmail removes the message with the given id. It returns
 	// ErrNotFound when no such message exists.
 	DeleteEmail(ctx context.Context, id string) error

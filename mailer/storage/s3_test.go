@@ -144,7 +144,7 @@ func TestS3StorageObjectExists(t *testing.T) {
 	}
 }
 
-func TestS3StorageListAccountEmailsUsesMailboxPrefixAndFullKey(t *testing.T) {
+func TestS3StorageListEmailsUsesMailboxPrefixAndFullKey(t *testing.T) {
 	const aliceKey = "users/alice@example.com/inbox/20261117T120000_ses-id.eml"
 	fake := newFakeS3(map[string]string{
 		"ses-staging-id": testMessage,
@@ -154,25 +154,25 @@ func TestS3StorageListAccountEmailsUsesMailboxPrefixAndFullKey(t *testing.T) {
 	})
 	store := &S3Storage{client: fake, bucket: "mail-bucket"}
 
-	emails, err := store.ListAccountEmails(context.Background(), "Alice@Example.com", "inbox")
+	emails, err := store.ListEmails(context.Background(), "Alice@Example.com", "inbox")
 	if err != nil {
-		t.Fatalf("ListAccountEmails() error = %v", err)
+		t.Fatalf("ListEmails() error = %v", err)
 	}
 	if len(emails) != 1 {
-		t.Fatalf("ListAccountEmails() returned %d emails, want 1", len(emails))
+		t.Fatalf("ListEmails() returned %d emails, want 1", len(emails))
 	}
-	if emails[0].ID != aliceKey {
-		t.Errorf("ID = %q, want full delivered key %q", emails[0].ID, aliceKey)
+	if emails[0].Ref.ID != aliceKey {
+		t.Errorf("ID = %q, want full delivered key %q", emails[0].Ref.ID, aliceKey)
 	}
-	if emails[0].AccountID != "alice@example.com" || emails[0].MailboxID != "inbox" {
-		t.Errorf("account/mailbox = %q/%q, want alice@example.com/inbox", emails[0].AccountID, emails[0].MailboxID)
+	if emails[0].Ref.AccountID != "alice@example.com" || emails[0].Ref.MailboxID != "inbox" {
+		t.Errorf("account/mailbox = %q/%q, want alice@example.com/inbox", emails[0].Ref.AccountID, emails[0].Ref.MailboxID)
 	}
 	if len(fake.requested) != 1 || fake.requested[0] != aliceKey {
 		t.Errorf("requested keys = %v, want only [%s]", fake.requested, aliceKey)
 	}
 }
 
-func TestS3StorageListAccountEmailsHonorsConfiguredPrefix(t *testing.T) {
+func TestS3StorageListEmailsHonorsConfiguredPrefix(t *testing.T) {
 	const key = "emails/users/bob@example.com/inbox/20261117_ses-id.eml"
 	fake := newFakeS3(map[string]string{
 		key:                                     testMessage,
@@ -180,23 +180,23 @@ func TestS3StorageListAccountEmailsHonorsConfiguredPrefix(t *testing.T) {
 	})
 	store := &S3Storage{client: fake, bucket: "mail-bucket", prefix: "emails"}
 
-	emails, err := store.ListAccountEmails(context.Background(), "bob@example.com", "inbox")
+	emails, err := store.ListEmails(context.Background(), "bob@example.com", "inbox")
 	if err != nil {
-		t.Fatalf("ListAccountEmails() error = %v", err)
+		t.Fatalf("ListEmails() error = %v", err)
 	}
-	if len(emails) != 1 || emails[0].ID != key {
-		t.Fatalf("ListAccountEmails() = %v, want only %s", emails, key)
+	if len(emails) != 1 || emails[0].Ref.ID != key {
+		t.Fatalf("ListEmails() = %v, want only %s", emails, key)
 	}
 }
 
-func TestS3StorageListAccountEmailsRequiresAccount(t *testing.T) {
+func TestS3StorageListEmailsRequiresAccount(t *testing.T) {
 	store := &S3Storage{client: newFakeS3(nil), bucket: "mail-bucket"}
-	if _, err := store.ListAccountEmails(context.Background(), "", "inbox"); err == nil {
-		t.Error("ListAccountEmails() with empty accountID should fail")
+	if _, err := store.ListEmails(context.Background(), "", "inbox"); err == nil {
+		t.Error("ListEmails() with empty accountID should fail")
 	}
 }
 
-func TestS3StorageListAccountEmailsSkipsSystemFilesAndNonEmlObjects(t *testing.T) {
+func TestS3StorageListEmailsSkipsSystemFilesAndNonEmlObjects(t *testing.T) {
 	const aliceKey = "users/alice@example.com/inbox/20261117T120000_ses-id.eml"
 	fake := newFakeS3(map[string]string{
 		aliceKey: testMessage,
@@ -209,12 +209,12 @@ func TestS3StorageListAccountEmailsSkipsSystemFilesAndNonEmlObjects(t *testing.T
 	})
 	store := &S3Storage{client: fake, bucket: "mail-bucket"}
 
-	emails, err := store.ListAccountEmails(context.Background(), "alice@example.com", "")
+	emails, err := store.ListEmails(context.Background(), "alice@example.com", "")
 	if err != nil {
-		t.Fatalf("ListAccountEmails() error = %v", err)
+		t.Fatalf("ListEmails() error = %v", err)
 	}
-	if len(emails) != 1 || emails[0].ID != aliceKey {
-		t.Fatalf("ListAccountEmails() = %v, want only %s", emails, aliceKey)
+	if len(emails) != 1 || emails[0].Ref.ID != aliceKey {
+		t.Fatalf("ListEmails() = %v, want only %s", emails, aliceKey)
 	}
 	for _, key := range fake.requested {
 		if key != aliceKey {
@@ -232,14 +232,14 @@ func TestS3StorageGetEmailReadsSESMessageKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEmail() error = %v", err)
 	}
-	if got.ID != key {
-		t.Errorf("ID = %q, want %q", got.ID, key)
+	if got.Ref.ID != key {
+		t.Errorf("ID = %q, want %q", got.Ref.ID, key)
 	}
-	if got.Subject != "Hello" {
-		t.Errorf("Subject = %q, want %q", got.Subject, "Hello")
+	if got.Email.Subject != "Hello" {
+		t.Errorf("Subject = %q, want %q", got.Email.Subject, "Hello")
 	}
-	if got.From.Address != "alice@example.com" {
-		t.Errorf("From = %q, want %q", got.From.Address, "alice@example.com")
+	if got.Email.From.Address != "alice@example.com" {
+		t.Errorf("From = %q, want %q", got.Email.From.Address, "alice@example.com")
 	}
 
 	for _, requested := range fake.requested {
@@ -260,8 +260,8 @@ func TestS3StorageGetEmailHonorsPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEmail() error = %v", err)
 	}
-	if got.ID != "emails/one" {
-		t.Fatalf("GetEmail().ID = %q, want emails/one", got.ID)
+	if got.Ref.ID != "emails/one" {
+		t.Fatalf("GetEmail().ID = %q, want emails/one", got.Ref.ID)
 	}
 }
 
@@ -384,10 +384,8 @@ func TestS3StorageSessionDraftsAndCreatedIDs(t *testing.T) {
 	store := &S3Storage{client: fake, bucket: "mail-bucket"}
 	ctx := context.Background()
 	message := &email.UserEmail{
-		ID:        "create1",
-		AccountID: "alice@example.com",
-		Subject:   "draft subject",
-		Text:      "draft body",
+		Subject: "draft subject",
+		Text:    "draft body",
 	}
 
 	id, err := store.PutDraft(ctx, "session-1", "create1", message)
@@ -439,7 +437,7 @@ func TestS3StorageSessionDraftsAndCreatedIDs(t *testing.T) {
 func TestS3StorageSessionKeysRejectTraversal(t *testing.T) {
 	fake := newFakeS3(map[string]string{})
 	store := &S3Storage{client: fake, bucket: "mail-bucket"}
-	message := &email.UserEmail{ID: "create1"}
+	message := &email.UserEmail{}
 
 	if _, err := store.PutDraft(context.Background(), "../bad", "create1", message); err == nil {
 		t.Error("PutDraft() with traversal session id succeeded")

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,14 +19,14 @@ var _ Storage = (*MemoryStorage)(nil)
 // development and tests; messages are lost when the process exits.
 type MemoryStorage struct {
 	mu         sync.RWMutex
-	emails     map[string]*email.UserEmail
+	emails     map[string]*email.ListedEmail
 	drafts     map[string]map[string][]byte
 	sessionIDs map[string]map[string]string
 }
 
 func NewMemoryStorage() *MemoryStorage {
 	return &MemoryStorage{
-		emails:     make(map[string]*email.UserEmail),
+		emails:     make(map[string]*email.ListedEmail),
 		drafts:     make(map[string]map[string][]byte),
 		sessionIDs: make(map[string]map[string]string),
 	}
@@ -35,35 +36,49 @@ func (s *MemoryStorage) Name() string {
 	return "MemoryStorage"
 }
 
-// AddEmail implements the Storage interface.
-func (s *MemoryStorage) AddEmail(_ context.Context, e *email.UserEmail) error {
-	if e == nil || e.ID == "" {
-		return errors.New("invalid email")
+// AddEmail implements the Storage interface. The id is generated here so the
+// caller can use it to create the message's metadata. New messages go to the
+// account's inbox; there is no mailbox argument.
+func (s *MemoryStorage) AddEmail(_ context.Context, accountID string, message *email.UserEmail) (string, error) {
+	if strings.TrimSpace(accountID) == "" {
+		return "", errors.New("accountID is required")
 	}
+	if message == nil {
+		return "", errors.New("invalid email")
+	}
+	id, err := newEmailID()
+	if err != nil {
+		return "", err
+	}
+	listed := &email.ListedEmail{
+		Ref:   &email.EmailRef{ID: id, AccountID: accountID, MailboxID: "inbox"},
+		Email: cloneMessage(message),
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.emails[e.ID]; ok {
-		return errors.New("email already exists")
+	if _, ok := s.emails[id]; ok {
+		return "", errors.New("email already exists")
 	}
-	s.emails[e.ID] = clone(e)
-	return nil
+	s.emails[id] = listed
+	return id, nil
 }
 
-// Add inserts an email. It is not part of Storage and exists for local
-// development and tests.
-func (s *MemoryStorage) Add(e *email.UserEmail) {
-	if e == nil || e.ID == "" {
+// Add inserts a listed email. It is not part of Storage and exists for local
+// development and tests, which supply their own ids and mailboxes.
+func (s *MemoryStorage) Add(listed *email.ListedEmail) {
+	if listed == nil || listed.Ref == nil || listed.Ref.ID == "" {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.emails[e.ID] = clone(e)
+	s.emails[listed.Ref.ID] = clone(listed)
 }
 
-// ListAccountEmails implements the Storage interface. Messages are matched by
-// the account and mailbox recorded on them (derived from the delivered object
-// key), which is the in-memory equivalent of reading a user's mailbox prefix.
-func (s *MemoryStorage) ListAccountEmails(_ context.Context, accountID, mailboxID string) ([]*email.UserEmail, error) {
+// ListEmails implements the Storage interface. Messages are matched by the
+// account and mailbox on their refs, which is the in-memory equivalent of
+// reading a user's mailbox prefix.
+func (s *MemoryStorage) ListEmails(_ context.Context, accountID, mailboxID string) ([]*email.ListedEmail, error) {
 	if strings.TrimSpace(accountID) == "" {
 		return nil, fmt.Errorf("accountID is required")
 	}
@@ -71,26 +86,26 @@ func (s *MemoryStorage) ListAccountEmails(_ context.Context, accountID, mailboxI
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	emails := make([]*email.UserEmail, 0, len(s.emails))
+	emails := make([]*email.ListedEmail, 0, len(s.emails))
 	for _, e := range s.emails {
-		if !strings.EqualFold(e.AccountID, accountID) {
+		if !strings.EqualFold(e.Ref.AccountID, accountID) {
 			continue
 		}
-		if mailboxID != "" && !strings.EqualFold(e.MailboxID, mailboxID) {
+		if mailboxID != "" && !strings.EqualFold(e.Ref.MailboxID, mailboxID) {
 			continue
 		}
 		emails = append(emails, clone(e))
 	}
 	sort.Slice(emails, func(i, j int) bool {
-		if emails[i].Date.Equal(emails[j].Date) {
-			return emails[i].ID > emails[j].ID
+		if emails[i].Email.Date.Equal(emails[j].Email.Date) {
+			return emails[i].Ref.ID > emails[j].Ref.ID
 		}
-		return emails[i].Date.After(emails[j].Date)
+		return emails[i].Email.Date.After(emails[j].Email.Date)
 	})
 	return emails, nil
 }
 
-func (s *MemoryStorage) GetEmail(_ context.Context, id string) (*email.UserEmail, error) {
+func (s *MemoryStorage) GetEmail(_ context.Context, id string) (*email.ListedEmail, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -113,7 +128,7 @@ func (s *MemoryStorage) GetEmailRaw(_ context.Context, id string) ([]byte, error
 	if !ok {
 		return nil, ErrNotFound
 	}
-	return email.RawFromUserEmail(e), nil
+	return email.RawFromUserEmail(e.Email), nil
 }
 
 // DeleteEmail implements the Storage interface.
@@ -206,11 +221,35 @@ func (s *MemoryStorage) SaveCreatedIDs(_ context.Context, sessionID string, ids 
 	return nil
 }
 
-func clone(e *email.UserEmail) *email.UserEmail {
+func clone(listed *email.ListedEmail) *email.ListedEmail {
+	copied := &email.ListedEmail{
+		Ref:   nil,
+		Email: cloneMessage(listed.Email),
+	}
+	if listed.Ref != nil {
+		ref := *listed.Ref
+		copied.Ref = &ref
+	}
+	return copied
+}
+
+func cloneMessage(e *email.UserEmail) *email.UserEmail {
+	if e == nil {
+		return nil
+	}
 	copied := *e
 	copied.ReplyTo = append([]email.Address(nil), e.ReplyTo...)
 	copied.To = append([]email.Address(nil), e.To...)
 	copied.Cc = append([]email.Address(nil), e.Cc...)
 	copied.Bcc = append([]email.Address(nil), e.Bcc...)
 	return &copied
+}
+
+// newEmailID returns a unique id for a locally added message.
+func newEmailID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate email id: %w", err)
+	}
+	return fmt.Sprintf("%x", b), nil
 }

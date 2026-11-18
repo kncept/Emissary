@@ -107,22 +107,18 @@ func TestIsDeliveredMessageKey(t *testing.T) {
 	}
 }
 
-func TestParse_DerivesAccountAndMailboxFromDeliveredKey(t *testing.T) {
+func TestEmailRefFromID_DerivesAccountAndMailboxFromDeliveredKey(t *testing.T) {
 	const key = "users/alice@example.com/inbox/20261117T120000_ses-id.eml"
-	raw := "From: sender@example.com\r\nSubject: Hello\r\nDate: Mon, 1 Jan 2024 12:00:00 +0000\r\n\r\nBody\r\n"
 
-	msg, err := Parse(key, strings.NewReader(raw))
-	if err != nil {
-		t.Fatalf("Parse() error = %v", err)
+	ref := EmailRefFromID(key)
+	if ref.ID != key {
+		t.Errorf("ID = %q, want full object key %q", ref.ID, key)
 	}
-	if msg.ID != key {
-		t.Errorf("ID = %q, want full object key %q", msg.ID, key)
+	if ref.AccountID != "alice@example.com" {
+		t.Errorf("AccountID = %q, want alice@example.com", ref.AccountID)
 	}
-	if msg.AccountID != "alice@example.com" {
-		t.Errorf("AccountID = %q, want alice@example.com", msg.AccountID)
-	}
-	if msg.MailboxID != "inbox" {
-		t.Errorf("MailboxID = %q, want inbox", msg.MailboxID)
+	if ref.MailboxID != "inbox" {
+		t.Errorf("MailboxID = %q, want inbox", ref.MailboxID)
 	}
 }
 
@@ -140,9 +136,6 @@ Hello World
 		t.Fatalf("Parse() error = %v", err)
 	}
 
-	if msg.ID != "test-id" {
-		t.Errorf("ID = %q, want %q", msg.ID, "test-id")
-	}
 	if msg.From.Address != "sender@example.com" {
 		t.Errorf("From = %q, want %q", msg.From.Address, "sender@example.com")
 	}
@@ -769,11 +762,8 @@ Content-Type: text/html; charset=utf-8
 `
 
 	wfe := ParseWireFormat("test-id", strings.NewReader(raw))
-	userEmail := wfe.ToUserEmail("test-id")
+	userEmail := wfe.ToUserEmail()
 
-	if userEmail.ID != "test-id" {
-		t.Errorf("ID = %q, want %q", userEmail.ID, "test-id")
-	}
 	if userEmail.From.Name != "Sender Name" || userEmail.From.Address != "sender@example.com" {
 		t.Errorf("From = %v, want {Sender Name, sender@example.com}", userEmail.From)
 	}

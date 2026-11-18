@@ -72,7 +72,7 @@ listens with `net/http` and uses the memory/log implementations.
 | `awsutil` | Lambda detection and Secrets Manager access. |
 | `auth` | JWT issue/validate (`Claims`: `sub`, `sid`, `systemManager`, `EmissaryUserManagement`, `iat`, `exp`, optional `aud`/`iss`). |
 | `usermanager` | Pluggable login backends; every backend also knows the built-in admin. |
-| `storage` | Mail source: `ListAccountEmails` (scoped by JMAP `accountId`/`mailboxId`), plus `GetEmail`, `DeleteEmail`, and support-only bucket operations. |
+| `storage` | Mail source: `ListEmails` (scoped by JMAP `accountId`/`mailboxId`), plus `GetEmail`, `AddEmail`, `DeleteEmail`, and support-only bucket operations. |
 | `sender` | Write side of mail: `Send`. |
 | `metadata` | Per-message read/flag state, discarded when a message is deleted. |
 | `email` | RFC 5322 parsing: `WireFormatEmail` (full structure) and `UserEmail` (simplified). |
@@ -234,11 +234,15 @@ enabling independent management (move, delete, flag) per user.
   (headers, MIME tree, transfer encodings, charsets, folded headers).
   Parse errors are collected, not fatal. It can serialize back to wire
   format. MIME parts are capped at 10 MiB.
-- `email.UserEmail` — the simplified view used everywhere else: the full
-  delivered object key as id, its derived `AccountID`/`MailboxID`,
+- `email.EmailRef` — metadata about where a message lives: its storage id
+  plus the derived `AccountID`/`MailboxID`.
+- `email.UserEmail` — the simplified message content used everywhere else:
   addresses, subject, date, text and HTML bodies.
+- `email.ListedEmail` — a storage listing result pairing an `EmailRef` with
+  its `UserEmail`.
 - `email.Parse` is the convenience path used by storage; attachments
-  and other non-text parts are ignored.
+  and other non-text parts are ignored. Use `email.EmailRefFromID` to build
+  the ref for a stored id.
 
 ## Frontend
 

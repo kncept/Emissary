@@ -157,15 +157,15 @@ func addEmail(store *storage.MemoryStorage, id, from string, to ...string) {
 	if len(recipients) > 0 {
 		accountID = recipients[0].Address
 	}
-	store.Add(&email.UserEmail{
-		ID:        id,
-		AccountID: accountID,
-		MailboxID: "inbox",
-		From:      email.Address{Address: from},
-		To:        recipients,
-		Subject:   "subject " + id,
-		Date:      time.Now(),
-		Text:      "body " + id,
+	store.Add(&email.ListedEmail{
+		Ref: &email.EmailRef{ID: id, AccountID: accountID, MailboxID: "inbox"},
+		Email: &email.UserEmail{
+			From:    email.Address{Address: from},
+			To:      recipients,
+			Subject: "subject " + id,
+			Date:    time.Now(),
+			Text:    "body " + id,
+		},
 	})
 }
 
