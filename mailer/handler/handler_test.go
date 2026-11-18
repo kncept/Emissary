@@ -967,6 +967,79 @@ func TestSendEmailFromVerification(t *testing.T) {
 	}
 }
 
+// TestSendEmailWithCreationReference reproduces the SPA send flow: a single
+// batch creates a draft with creation id "create1" and then submits it using
+// the JMAP creation reference "#create1" instead of the real (server-assigned)
+// id. Before creation references were resolved this failed with notFound.
+func TestSendEmailWithCreationReference(t *testing.T) {
+	h, _, capture := newHandlerForTest(t, "secret")
+	_, bobToken, _ := login(t, h, "bob@example.com", "anything")
+
+	resp := jmapRequest(t, h, bobToken,
+		[]string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"},
+		[]JmapMethodCall{
+			{"Email/set", map[string]interface{}{
+				"accountId": "bob@example.com",
+				"create": map[string]interface{}{
+					"create1": map[string]interface{}{
+						"mailboxIds": map[string]bool{"drafts": true},
+						"keywords":   map[string]bool{"$draft": true},
+						"from":       []map[string]string{{"email": "bob@example.com", "name": ""}},
+						"to":         []map[string]string{{"email": "dave@example.com", "name": ""}},
+						"subject":    "creation reference",
+						"textBody":   []map[string]interface{}{{"partId": "text1", "type": "text/plain", "size": 4}},
+						"bodyValues": map[string]interface{}{"text1": map[string]interface{}{"value": "body"}},
+					},
+				},
+			}, "emailCreate"},
+			{"EmailSubmission/set", map[string]interface{}{
+				"accountId": "bob@example.com",
+				"create": map[string]interface{}{
+					"submission1": map[string]interface{}{
+						"identityId": "primary",
+						"emailId":    "#create1",
+					},
+				},
+				"onSuccessUpdateEmail": map[string]interface{}{
+					"#submission1": map[string]interface{}{"keywords/$draft": nil},
+				},
+			}, "submissionCreate"},
+		})
+
+	responses, _ := resp["methodResponses"].([]interface{})
+	for _, raw := range responses {
+		call, _ := raw.([]interface{})
+		if len(call) < 2 {
+			continue
+		}
+		result, _ := call[1].(map[string]interface{})
+		if call[0] == "error" {
+			t.Fatalf("unexpected JMAP error: %v", result)
+		}
+		for _, key := range []string{"notCreated", "notUpdated", "notDestroyed"} {
+			if problems, _ := result[key].(map[string]interface{}); len(problems) != 0 {
+				t.Fatalf("%s returned %s: %v", call[0], key, problems)
+			}
+		}
+	}
+
+	if len(capture.messages) != 1 {
+		t.Fatalf("sent %d messages, want 1: %+v", len(capture.messages), capture.messages)
+	}
+	if got := capture.messages[0].From.Address; got != "bob@example.com" {
+		t.Errorf("sent From = %q, want bob@example.com", got)
+	}
+
+	createdIDs, _ := resp["createdIds"].(map[string]interface{})
+	emailID, ok := createdIDs["create1"].(string)
+	if !ok || emailID == "" || strings.HasPrefix(emailID, "#") {
+		t.Fatalf("response createdIds = %v, want create1 mapped to a real id", createdIDs)
+	}
+	if got := createdIDs["submission1"]; got != emailID {
+		t.Errorf("submission1 createdId = %v, want %q", got, emailID)
+	}
+}
+
 func TestSendEmailWithCCAndBCC(t *testing.T) {
 	h, _, sender := newHandlerForTest(t, "secret")
 

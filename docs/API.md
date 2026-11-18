@@ -311,6 +311,20 @@ Example response:
 }
 ```
 
+### Creation-id references
+
+A `/set` method call may assign a client-side creation id to each object it
+creates. Later calls in the same batch can refer to the server-assigned id
+with `#<creationId>` (for example `EmailSubmission/set` with
+`"emailId": "#create1"` after an `Email/set` created `create1`). The
+dispatcher resolves these references in argument values and map keys before
+invoking each method. Unresolved references are passed through unchanged and
+are reported as `notFound` by the method handler.
+
+The response includes a `createdIds` map of every creation id used in the
+batch to its server-assigned id. A client may send that map back as the
+request's `createdIds` to continue a batch after a dropped connection.
+
 Email IDs are the full delivered object keys, including the received
 timestamp (ISO 8601 basic UTC, e.g. `20240308T143000`) and `.eml` suffix.
 They contain `/`, so clients must URL-encode

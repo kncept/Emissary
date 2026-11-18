@@ -133,6 +133,7 @@ it. When renaming tests, keep this table in sync.
 | JWT `sub` is the user id (the user's email address); `systemManager: true` for the built-in admin and System Manager users; no `admin` claim | `handler` `TestJWTIncludesUserIDAndSystemManagerOnlyForAdmin`, `auth` tests |
 | Blank `PASSWORD` disables admin login without affecting other managers | `handler` `TestBlankAdminPasswordDisablesAdminLogin`, `usermanager` tests |
 | Ordinary users must send from their own address; callers with masquerade permission may use another From; replies default to the original recipient; masqueraded Reply-To must match From | `handler` `TestSendEmailFromRules`, `TestSendEmailFromVerification`; `jmap` `TestEmailSubmissionSetFromVerification`, `TestEmailSubmissionSetMasqueradeReplyTo`, `TestEmailSetStoresReplyTo` |
+| JMAP creation references (`#id`) are resolved across batched calls, including seeded `createdIds`, and echoed in the response | `handler` `TestSendEmailWithCreationReference`; `jmap` `TestResolveCreationIDs`, `TestDispatchRequestResolvesCreationReferences` |
 | Deleting an email also removes its metadata | `handler` `TestDeleteEmailAlsoDeletesMetadata` |
 | Expired, future and wrong-audience/issuer tokens are rejected | `auth` `TestAuthenticator_Validate_*` |
 | Delivered ids are full object keys (timestamp + `.eml`) and account/mailbox are derived from them | `email` `TestMailboxFromID`, `TestParse_DerivesAccountAndMailboxFromDeliveredKey`, `storage` `TestS3StorageListAccountEmails*` |

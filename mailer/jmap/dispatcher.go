@@ -1,6 +1,7 @@
 package jmap
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -103,6 +104,105 @@ type Response struct {
 	SessionState    string            `json:"sessionState"`
 }
 
+// resolveCreationIDs recursively replaces creation references ("#creationId")
+// in a decoded JSON value with the server-assigned id from createdIDs. Both
+// string values and object keys are handled; the latter is required by
+// arguments such as EmailSubmission/set's onSuccessUpdateEmail, which is
+// keyed by Email id. Unresolved references are left unchanged so the method
+// handler reports the appropriate notFound error.
+func resolveCreationIDs(value interface{}, createdIDs map[string]string) interface{} {
+	switch v := value.(type) {
+	case string:
+		if creationID, ok := creationReference(v); ok {
+			if id, found := createdIDs[creationID]; found {
+				return id
+			}
+		}
+		return v
+	case []interface{}:
+		for i, item := range v {
+			v[i] = resolveCreationIDs(item, createdIDs)
+		}
+		return v
+	case map[string]interface{}:
+		resolved := make(map[string]interface{}, len(v))
+		for key, item := range v {
+			if creationID, ok := creationReference(key); ok {
+				if id, found := createdIDs[creationID]; found {
+					key = id
+				}
+			}
+			resolved[key] = resolveCreationIDs(item, createdIDs)
+		}
+		return resolved
+	default:
+		return value
+	}
+}
+
+// creationReference reports whether s is a JMAP creation reference and, if so,
+// returns the creation id without the leading '#'.
+func creationReference(s string) (string, bool) {
+	if len(s) > 1 && s[0] == '#' {
+		return s[1:], true
+	}
+	return "", false
+}
+
+// resolveCallCreationIDs applies creation-id resolution to a method call's
+// arguments. Using UseNumber preserves JSON number representations exactly.
+func resolveCallCreationIDs(args map[string]json.RawMessage, createdIDs map[string]string) (map[string]json.RawMessage, error) {
+	if len(createdIDs) == 0 {
+		return args, nil
+	}
+
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var generic interface{}
+	if err := decoder.Decode(&generic); err != nil {
+		return nil, err
+	}
+
+	resolved, err := json.Marshal(resolveCreationIDs(generic, createdIDs))
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(resolved, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// recordCreatedIDs records the server-assigned ids returned in a method
+// response's "created" map so later calls in the same batch can reference
+// them. This covers all /set methods (including EmailSubmission/set) as well
+// as /copy and /import.
+func recordCreatedIDs(response Invocation, createdIDs map[string]string) {
+	if response.Name == "error" {
+		return
+	}
+	createdRaw, ok := response.Arguments["created"]
+	if !ok {
+		return
+	}
+	var created map[string]struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(createdRaw, &created); err != nil {
+		return
+	}
+	for creationID, object := range created {
+		if object.ID != "" {
+			createdIDs[creationID] = object.ID
+		}
+	}
+}
+
 // DispatchRequest processes a batch of method calls and returns the responses.
 func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID string, claims *auth.Claims, req *Request) (*Response, error) {
 	// Method handlers need the caller's identity and privileges to authorise
@@ -110,9 +210,26 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 	// belong to the caller (or the caller must be allowed to masquerade).
 	ctx = ContextWithClaims(ctx, claims)
 
+	// Seed the creation-id map from the request so a client can continue a
+	// batch that was interrupted before it received the previous response.
+	createdIDs := make(map[string]string, len(req.CreatedIDs))
+	for creationID, id := range req.CreatedIDs {
+		createdIDs[creationID] = id
+	}
+
 	responses := make([]Invocation, 0, len(req.MethodCalls))
 
 	for _, call := range req.MethodCalls {
+		// Resolve JMAP creation references (e.g. "#create1") in the call's
+		// arguments using the ids created by earlier calls in this batch (or
+		// supplied by the client in createdIds).
+		resolvedArgs, err := resolveCallCreationIDs(call.Arguments, createdIDs)
+		if err != nil {
+			responses = append(responses, d.errorResponse(call, fmt.Errorf("invalidArguments: %w", err)))
+			continue
+		}
+		call.Arguments = resolvedArgs
+
 		// Extract accountId from method arguments, fallback to default
 		accountID := defaultAccountID
 		if call.Arguments != nil {
@@ -137,12 +254,13 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 			// Return an error response for this method call
 			resp = d.errorResponse(call, err)
 		}
+		recordCreatedIDs(resp, createdIDs)
 		responses = append(responses, resp)
 	}
 
 	return &Response{
 		MethodResponses: responses,
-		CreatedIDs:      req.CreatedIDs,
+		CreatedIDs:      createdIDs,
 		SessionState:    "", // Will be set by caller
 	}, nil
 }
