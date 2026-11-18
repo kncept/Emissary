@@ -30,7 +30,7 @@ func TestLoad_Defaults(t *testing.T) {
 		os.Unsetenv("PORT")
 		os.Unsetenv("METADATA_REGION")
 		os.Unsetenv("AWS_REGION")
-		envutil.ClearCache()
+		clearAWSCredentialEnv()
 	}()
 
 	cfg, err := Load(context.Background())
@@ -495,6 +495,66 @@ func TestLoad_MtaSenderConfig(t *testing.T) {
 	}
 }
 
+func TestLoad_SenderAutoSelect(t *testing.T) {
+	tests := []struct {
+		name   string
+		sender string
+		env    map[string]string
+		want   string
+	}{
+		{"no credentials", "", nil, "log"},
+		{"access key pair", "", map[string]string{
+			"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
+		}, "aws-ses"},
+		{"incomplete access key pair", "", map[string]string{
+			"AWS_ACCESS_KEY_ID": "key",
+		}, "log"},
+		{"shared profile", "", map[string]string{"AWS_PROFILE": "dev"}, "aws-ses"},
+		{"web identity", "", map[string]string{
+			"AWS_WEB_IDENTITY_TOKEN_FILE": "/token", "AWS_ROLE_ARN": "arn:aws:iam::123456789012:role/test",
+		}, "aws-ses"},
+		{"container credentials", "", map[string]string{
+			"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/credentials/test",
+		}, "aws-ses"},
+		{"explicit sender wins over credentials", "mta", map[string]string{
+			"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
+		}, "mta"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearAWSCredentialEnv()
+			defer cleanupEnv()
+
+			os.Setenv("USERNAME", "testuser")
+			if tt.sender != "" {
+				os.Setenv("SENDER", tt.sender)
+			}
+			for key, value := range tt.env {
+				os.Setenv(key, value)
+			}
+
+			cfg, err := Load(context.Background())
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Sender.Type != tt.want {
+				t.Errorf("Sender.Type = %q, want %q", cfg.Sender.Type, tt.want)
+			}
+		})
+	}
+}
+
+func clearAWSCredentialEnv() {
+	for _, key := range []string{
+		"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_PROFILE", "AWS_DEFAULT_PROFILE",
+		"AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN",
+		"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+	} {
+		os.Unsetenv(key)
+	}
+	envutil.ClearCache()
+}
+
 func TestMetadataConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -619,5 +679,5 @@ func cleanupEnv() {
 	os.Unsetenv("USER_TABLE")
 	os.Unsetenv("USER_REGION")
 	os.Unsetenv("AWS_REGION")
-	envutil.ClearCache()
+	clearAWSCredentialEnv()
 }

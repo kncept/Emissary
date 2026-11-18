@@ -30,7 +30,7 @@ deployed Lambda receives its JWT secret as an ARN.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SENDER` | `log` | `aws-ses` (alias `ses`), `mta` or `log`. |
+| `SENDER` | `aws-ses` when AWS credentials are configured, otherwise `log` | `aws-ses` (alias `ses`), `mta` or `log`. |
 | `MTA_PORT` | `25` | SMTP port used by the `mta` sender (e.g. `1025` for a local mail sink). |
 
 There is no configured From address. From is always the submitting user's own
@@ -103,6 +103,7 @@ names.
 | Variable | Description |
 | --- | --- |
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | Default region for DynamoDB and the SDK config chain. |
+| AWS credentials | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, `AWS_PROFILE`, a web identity token (`AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN`) or ECS container credentials. When configured and `SENDER` is unset, the sender defaults to `aws-ses`. |
 | `AWS_LAMBDA_FUNCTION_NAME` | Presence switches `cmd/frontend` into Lambda mode (set by the Lambda runtime). |
 
 ## Local runs (`run.sh run`)

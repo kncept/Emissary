@@ -295,9 +295,15 @@ func Load(ctx context.Context) (*Config, error) {
 		}
 	}
 
-	// Sender defaults
+	// Sender defaults. When AWS credentials are available, SES is the
+	// natural outbound transport; otherwise fall back to local logging so
+	// development works without any AWS setup.
 	if cfg.Sender.Type == "" {
-		cfg.Sender.Type = "log"
+		if hasAWSCredentials(ctx) {
+			cfg.Sender.Type = "aws-ses"
+		} else {
+			cfg.Sender.Type = "log"
+		}
 	}
 
 	// Metadata defaults
@@ -365,4 +371,21 @@ func firstEnvDefault(ctx context.Context, fallback string, names ...string) stri
 		return value
 	}
 	return fallback
+}
+
+// hasAWSCredentials reports whether AWS credentials are configured in the
+// process environment. It covers the environment-based sources used by the
+// AWS SDK's default credential chain: static access keys, shared-config
+// profiles, web identity tokens and ECS container credentials.
+func hasAWSCredentials(ctx context.Context) bool {
+	if firstEnv(ctx, "AWS_ACCESS_KEY_ID") != "" && firstEnv(ctx, "AWS_SECRET_ACCESS_KEY") != "" {
+		return true
+	}
+	if firstEnv(ctx, "AWS_PROFILE", "AWS_DEFAULT_PROFILE") != "" {
+		return true
+	}
+	if firstEnv(ctx, "AWS_WEB_IDENTITY_TOKEN_FILE") != "" && firstEnv(ctx, "AWS_ROLE_ARN") != "" {
+		return true
+	}
+	return firstEnv(ctx, "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI") != ""
 }
