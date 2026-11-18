@@ -543,6 +543,16 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			notDestroyed[id] = map[string]string{"type": "notFound", "description": "Email not found"}
 			continue
 		}
+		// Delete the metadata record before the message. Metadata Delete is
+		// idempotent, so if the storage delete fails a client retry can safely
+		// repeat it; deleting the message first could leave metadata behind
+		// that a retry can no longer reach. If metadata deletion fails, keep
+		// the message so the whole destroy can be retried.
+		if err := h.metadata.Delete(ctx, id); err != nil {
+			log.Printf("failed to delete metadata for email %q: %v", id, err)
+			notDestroyed[id] = map[string]string{"type": "serverFail", "description": "Failed to delete metadata: " + err.Error()}
+			continue
+		}
 		if err := h.storage.DeleteEmail(ctx, id); err != nil {
 			if errors.Is(err, storage.ErrNotFound) {
 				notDestroyed[id] = map[string]string{"type": "notFound", "description": "Email not found"}
@@ -551,7 +561,6 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			}
 			continue
 		}
-		h.metadata.Delete(ctx, id)
 		destroyed = append(destroyed, id)
 	}
 
@@ -722,12 +731,11 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			}
 		}
 
-		// Initialize metadata
-		if err := h.metadata.Save(ctx, metadata.EmailMetadata{
-			ID:      newID,
-			Read:    keywords["$seen"],
-			Flagged: keywords["$flagged"],
-		}); err != nil {
+		// Initialize metadata. Created emails carry their JMAP keywords, and
+		// the constructor stamps a server-owned receivedAt. Deliveries get a
+		// record from the receiver with no keywords. Any client-supplied
+		// receivedAt property is intentionally ignored.
+		if err := h.metadata.Save(ctx, metadata.NewEmailMetadataFromMap(newID, keywords)); err != nil {
 			notCreated[createID] = map[string]string{"type": "serverFail", "description": "Failed to save metadata: " + err.Error()}
 			continue
 		}
@@ -737,9 +745,30 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 		}
 	}
 
-	// Update is not implemented
-	for id := range req.Update {
-		notUpdated[id] = map[string]string{"type": "forbidden", "description": "Email update not supported"}
+	// Handle keyword updates. JMAP /set.update is a patch: "keywords/<name>"
+	// with true adds a keyword and null removes it (false is not a valid
+	// keyword value). A whole "keywords" object replaces the keyword set.
+	for id, patchData := range req.Update {
+		patch, ok := patchData.(map[string]interface{})
+		if !ok {
+			notUpdated[id] = map[string]string{"type": "invalidProperties", "description": "Invalid update patch"}
+			continue
+		}
+		// A draft id is session-relative, so it is not returned by GetEmail.
+		if !h.emailInAccount(ctx, accountID, id) {
+			notUpdated[id] = map[string]string{"type": "notFound", "description": "Email not found"}
+			continue
+		}
+		updatedMetadata, ok, errorType := applyKeywordPatch(h.emailMetadata(ctx, id), patch)
+		if !ok {
+			notUpdated[id] = map[string]string{"type": errorType, "description": "Invalid or unsupported keyword patch"}
+			continue
+		}
+		if err := h.metadata.Save(ctx, updatedMetadata); err != nil {
+			notUpdated[id] = map[string]string{"type": "serverFail", "description": "Failed to save metadata: " + err.Error()}
+			continue
+		}
+		updated[id] = nil
 	}
 
 	resp := map[string]interface{}{
@@ -817,7 +846,9 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 	}
 
 	// JMAP defaults to receivedAt descending; honour an explicit receivedAt
-	// sort direction from the client.
+	// sort direction from the client. Sorting uses the server-recorded receive
+	// time (falling back to the message Date for legacy records) so it matches
+	// the receivedAt value returned by Email/get.
 	ascending := false
 	for _, s := range req.Sort {
 		sortSpec, ok := s.(map[string]interface{})
@@ -832,14 +863,19 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 			ascending = v
 		}
 	}
+	received := make(map[string]time.Time, len(filtered))
+	for _, e := range filtered {
+		received[e.Ref.ID] = receivedAtFromMetadata(h.emailMetadata(ctx, e.Ref.ID), e.Email.Date)
+	}
 	sort.SliceStable(filtered, func(i, j int) bool {
-		if filtered[i].Email.Date.Equal(filtered[j].Email.Date) {
+		left, right := received[filtered[i].Ref.ID], received[filtered[j].Ref.ID]
+		if left.Equal(right) {
 			return filtered[i].Ref.ID < filtered[j].Ref.ID
 		}
 		if ascending {
-			return filtered[i].Email.Date.Before(filtered[j].Email.Date)
+			return left.Before(right)
 		}
-		return filtered[i].Email.Date.After(filtered[j].Email.Date)
+		return left.After(right)
 	})
 
 	// Apply position/limit for pagination
@@ -1254,6 +1290,11 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 			if err := h.storage.DeleteDraft(ctx, sessionID, submission.EmailID); err != nil {
 				log.Printf("failed to delete JMAP draft %q: %v", submission.EmailID, err)
 			}
+			// The draft's keyword record is tied to the draft id, so remove it
+			// too. A missing record is not an error.
+			if err := h.metadata.Delete(ctx, submission.EmailID); err != nil {
+				log.Printf("failed to delete metadata for JMAP draft %q: %v", submission.EmailID, err)
+			}
 		}
 
 		// Success - create the submission object
@@ -1515,8 +1556,9 @@ func (h *Handler) countUnreadInMailbox(ctx context.Context, accountID, mailboxID
 	}
 	count := 0
 	for _, e := range emails {
-		meta, err := h.metadata.Get(ctx, e.Ref.ID)
-		if err == nil && !meta.Read {
+		meta := h.emailMetadata(ctx, e.Ref.ID)
+		// JMAP unread means no $seen. Drafts are excluded from unread counts.
+		if !meta.HasKeyword(metadata.KeywordSeen) && !meta.HasKeyword(metadata.KeywordDraft) {
 			count++
 		}
 	}
@@ -1532,18 +1574,15 @@ func (h *Handler) toJMAPEmail(ctx context.Context, listed *email.ListedEmail) (*
 	e := listed.Email
 	id := listed.Ref.ID
 
-	// Get metadata for read/flagged status
-	meta, err := h.metadata.Get(ctx, id)
-	if err != nil {
-		meta = metadata.EmailMetadata{ID: id}
-	}
-
-	keywords := map[string]bool{}
-	if meta.Read {
-		keywords["$seen"] = true
-	}
-	if meta.Flagged {
-		keywords["$flagged"] = true
+	// Stitch JMAP keywords from metadata into the returned object. A missing
+	// metadata record is normal (older messages, receiver without metadata)
+	// and simply yields an empty keyword set; it must not fail the request.
+	meta := h.emailMetadata(ctx, id)
+	keywords := make(map[string]bool, len(meta.Keywords))
+	for keyword, enabled := range meta.Keywords {
+		if enabled {
+			keywords[keyword] = true
+		}
 	}
 
 	// Determine mailbox IDs from the mailbox the message was delivered to.
@@ -1598,8 +1637,10 @@ func (h *Handler) toJMAPEmail(ctx context.Context, listed *email.ListedEmail) (*
 		htmlBody = append(htmlBody, EmailBodyPart{PartID: &htmlPartID, Type: "text/html", Size: len(e.HTML)})
 	}
 
-	// Format dates
-	receivedAt := e.Date.UTC().Format(time.RFC3339)
+	// Format dates. receivedAt is server-managed metadata, not the Date
+	// header (which is the message's sent time). Legacy records without a
+	// receivedAt value fall back to the Date header.
+	receivedAt := receivedAtFromMetadata(meta, e.Date).UTC().Format(time.RFC3339)
 	sentAt := e.Date.UTC().Format(time.RFC3339)
 
 	return &JMAPEmail{
@@ -1744,6 +1785,108 @@ func (h *Handler) matchesFilter(listed *email.ListedEmail, filter *EmailFilter) 
 	}
 
 	return true
+}
+
+// emailMetadata returns the metadata for an email. A missing record (or a
+// backend error) is treated as empty so JMAP responses always succeed even for
+// messages stored before metadata existed; no receive time is fabricated.
+func (h *Handler) emailMetadata(ctx context.Context, id string) metadata.EmailMetadata {
+	meta, err := h.metadata.Get(ctx, id)
+	if err != nil {
+		return metadata.EmptyEmailMetadata(id)
+	}
+	meta.ID = id
+	if meta.Keywords == nil {
+		meta.Keywords = make(map[string]bool)
+	}
+	return meta
+}
+
+// receivedAtFromMetadata returns the server-recorded receive time, falling
+// back to the message Date for records created before receivedAt existed.
+func receivedAtFromMetadata(meta metadata.EmailMetadata, fallback time.Time) time.Time {
+	if meta.ReceivedAt != "" {
+		if received, err := time.Parse(time.RFC3339, meta.ReceivedAt); err == nil {
+			return received.UTC()
+		}
+	}
+	return fallback
+}
+
+// emailInAccount verifies that id belongs to accountID. Drafts use ids that
+// are relative to the JMAP session, so they are looked up separately.
+func (h *Handler) emailInAccount(ctx context.Context, accountID, id string) bool {
+	listed, err := h.storage.GetEmail(ctx, id)
+	if err == nil && listed != nil && listed.Ref != nil && strings.EqualFold(listed.Ref.AccountID, accountID) {
+		return true
+	}
+	if claims := ClaimsFromContext(ctx); claims != nil && claims.SID != "" {
+		draft, err := h.storage.GetDraft(ctx, claims.SID, id)
+		return err == nil && draft != nil
+	}
+	return false
+}
+
+// applyKeywordPatch applies an Email/set update patch to a metadata record.
+// Per RFC 8621, "keywords/<name>": true sets a keyword and null removes it;
+// false is not a valid patch value. A full "keywords" object replaces the set.
+// receivedAt is server-owned: it is preserved by Clone and never read from the
+// patch, so clients cannot assign, edit or clear it. The returned string is a
+// JMAP error type when ok is false.
+func applyKeywordPatch(current metadata.EmailMetadata, patch map[string]interface{}) (metadata.EmailMetadata, bool, string) {
+	updated := current.Clone()
+
+	// Apply a whole-object replacement first, then any individual keyword
+	// patches, so the result does not depend on Go map iteration order.
+	if value, ok := patch["keywords"]; ok {
+		keywords, ok := value.(map[string]interface{})
+		if !ok {
+			return updated, false, "invalidProperties"
+		}
+		replacement := make(map[string]bool)
+		for name, enabled := range keywords {
+			set, ok := enabled.(bool)
+			if !ok {
+				return updated, false, "invalidProperties"
+			}
+			normalized, valid := metadata.NormalizeKeyword(name)
+			if !valid {
+				return updated, false, "invalidProperties"
+			}
+			if set {
+				replacement[normalized] = true
+			}
+		}
+		updated.Keywords = replacement
+	}
+
+	for prop, value := range patch {
+		if prop == "keywords" {
+			continue
+		}
+		if !strings.HasPrefix(prop, "keywords/") {
+			// Ignore properties we do not manage (for example mailboxIds)
+			// rather than failing the whole update.
+			continue
+		}
+		normalized, valid := metadata.NormalizeKeyword(strings.TrimPrefix(prop, "keywords/"))
+		if !valid {
+			return updated, false, "invalidProperties"
+		}
+		switch v := value.(type) {
+		case nil:
+			delete(updated.Keywords, normalized)
+		case bool:
+			if !v {
+				return updated, false, "invalidProperties"
+			}
+			updated.Keywords[normalized] = true
+		default:
+			return updated, false, "invalidProperties"
+		}
+	}
+
+	return updated, true, ""
 }
 
 func stringPtr(s string) *string {

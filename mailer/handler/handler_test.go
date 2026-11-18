@@ -43,6 +43,15 @@ func (s *captureSender) SendBounce(_ context.Context, originalMessageID, bounceS
 	return nil
 }
 
+// failingDeleteMetadata delegates everything except Delete, which always
+// fails, so a destroy can be tested against a metadata backend error.
+type failingDeleteMetadata struct {
+	metadata.MetadataStore
+	err error
+}
+
+func (m *failingDeleteMetadata) Delete(_ context.Context, _ string) error { return m.err }
+
 type testUserManager struct {
 	adminUsername string
 	adminPassword string
@@ -598,8 +607,8 @@ func TestDeleteEmailAlsoDeletesMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("metadata Get() error = %v", err)
 	}
-	if meta.Read || meta.Flagged {
-		t.Errorf("metadata after delete = %+v, want no read/flag state", meta)
+	if len(meta.Keywords) != 0 {
+		t.Errorf("metadata after delete = %+v, want no keywords", meta)
 	}
 	list, err := metaStore.List(context.Background())
 	if err != nil {
@@ -607,6 +616,64 @@ func TestDeleteEmailAlsoDeletesMetadata(t *testing.T) {
 	}
 	if len(list) != 0 {
 		t.Errorf("metadata list after delete = %v, want empty", list)
+	}
+}
+
+func TestDeleteEmailKeepsMessageWhenMetadataDeleteFails(t *testing.T) {
+	store := storage.NewMemoryStorage()
+	metaStore := &failingDeleteMetadata{
+		MetadataStore: metadata.NewMemoryMetadata(),
+		err:           errors.New("metadata backend unavailable"),
+	}
+	addEmail(store, "received", "alice@example.com", "bob@example.com")
+
+	h, err := New(HandlerConfig{
+		AuthUser:     "admin",
+		AuthPass:     "secret",
+		JWTSecret:    "secret",
+		JWTSecretTTL: time.Hour,
+		Storage:      store,
+		Metadata:     metaStore,
+		UserManager: &testUserManager{
+			adminUsername: "admin",
+			adminPassword: "secret",
+			domain:        "example.com",
+		},
+		UserDomain: "example.com",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	_, token, _ := login(t, h, "bob@example.com", "anything")
+	resp := jmapRequest(t, h, token, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
+		{"Email/set", map[string]interface{}{
+			"accountId": "bob@example.com",
+			"destroy":   []string{"received"},
+		}, "s1"},
+	})
+	calls, _ := resp["methodResponses"].([]interface{})
+	if len(calls) != 1 {
+		t.Fatalf("methodResponses = %v, want one response", calls)
+	}
+	call, _ := calls[0].([]interface{})
+	if call[0] != "Email/set" {
+		t.Fatalf("method = %v, want Email/set", call[0])
+	}
+	args, _ := call[1].(map[string]interface{})
+	if len(args["destroyed"].([]interface{})) != 0 {
+		t.Errorf("destroyed = %v, want empty when metadata deletion fails", args["destroyed"])
+	}
+	notDestroyed, _ := args["notDestroyed"].(map[string]interface{})
+	failure, ok := notDestroyed["received"].(map[string]interface{})
+	if !ok || failure["type"] != "serverFail" {
+		t.Errorf("notDestroyed = %v, want a serverFail for the email", notDestroyed)
+	}
+
+	// The message must remain so the client can retry the whole destroy once
+	// the metadata backend recovers.
+	if _, err := store.GetEmail(context.Background(), "received"); err != nil {
+		t.Errorf("email was removed despite metadata delete failure: %v", err)
 	}
 }
 

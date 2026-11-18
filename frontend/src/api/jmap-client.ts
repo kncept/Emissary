@@ -281,7 +281,8 @@ export async function markRead(id: string, read: boolean): Promise<void> {
       args: {
         update: {
           [id]: {
-            'keywords/$seen': read,
+            // JMAP patch semantics: null removes a keyword; false is invalid.
+            'keywords/$seen': read ? true : null,
           },
         },
       },
@@ -307,7 +308,8 @@ export async function markFlagged(id: string, flagged: boolean): Promise<void> {
       args: {
         update: {
           [id]: {
-            'keywords/$flagged': flagged,
+            // JMAP patch semantics: null removes a keyword; false is invalid.
+            'keywords/$flagged': flagged ? true : null,
           },
         },
       },

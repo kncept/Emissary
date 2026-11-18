@@ -39,7 +39,7 @@ func TestHandler_EmailGet(t *testing.T) {
 
 	// Create test metadata
 	memMeta := metadata.NewMemoryMetadata()
-	if err := memMeta.Save(ctx, metadata.EmailMetadata{ID: "test1", Read: false, Flagged: true}); err != nil {
+	if err := memMeta.Save(ctx, metadata.NewEmailMetadata("test1", metadata.KeywordFlagged)); err != nil {
 		t.Fatalf("Failed to save metadata: %v", err)
 	}
 
@@ -186,6 +186,43 @@ func TestHandler_EmailQuery(t *testing.T) {
 	t.Logf("EmailQuery result: %s", string(result))
 }
 
+func TestEmailQuerySortsByStoredReceivedAt(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewMemoryStorage()
+	messageDate := time.Date(2026, time.November, 17, 12, 0, 0, 0, time.UTC)
+	addTestEmail(store, "older", "alice@example.com", "inbox", &email.UserEmail{Subject: "older", Date: messageDate})
+	addTestEmail(store, "newer", "alice@example.com", "inbox", &email.UserEmail{Subject: "newer", Date: messageDate})
+
+	metaStore := metadata.NewMemoryMetadata()
+	for id, receivedAt := range map[string]string{
+		"older": "2026-11-17T12:00:00Z",
+		"newer": "2026-11-18T12:00:00Z",
+	} {
+		meta := metadata.NewEmailMetadata(id)
+		meta.ReceivedAt = receivedAt
+		if err := metaStore.Save(ctx, meta); err != nil {
+			t.Fatalf("Save(%q) error = %v", id, err)
+		}
+	}
+	handler := NewHandler(store, metaStore,
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+
+	result, err := handler.EmailQuery(ctx, "alice@example.com", json.RawMessage(`{"accountId":"alice@example.com"}`))
+	if err != nil {
+		t.Fatalf("EmailQuery() error = %v", err)
+	}
+	var resp struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.IDs) != 2 || resp.IDs[0] != "newer" || resp.IDs[1] != "older" {
+		t.Errorf("ids = %v, want [newer older] by receivedAt", resp.IDs)
+	}
+}
+
 // TestHandler_EmailQueryScopesToAccountAndMailbox verifies that JMAP reads are
 // limited to the requested account's mailbox, including delivered .eml IDs.
 func TestHandler_EmailQueryScopesToAccountAndMailbox(t *testing.T) {
@@ -293,6 +330,47 @@ func TestEmailSetStoresReplyTo(t *testing.T) {
 	}
 	if len(draft.Email.ReplyTo) != 1 || draft.Email.ReplyTo[0].Address != "bob@example.com" {
 		t.Fatalf("stored Reply-To = %+v, want [bob@example.com]", draft.Email.ReplyTo)
+	}
+}
+
+func TestEmailSetCreateIgnoresClientReceivedAt(t *testing.T) {
+	ctx := context.Background()
+	metaStore := metadata.NewMemoryMetadata()
+	handler := NewHandler(storage.NewMemoryStorage(), metaStore,
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+
+	args := json.RawMessage(`{"accountId":"alice@example.com","create":{"c1":{
+		"mailboxIds":{"inbox":true},
+		"from":[{"email":"alice@example.com"}],
+		"to":[{"email":"bob@example.com"}],
+		"subject":"subject",
+		"receivedAt":"1999-01-01T00:00:00Z"}}}`)
+	result, err := handler.EmailSet(ctx, "alice@example.com", args)
+	if err != nil {
+		t.Fatalf("EmailSet() error = %v", err)
+	}
+	var resp struct {
+		Created map[string]struct {
+			ID string `json:"id"`
+		} `json:"created"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	meta, err := metaStore.Get(ctx, resp.Created["c1"].ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if meta.ReceivedAt == "1999-01-01T00:00:00Z" {
+		t.Error("client-supplied receivedAt was accepted")
+	}
+	received, err := time.Parse(time.RFC3339, meta.ReceivedAt)
+	if err != nil {
+		t.Fatalf("receivedAt %q is not RFC 3339: %v", meta.ReceivedAt, err)
+	}
+	if time.Since(received) > time.Minute {
+		t.Errorf("receivedAt %q was not stamped at creation", meta.ReceivedAt)
 	}
 }
 
@@ -591,5 +669,306 @@ func TestEmailSubmissionSetMasqueradeReplyTo(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestToJMAPEmailStitchesAllKeywords(t *testing.T) {
+	ctx := context.Background()
+	const accountID = "alice@example.com"
+	store := storage.NewMemoryStorage()
+	addTestEmail(store, "email-1", accountID, "inbox", &email.UserEmail{Subject: "test"})
+
+	allKeywords := []string{
+		metadata.KeywordDraft,
+		metadata.KeywordSeen,
+		metadata.KeywordFlagged,
+		metadata.KeywordAnswered,
+		metadata.KeywordForwarded,
+		metadata.KeywordJunk,
+		metadata.KeywordNotJunk,
+		metadata.KeywordPhishing,
+	}
+	metaStore := metadata.NewMemoryMetadata()
+	if err := metaStore.Save(ctx, metadata.NewEmailMetadata("email-1", allKeywords...)); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	handler := NewHandler(store, metaStore,
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+
+	result, err := handler.EmailGet(ctx, accountID, json.RawMessage(
+		`{"accountId":"alice@example.com","ids":["email-1"]}`))
+	if err != nil {
+		t.Fatalf("EmailGet() error = %v", err)
+	}
+	var resp struct {
+		List []struct {
+			Keywords map[string]bool `json:"keywords"`
+		} `json:"list"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.List) != 1 {
+		t.Fatalf("Email/get returned %d messages, want 1", len(resp.List))
+	}
+	keywords := resp.List[0].Keywords
+	for _, keyword := range allKeywords {
+		if !keywords[keyword] {
+			t.Errorf("keyword %q missing from stitched response: %+v", keyword, keywords)
+		}
+	}
+}
+
+func TestEmailGetUsesStoredReceivedAt(t *testing.T) {
+	ctx := context.Background()
+	const accountID = "alice@example.com"
+	const receivedAt = "2026-11-18T04:05:06Z"
+	messageDate := time.Date(2026, time.November, 17, 23, 0, 0, 0, time.UTC)
+
+	store := storage.NewMemoryStorage()
+	addTestEmail(store, "email-1", accountID, "inbox", &email.UserEmail{Subject: "test", Date: messageDate})
+	metaStore := metadata.NewMemoryMetadata()
+	meta := metadata.NewEmailMetadata("email-1")
+	meta.ReceivedAt = receivedAt
+	if err := metaStore.Save(ctx, meta); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	handler := NewHandler(store, metaStore,
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+
+	result, err := handler.EmailGet(ctx, accountID, json.RawMessage(
+		`{"accountId":"alice@example.com","ids":["email-1"]}`))
+	if err != nil {
+		t.Fatalf("EmailGet() error = %v", err)
+	}
+	var resp struct {
+		List []struct {
+			ReceivedAt string `json:"receivedAt"`
+			SentAt     string `json:"sentAt"`
+		} `json:"list"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.List) != 1 {
+		t.Fatalf("Email/get returned %d messages, want 1", len(resp.List))
+	}
+	if resp.List[0].ReceivedAt != receivedAt {
+		t.Errorf("receivedAt = %q, want stored %q", resp.List[0].ReceivedAt, receivedAt)
+	}
+	if want := metadata.FormatReceivedAt(messageDate); resp.List[0].SentAt != want {
+		t.Errorf("sentAt = %q, want message Date %q", resp.List[0].SentAt, want)
+	}
+}
+
+func TestEmailGetMissingMetadataDoesNotFail(t *testing.T) {
+	ctx := context.Background()
+	const accountID = "alice@example.com"
+	store := storage.NewMemoryStorage()
+	messageDate := time.Date(2026, time.November, 1, 9, 30, 0, 0, time.UTC)
+	addTestEmail(store, "legacy-1", accountID, "inbox", &email.UserEmail{Subject: "legacy", Date: messageDate})
+
+	// No metadata was ever saved for this message.
+	handler := NewHandler(store, metadata.NewMemoryMetadata(),
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+	result, err := handler.EmailGet(ctx, accountID, json.RawMessage(
+		`{"accountId":"alice@example.com","ids":["legacy-1"]}`))
+	if err != nil {
+		t.Fatalf("EmailGet() error = %v", err)
+	}
+	var resp struct {
+		List []struct {
+			ID         string          `json:"id"`
+			ReceivedAt string          `json:"receivedAt"`
+			SentAt     string          `json:"sentAt"`
+			Keywords   map[string]bool `json:"keywords"`
+		} `json:"list"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.List) != 1 || resp.List[0].ID != "legacy-1" {
+		t.Fatalf("Email/get response = %+v, want the message", resp)
+	}
+	if len(resp.List[0].Keywords) != 0 {
+		t.Errorf("keywords = %+v, want empty for missing metadata", resp.List[0].Keywords)
+	}
+	// Legacy records have no stored receive time, so fall back to Date rather
+	// than fabricating "now" at read time.
+	wantDate := metadata.FormatReceivedAt(messageDate)
+	if resp.List[0].ReceivedAt != wantDate {
+		t.Errorf("receivedAt = %q, want legacy fallback %q", resp.List[0].ReceivedAt, wantDate)
+	}
+	if resp.List[0].SentAt != wantDate {
+		t.Errorf("sentAt = %q, want %q", resp.List[0].SentAt, wantDate)
+	}
+}
+
+func TestApplyKeywordPatch(t *testing.T) {
+	tests := []struct {
+		name    string
+		patch   map[string]interface{}
+		want    []string
+		wantOK  bool
+		wantErr string
+	}{
+		{name: "add", patch: map[string]interface{}{"keywords/$seen": true}, want: []string{metadata.KeywordSeen, metadata.KeywordFlagged}, wantOK: true},
+		{name: "remove", patch: map[string]interface{}{"keywords/$flagged": nil}, want: []string{metadata.KeywordSeen}, wantOK: true},
+		{name: "false is invalid", patch: map[string]interface{}{"keywords/$seen": false}, wantErr: "invalidProperties"},
+		{name: "replace", patch: map[string]interface{}{"keywords": map[string]interface{}{"$junk": true, "$seen": false}}, want: []string{metadata.KeywordJunk}, wantOK: true},
+		{name: "normalize", patch: map[string]interface{}{"keywords/$ANSWERED": true}, want: []string{metadata.KeywordSeen, metadata.KeywordFlagged, metadata.KeywordAnswered}, wantOK: true},
+		{name: "unknown property ignored", patch: map[string]interface{}{"mailboxIds": map[string]interface{}{"inbox": true}}, want: []string{metadata.KeywordSeen, metadata.KeywordFlagged}, wantOK: true},
+		{name: "receivedAt is read-only", patch: map[string]interface{}{"receivedAt": "1999-01-01T00:00:00Z"}, want: []string{metadata.KeywordSeen, metadata.KeywordFlagged}, wantOK: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			current := metadata.NewEmailMetadata("email-1", metadata.KeywordSeen, metadata.KeywordFlagged)
+			got, ok, errType := applyKeywordPatch(current, tc.patch)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v (error type %q)", ok, tc.wantOK, errType)
+			}
+			if !ok {
+				if errType != tc.wantErr {
+					t.Errorf("error type = %q, want %q", errType, tc.wantErr)
+				}
+				return
+			}
+			if len(got.Keywords) != len(tc.want) {
+				t.Fatalf("keywords = %+v, want %v", got.Keywords, tc.want)
+			}
+			for _, keyword := range tc.want {
+				if !got.HasKeyword(keyword) {
+					t.Errorf("keyword %q missing from %+v", keyword, got.Keywords)
+				}
+			}
+			if got.ReceivedAt != current.ReceivedAt {
+				t.Errorf("receivedAt = %q, want unchanged %q", got.ReceivedAt, current.ReceivedAt)
+			}
+			if current.HasKeyword(metadata.KeywordFlagged) != true {
+				t.Error("original metadata was mutated")
+			}
+		})
+	}
+}
+
+func TestEmailSetKeywordUpdates(t *testing.T) {
+	ctx := context.Background()
+	const accountID = "alice@example.com"
+	store := storage.NewMemoryStorage()
+	const id = "users/alice@example.com/inbox/20261117T120000_a.eml"
+	addTestEmail(store, id, accountID, "inbox", &email.UserEmail{Subject: "test"})
+	metaStore := metadata.NewMemoryMetadata()
+	handler := NewHandler(store, metaStore,
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+
+	update := func(patch map[string]interface{}) (map[string]interface{}, map[string]interface{}) {
+		t.Helper()
+		args, err := json.Marshal(map[string]interface{}{
+			"accountId": accountID,
+			"update":    map[string]interface{}{id: patch},
+		})
+		if err != nil {
+			t.Fatalf("marshal args: %v", err)
+		}
+		result, err := handler.EmailSet(ctx, accountID, args)
+		if err != nil {
+			t.Fatalf("EmailSet() error = %v", err)
+		}
+		var resp struct {
+			Updated    map[string]interface{} `json:"updated"`
+			NotUpdated map[string]interface{} `json:"notUpdated"`
+		}
+		if err := json.Unmarshal(result, &resp); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		return resp.Updated, resp.NotUpdated
+	}
+
+	updated, notUpdated := update(map[string]interface{}{
+		"keywords/$seen":      true,
+		"keywords/$flagged":   true,
+		"keywords/$forwarded": true,
+	})
+	if len(updated) != 1 || len(notUpdated) != 0 {
+		t.Fatalf("updated = %+v, notUpdated = %+v", updated, notUpdated)
+	}
+	meta, err := metaStore.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	for _, keyword := range []string{metadata.KeywordSeen, metadata.KeywordFlagged, metadata.KeywordForwarded} {
+		if !meta.HasKeyword(keyword) {
+			t.Errorf("keyword %q not set after update: %+v", keyword, meta.Keywords)
+		}
+	}
+
+	// null clears a keyword; false is invalid.
+	updated, notUpdated = update(map[string]interface{}{"keywords/$seen": nil})
+	if len(updated) != 1 || len(notUpdated) != 0 {
+		t.Fatalf("updated = %+v, notUpdated = %+v", updated, notUpdated)
+	}
+	meta, _ = metaStore.Get(ctx, id)
+	if meta.HasKeyword(metadata.KeywordSeen) {
+		t.Error("$seen still set after null patch")
+	}
+	_, notUpdated = update(map[string]interface{}{"keywords/$seen": false})
+	if problem, ok := notUpdated[id].(map[string]interface{}); !ok || problem["type"] != "invalidProperties" {
+		t.Errorf("notUpdated = %+v, want invalidProperties", notUpdated)
+	}
+
+	// A message belonging to another account cannot be updated.
+	updated, notUpdated = updateForAccount(t, handler, "bob@example.com", id)
+	if len(updated) != 0 || len(notUpdated) != 1 {
+		t.Fatalf("cross-account updated = %+v, notUpdated = %+v", updated, notUpdated)
+	}
+}
+
+func updateForAccount(t *testing.T, handler *Handler, accountID, id string) (map[string]interface{}, map[string]interface{}) {
+	t.Helper()
+	args, err := json.Marshal(map[string]interface{}{
+		"accountId": accountID,
+		"update":    map[string]interface{}{id: map[string]interface{}{"keywords/$seen": true}},
+	})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+	result, err := handler.EmailSet(context.Background(), accountID, args)
+	if err != nil {
+		t.Fatalf("EmailSet() error = %v", err)
+	}
+	var resp struct {
+		Updated    map[string]interface{} `json:"updated"`
+		NotUpdated map[string]interface{} `json:"notUpdated"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	return resp.Updated, resp.NotUpdated
+}
+
+func TestCountUnreadInMailboxUsesKeywords(t *testing.T) {
+	ctx := context.Background()
+	const accountID = "alice@example.com"
+	store := storage.NewMemoryStorage()
+	for _, id := range []string{"unread", "seen", "draft"} {
+		addTestEmail(store, id, accountID, "inbox", &email.UserEmail{Subject: id})
+	}
+	metaStore := metadata.NewMemoryMetadata()
+	if err := metaStore.Save(ctx, metadata.NewEmailMetadata("seen", metadata.KeywordSeen)); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if err := metaStore.Save(ctx, metadata.NewEmailMetadata("draft", metadata.KeywordDraft)); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	handler := NewHandler(store, metaStore,
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+
+	if got := handler.countUnreadInMailbox(ctx, accountID, "inbox"); got != 1 {
+		t.Errorf("countUnreadInMailbox() = %d, want 1", got)
 	}
 }

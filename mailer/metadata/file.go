@@ -49,7 +49,7 @@ func (f *FileMetadata) load() error {
 	}
 
 	for _, entry := range entries {
-		f.data[entry.ID] = entry
+		f.data[entry.ID] = entry.Clone()
 	}
 	return nil
 }
@@ -82,16 +82,17 @@ func (f *FileMetadata) Get(ctx context.Context, id string) (EmailMetadata, error
 
 	m, ok := f.data[id]
 	if !ok {
-		return EmailMetadata{ID: id}, nil
+		// Older messages may have no metadata record.
+		return EmptyEmailMetadata(id), nil
 	}
-	return m, nil
+	return m.Clone(), nil
 }
 
 func (f *FileMetadata) Save(ctx context.Context, metadata EmailMetadata) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.data[metadata.ID] = metadata
+	f.data[metadata.ID] = metadata.Clone()
 	return f.saveLocked()
 }
 
@@ -109,7 +110,7 @@ func (f *FileMetadata) List(ctx context.Context) ([]EmailMetadata, error) {
 
 	result := make([]EmailMetadata, 0, len(f.data))
 	for _, v := range f.data {
-		result = append(result, v)
+		result = append(result, v.Clone())
 	}
 	return result, nil
 }

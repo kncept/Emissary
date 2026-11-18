@@ -198,6 +198,8 @@ func (h *supportHandler) ProcessEmail(ctx context.Context, req *supportapi.Proce
 		Sender:      h.sender,
 		Domain:      h.cfg.UserDomain,
 		SESClient:   store.Client(),
+		Storage:     h.storage,
+		Metadata:    h.metadata,
 	})
 	if err != nil {
 		log.Printf("support: create receiver: %v", err)

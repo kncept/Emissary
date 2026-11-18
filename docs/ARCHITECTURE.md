@@ -74,7 +74,7 @@ listens with `net/http` and uses the memory/log implementations.
 | `usermanager` | Pluggable login backends; every backend also knows the built-in admin. |
 | `storage` | Mail source: `ListEmails` (scoped by JMAP `accountId`/`mailboxId`), plus `GetEmail`, `AddEmail`, `DeleteEmail`, and support-only bucket operations. |
 | `sender` | Write side of mail: `Send`. |
-| `metadata` | Per-message read/flag state, discarded when a message is deleted. |
+| `metadata` | Per-message JMAP keywords (`$seen`, `$flagged`, `$draft`, and the other supported system keywords) plus the server-owned `receivedAt` timestamp, keyed by email id and discarded when a message is deleted. |
 | `email` | RFC 5322 parsing: `WireFormatEmail` (full structure) and `UserEmail` (simplified). |
 | `handler` | The HTTP API, auth middleware, panic recovery, and the embedded frontend. |
 | `gui` | `//go:embed all:frontend/dist` — the built SPA. |
@@ -88,7 +88,7 @@ instantiated in `handler.New`:
 | --- | --- | --- | --- | --- |
 | Inbound messages | `storage.Storage` | `STORAGE` | `s3`, `memory` | `s3` needs `S3_BUCKET`. Defaults to `memory`. |
 | Outbound mail | `sender.Sender` | `SENDER` | `aws-ses`, `mta`, `log` | Defaults to `log`. The From address comes from the submitting user (or masquerade target), not from configuration. |
-| Message state | `metadata.MetadataStore` | `METADATA` | `memory` (default), `file`, `ddb` | `ddb` uses `DDB_TABLE` or the `metadata` table derived from `TABLE_PREFIX`. |
+| Message state | `metadata.MetadataStore` | `METADATA` | `memory` (default), `file`, `ddb` | Stores JMAP keywords and the server-owned `receivedAt` timestamp, keyed by email id. `ddb` uses `DDB_TABLE` or the `metadata` table derived from `TABLE_PREFIX`. Both `handler.New` and the `s3-receiver` build this store with `metadata.NewStore`. |
 | Users | `usermanager.Manager` | `USER_MANAGER` | `none`, `ddb`, `s3`, `ldap` | Auto-selects `s3` when storage is S3, else `none`. `ddb` uses `USER_TABLE` or the `users` table derived from `TABLE_PREFIX`; `s3` stores each user as `users/<email>/user.json` in the mail bucket. Both are Emissary-mastered. `ldap` is unimplemented. |
 
 ## Inbound mail flow
@@ -102,9 +102,24 @@ instantiated in `handler.New`:
    grants SES `PutObject`; no consumer Lambda is involved for this initial write.
 4. A consumer process (Lambda or scheduled job) reads from the staging area,
    validates recipients, and delivers each message to the appropriate user mailboxes:
-   - For each valid recipient, the message is copied to `users/<recipient-email>/inbox/<timestamp>_<ses-message-id>.eml`
-   - The timestamp is derived from the message's `Date` header (falling back to the current time) and formatted as ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`)
-   - The staging object is deleted after successful delivery to all recipients
+   - For each valid recipient, the receiver calls
+     `storage.Storage.AddEmail(ctx, recipient, parsedEmail)` on the **configured**
+     store (S3 in production, memory for local runs). Delivery no longer writes
+     an S3 key directly from the receiver.
+   - `AddEmail` assigns the mailbox and generates the email id. `S3Storage`
+     writes `users/<recipient-email>/inbox/<timestamp>_<generated-id>.eml`,
+     deriving the timestamp from the `Date` header (falling back to the current
+     time) as ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`).
+     Legacy deliveries used the SES message id in place of `<generated-id>`;
+     both remain readable.
+   - The receiver creates a metadata record in the metadata store keyed by the
+     **id returned from `AddEmail`** (the full S3 object key for `S3Storage`).
+     The record starts with an empty keyword set and a server-stamped
+     `receivedAt` (RFC 3339 UTC): the message is unread and unflagged until a
+     JMAP client sets `keywords/$seen` or `keywords/$flagged`. `receivedAt`
+     is not client-assignable or editable.
+   - The staging object is deleted after successful delivery to all recipients.
+     Staging read/delete still use S3 directly and will be decoupled separately.
 5. When a JMAP call lists or opens mail, `storage.S3Storage` paginates
    `ListObjectsV2` over the prefix for the call's `accountId`:
    `users/<accountId>/<mailboxId>/`. The account comes from the JWT
@@ -113,14 +128,18 @@ instantiated in `handler.New`:
    mailbox; without it every mailbox in the account is searched.
    `GetObject`s each message, and parses it with `email.Parse`.
    Unparseable objects are logged and skipped, not fatal.
-6. `handler` merges read/flag state from the metadata store into each
-   response. Listing is always scoped to one account; there is no
+6. `handler` merges the full keyword map and `receivedAt` from the metadata
+   store into each JMAP `Email/get` response, and sorts `Email/query` by that
+   receive time. A missing metadata record is not an error: the email is
+   returned with an empty `keywords` object and `receivedAt` falls back to the
+   message `Date` header. Listing is always scoped to one account; there is no
    cross-account email listing API.
 
 The email ID used throughout the JMAP API is the full delivered S3 object key
-(e.g., `users/alice@example.com/inbox/20240308T143000_01000192a3b4c5d6.eml`),
-including the timestamp and `.eml` suffix. It encodes the account, JMAP
-mailbox, received time and SES message ID.
+(e.g., `users/alice@example.com/inbox/20240308T143000_9f1c...eml`), including
+the timestamp and `.eml` suffix. It encodes the account, JMAP mailbox, received
+time and the storage-generated message id. Older deliveries that used the SES
+message id as the suffix remain valid ids.
 
 Durable per-session scratch state lives separately at `_storage/<sid>/`. JMAP
 drafts are JSON objects under `_storage/<sid>/drafts/`, and the creation-id map
@@ -158,8 +177,14 @@ validation and delivery process applies:
      log).
 
 4. **Deliver to valid recipients** — For each valid recipient:
-   - Extract the received timestamp from the message's `Date` header (or use the current time) and format it as ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`)
-   - Copy the raw message to `users/<recipient-email>/inbox/<timestamp>_<ses-message-id>.eml`
+   - Call `Storage.AddEmail(ctx, recipient, parsedEmail)` on the configured
+     store. The store assigns the id and writes to the recipient's `inbox`;
+     the receiver does not construct mailbox keys.
+   - For `S3Storage`, the key is `users/<recipient-email>/inbox/<timestamp>_<generated-id>.eml`,
+     with the timestamp derived from the `Date` header (or the current time)
+     in ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`).
+   - Initialize metadata with the id returned by `AddEmail`, an empty keyword
+     set and a server-stamped `receivedAt`.
    - Each recipient gets their own copy in their `inbox` mailbox
 
 5. **Mixed validity** — If some recipients are valid and others are not:

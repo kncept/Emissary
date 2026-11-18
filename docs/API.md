@@ -129,11 +129,70 @@ in that account's mailbox (masquerade); this applies to `Email/query`,
 ### Get Single Email
 - `Email/get` with the specific email ID
 
-### Mark Read/Unread
-- `Email/set` with update to keywords: `{ $seen: true/false }`
+### Received time
 
-### Flag/Unflag
-- `Email/set` with update to keywords: `{ $flagged: true/false }`
+`Email/receivedAt` is a server-owned value stored in the per-message metadata
+record as `receivedAt` (RFC 3339 UTC). It is stamped when the record is created
+— at inbound delivery or JMAP `Email/set.create` — and is never assignable,
+editable or updatable by clients. A `receivedAt` property sent in a create or
+update patch is ignored. `Email/query` sorts by this value; messages with no
+stored value (delivered before the field existed) fall back to the RFC 5322
+`Date` header, which is also reported separately as `sentAt`.
+
+### Keywords (message state)
+
+JMAP models message state as a `String[Boolean]` map of **keywords**
+(RFC 8621 §4.1.1). Emissary stores these in the metadata service — alongside
+the server-owned `receivedAt` field — and stitches them into every
+`Email/get` response. Only keywords that are set are returned, with the value
+`true`; clearing a keyword removes it from the map.
+
+The following system keywords are supported:
+
+| Keyword | Meaning |
+| --- | --- |
+| `$draft` | Message is a draft. |
+| `$seen` | Message has been read. Used for JMAP unread counts; drafts are excluded from those counts. |
+| `$flagged` | Message is flagged/starred. |
+| `$answered` | Message has been replied to. |
+| `$forwarded` | Message has been forwarded. |
+| `$junk` | Message is junk/spam. |
+| `$notjunk` | Message has been marked as not junk. |
+| `$phishing` | Message has been marked as phishing. |
+
+Keyword names are case-insensitive on input and normalized to lowercase on
+storage and output.
+
+**Mark read / unread**
+
+```json
+{ "method": "Email/set", "args": { "update": { "<id>": { "keywords/$seen": true } } } }
+```
+
+To mark unread, send `null` (not `false`) for the keyword:
+
+```json
+{ "method": "Email/set", "args": { "update": { "<id>": { "keywords/$seen": null } } } }
+```
+
+**Flag / unflag** uses `keywords/$flagged` in the same way.
+
+Other keywords (for example `keywords/$answered`) follow the same pattern. A
+whole `"keywords"` object may also be supplied to replace the entire keyword
+set; `false` entries in that object are dropped.
+
+JMAP `/set.update` is a patch: `true` adds a keyword, `null` removes it, and
+`false` is invalid (`invalidProperties`). Unknown properties (such as
+`mailboxIds`) are ignored rather than failing the update. Updates are scoped to
+the requested `accountId`, so a crafted id cannot modify another user's mail.
+
+New deliveries created by the receiver start with no keywords (unread and
+unflagged) and a freshly stamped `receivedAt`. If a message has no metadata
+record at all — for example one delivered before the metadata service existed —
+`Email/get` still succeeds, returns an empty `keywords` object, and falls back
+to the message `Date` for `receivedAt`. See
+[ARCHITECTURE.md](ARCHITECTURE.md#inbound-mail-flow) for the metadata creation
+point in the delivery pipeline.
 
 ### Delete Email
 - `Email/set` with destroy containing the email ID
@@ -169,7 +228,8 @@ The web UI uses this endpoint for both the "View MIME" modal and the
 - When masquerading (From differs from the caller's own address), Reply-To
   must match From. It defaults to From when omitted; a conflicting Reply-To
   is rejected with `invalidProperties`.
-- The session draft is deleted after `EmailSubmission/set` sends successfully.
+- The session draft and its metadata (keywords and `receivedAt`) are deleted
+  after `EmailSubmission/set` sends successfully.
   `onSuccessUpdateEmail` and `onSuccessDestroyEmail` are accepted for JMAP
   compatibility but the server performs the cleanup itself.
 

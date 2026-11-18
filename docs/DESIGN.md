@@ -49,12 +49,12 @@ does the web application.
 | --- | --- |
 | Domain | The receiving domain (`DOMAIN`). SES is configured to accept mail for it (and, optionally, its subdomains). |
 | MAIL FROM subdomain | `mail.<DOMAIN>`. Used both for SES bounce handling and as the hostname the deployed application is served on. |
-| Email id | The full S3 object key of a delivered message: `users/<accountId>/<mailboxId>/<timestamp>_<ses-message-id>.eml`. The id encodes the account, JMAP mailbox, received time and SES message id; the timestamp is part of the id and uses ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`). |
+| Email id | The full S3 object key of a delivered message: `users/<accountId>/<mailboxId>/<timestamp>_<message-id>.eml`. The id encodes the account, JMAP mailbox, received time and a storage-generated message id (older deliveries used the SES message id); the timestamp is part of the id and uses ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`). |
 | Account | A JMAP account, identified by the user's email address. Storage reads are scoped to this account's prefix; `accountId` on a JMAP call selects it. |
 | Mailbox | A JMAP mailbox inside an account (`inbox`, `sent`, `drafts`, ...). `Email/query` can restrict the read with `filter.inMailbox`. |
 | Administrator | The single built-in user defined by `USERNAME`/`PASSWORD`. With `EmissaryUserManagement` it can read another account's mailbox by passing that account's `accountId` (masquerade) and send with that account's From address. Other users can only send from their own address. |
 | Ordinary user | Any user accepted by the configured user manager. Reads only their own account/mailboxes and always sends as themselves. |
-| Metadata | Small per-message state that is not part of the RFC 5322 message: read and flagged flags. Stored separately from S3. |
+| Metadata | Small per-message state that is not part of the RFC 5322 message: JMAP keywords (for example read and flagged) and the server-owned `receivedAt` timestamp. Stored separately from S3. |
 
 ## Visibility and authorization model
 
@@ -134,7 +134,7 @@ Emissary/
 │   ├── envutil/         cached env lookup with ARN secret resolution
 │   ├── gui/             //go:embed of the built frontend
 │   ├── handler/         HTTP API + embedded frontend server
-│   ├── metadata/        read/flag state: memory, file, DynamoDB
+│   ├── metadata/        JMAP keywords and receivedAt: memory, file, DynamoDB
 │   ├── sender/          outbound: AWS SES, log
 │   ├── storage/         inbound messages: S3, memory
 │   └── usermanager/     login backends: none, ddb*, s3*, ldap*

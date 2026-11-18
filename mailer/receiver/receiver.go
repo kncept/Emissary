@@ -10,25 +10,26 @@ import (
 	"io"
 	"log"
 	"strings"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/kncept/Emissary/mailer/email"
+	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/sender"
+	"github.com/kncept/Emissary/mailer/storage"
 	"github.com/kncept/Emissary/mailer/usermanager"
 )
 
 // ErrNoValidRecipients is returned when a message has no valid recipients.
 var ErrNoValidRecipients = errors.New("no valid recipients")
 
-// S3Client is the subset of the S3 client used by the receiver. Keeping it as
-// an interface lets the staging pipeline run with the same client that the
-// storage layer uses (for example from the support API) and makes it testable.
+// S3Client is the subset of the S3 client used by the receiver for the SES
+// staging area. Delivery no longer writes through this interface: it goes via
+// the configured storage. Staging read and delete are still S3 operations and
+// will be decoupled separately.
 type S3Client interface {
 	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
-	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 }
 
@@ -46,8 +47,17 @@ type ReceiverConfig struct {
 	// Domain is the receiving domain (used for bounce sender address).
 	Domain string
 
-	// SESClient is the S3 client for bucket operations.
+	// SESClient is the S3 client for staging-area operations (read and delete).
 	SESClient S3Client
+
+	// Storage is the configured mail store used to deliver messages. It owns
+	// the generated email id and mailbox placement, so the receiver must not
+	// construct destination keys itself.
+	Storage storage.Storage
+
+	// Metadata stores per-message JMAP state. The receiver creates a record
+	// for each delivered message, keyed by the id returned from Storage.
+	Metadata metadata.MetadataStore
 }
 
 // Receiver processes inbound messages from S3.
@@ -66,11 +76,17 @@ func NewReceiver(cfg ReceiverConfig) (*Receiver, error) {
 	if cfg.Sender == nil {
 		return nil, errors.New("sender is required")
 	}
+	if cfg.Storage == nil {
+		return nil, errors.New("storage is required")
+	}
 	if cfg.Domain == "" {
 		return nil, errors.New("domain is required")
 	}
 	if cfg.SESClient == nil {
 		return nil, errors.New("S3 client is required")
+	}
+	if cfg.Metadata == nil {
+		cfg.Metadata = metadata.NewMemoryMetadata()
 	}
 	return &Receiver{cfg: cfg}, nil
 }
@@ -149,19 +165,13 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 		}
 	}
 
-	// Extract timestamp from the message (use Date header or current time)
-	timestamp := parsedEmail.Date
-	if timestamp.IsZero() {
-		timestamp = time.Now().UTC()
-	}
-
 	// Delivery results
 	var deliveryErrors []error
 	var bounceErrors []error
 
 	// Deliver to valid recipients
 	for _, recipient := range validRecipients {
-		if err := r.deliverToRecipient(ctx, key, rawMessage, recipient, timestamp); err != nil {
+		if err := r.deliverToRecipient(ctx, recipient, parsedEmail); err != nil {
 			log.Printf("receiver: failed to deliver to %s: %v", recipient, err)
 			deliveryErrors = append(deliveryErrors, fmt.Errorf("delivery to %s failed: %w", recipient, err))
 		} else {
@@ -227,28 +237,25 @@ func (r *Receiver) extractRecipients(parsedEmail *email.UserEmail) []string {
 	return recipients
 }
 
-// deliverToRecipient copies the raw message to the recipient's mailbox in S3.
-func (r *Receiver) deliverToRecipient(ctx context.Context, originalKey string, rawMessage []byte, recipient string, timestamp time.Time) error {
-	// Format timestamp as ISO 8601 basic ("compressed") UTC, e.g. 20240308T143000
-	ts := email.FormatDeliveredTimestamp(timestamp)
-
-	// SES message ID is the original key (staging object key)
-	sesMessageID := originalKey
-
-	// Construct the destination key: users/<recipient>/inbox/<timestamp>_<ses-message-id>.eml
-	destKey := fmt.Sprintf("users/%s/inbox/%s_%s.eml", recipient, ts, sesMessageID)
-
-	// Copy the object to the destination
-	_, err := r.cfg.SESClient.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(r.cfg.Bucket),
-		Key:    aws.String(destKey),
-		Body:   strings.NewReader(string(rawMessage)),
-	})
+// deliverToRecipient stores the parsed message using the configured storage.
+// Storage owns the generated id and mailbox placement; the receiver only uses
+// the returned id to initialize the message's JMAP metadata.
+func (r *Receiver) deliverToRecipient(ctx context.Context, recipient string, message *email.UserEmail) error {
+	id, err := r.cfg.Storage.AddEmail(ctx, recipient, message)
 	if err != nil {
-		return fmt.Errorf("failed to copy to %s: %w", destKey, err)
+		return fmt.Errorf("failed to add email for %s: %w", recipient, err)
 	}
 
-	log.Printf("receiver: copied %s to %s", originalKey, destKey)
+	// JMAP metadata is created alongside the stored message. The id must be
+	// the one returned by Storage.AddEmail, not a key we construct here, so
+	// metadata stays aligned with the stored message. NewEmailMetadata stamps
+	// the server-owned receivedAt at delivery time; a new delivery has no
+	// keywords and is unread and unflagged until a JMAP client changes it.
+	if err := r.cfg.Metadata.Save(ctx, metadata.NewEmailMetadata(id)); err != nil {
+		return fmt.Errorf("failed to save metadata for %s: %w", id, err)
+	}
+
+	log.Printf("receiver: delivered message %s to %s", id, recipient)
 	return nil
 }
 

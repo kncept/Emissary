@@ -144,13 +144,21 @@ add a new implementation, three places change:
      `accountId` and optional `mailboxId`; `AddEmail` takes the account id
      and returns the generated email id, storing into the inbox.
    - `sender.Sender` — `Name`, `From`, `Send` (`mailer/sender`)
-   - `metadata.MetadataStore` — `Get`, `SetRead`, `SetFlagged`, `Delete`,
-     `List` (`mailer/metadata`)
+   - `metadata.MetadataStore` — `Name`, `Get`, `Save`, `Delete`, `List`
+     (`mailer/metadata`). `Get` returns an `EmptyEmailMetadata` for an
+     unknown id (no fabricated receive time). `EmailMetadata.Keywords` is a
+     JMAP `String[Boolean]` map of system keywords (`$seen`, `$flagged`,
+     `$draft`, `$answered`, `$forwarded`, `$junk`, `$notjunk`, `$phishing`),
+     and `EmailMetadata.ReceivedAt` is a server-owned RFC 3339 UTC timestamp
+     stamped by `NewEmailMetadata` at creation and never accepted from JMAP
+     clients. Register a new store in `metadata.NewStore`, which is shared by
+     `handler.New` and `cmd/s3-receiver`.
    - `usermanager.UserManager` — `Name`, `Authenticate`, `Lookup`,
      `Autocomplete` (`mailer/usermanager`)
-2. Register it in the `switch` that builds that component
-   (`handler.New` for storage/metadata/sender, plus
-   `cmd/s3-receiver` for senders; `usermanager.New` for user managers).
+2. Register it in the factory that builds that component
+   (`metadata.NewStore` for metadata, `handler.New` for storage/sender, plus
+   `cmd/s3-receiver` for senders and metadata; `usermanager.New` for user
+   managers).
 3. Teach `mailer/config` to validate the new selector value and any
    required companion variables.
 

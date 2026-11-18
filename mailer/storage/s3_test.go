@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -94,6 +96,71 @@ func (f *fakeS3) HeadObject(_ context.Context, input *s3.HeadObjectInput, _ ...f
 		return nil, &types.NotFound{}
 	}
 	return &s3.HeadObjectOutput{ContentLength: aws.Int64(int64(len(body)))}, nil
+}
+
+func TestS3StorageAddEmailStoresInInboxAndReturnsFullKey(t *testing.T) {
+	fake := newFakeS3(map[string]string{})
+	store := &S3Storage{client: fake, bucket: "mail-bucket"}
+	message := &email.UserEmail{
+		From:    email.Address{Address: "alice@example.com"},
+		To:      []email.Address{{Address: "bob@example.com"}},
+		Subject: "Hello",
+		Date:    time.Date(2026, time.November, 9, 10, 0, 0, 0, time.UTC),
+		Text:    "Message body",
+	}
+
+	id, err := store.AddEmail(context.Background(), "Bob@Example.com", message)
+	if err != nil {
+		t.Fatalf("AddEmail() error = %v", err)
+	}
+
+	pattern := regexp.MustCompile(`^users/bob@example.com/inbox/20261109T100000_[0-9a-f]{32}\.eml$`)
+	if !pattern.MatchString(id) {
+		t.Fatalf("AddEmail() id = %q, want delivered inbox key with generated id", id)
+	}
+	raw, ok := fake.objects[id]
+	if !ok {
+		t.Fatalf("AddEmail() did not store object %q; keys = %v", id, fake.objects)
+	}
+	if !strings.Contains(raw, "Subject: Hello") || !strings.Contains(raw, "Message body") {
+		t.Errorf("stored raw message = %q, want subject and body", raw)
+	}
+
+	listed, err := store.GetEmail(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetEmail(%q) error = %v", id, err)
+	}
+	if listed.Ref.ID != id || listed.Ref.AccountID != "bob@example.com" || listed.Ref.MailboxID != "inbox" {
+		t.Errorf("ref = %+v, want id %q in bob@example.com/inbox", listed.Ref, id)
+	}
+}
+
+func TestS3StorageAddEmailHonorsConfiguredPrefix(t *testing.T) {
+	fake := newFakeS3(map[string]string{})
+	store := &S3Storage{client: fake, bucket: "mail-bucket", prefix: "emails"}
+	message := &email.UserEmail{Subject: "Hello", Text: "Message body"}
+
+	id, err := store.AddEmail(context.Background(), "bob@example.com", message)
+	if err != nil {
+		t.Fatalf("AddEmail() error = %v", err)
+	}
+	if !strings.HasPrefix(id, "emails/users/bob@example.com/inbox/") {
+		t.Fatalf("AddEmail() id = %q, want configured prefix", id)
+	}
+	if _, ok := fake.objects[id]; !ok {
+		t.Fatalf("AddEmail() did not store object %q", id)
+	}
+}
+
+func TestS3StorageAddEmailValidatesInput(t *testing.T) {
+	store := &S3Storage{client: newFakeS3(map[string]string{}), bucket: "mail-bucket"}
+
+	if _, err := store.AddEmail(context.Background(), "", &email.UserEmail{Subject: "Hello"}); err == nil {
+		t.Error("AddEmail() with empty accountID should fail")
+	}
+	if _, err := store.AddEmail(context.Background(), "bob@example.com", nil); err == nil {
+		t.Error("AddEmail() with nil message should fail")
+	}
 }
 
 func TestS3StorageListRootReturnsObjectsAndPrefixes(t *testing.T) {

@@ -156,14 +156,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 	if cfg.Metadata != nil {
 		metaStore = cfg.Metadata
 	} else {
-		switch cfg.MetadataType {
-		case "file":
-			metaStore, err = metadata.NewFileMetadata(cfg.MetadataPath)
-		case "ddb", "dynamodb":
-			metaStore, err = metadata.NewDdbMetadata(resolveDDBTable(cfg.MetadataTable, cfg.DDBTablePrefix, "metadata"), cfg.MetadataRegion)
-		default:
-			metaStore = metadata.NewMemoryMetadata()
-		}
+		metaStore, err = metadata.NewStore(cfg.MetadataType, cfg.MetadataPath, resolveDDBTable(cfg.MetadataTable, cfg.DDBTablePrefix, "metadata"), cfg.MetadataRegion)
 	}
 	if err != nil {
 		return nil, err

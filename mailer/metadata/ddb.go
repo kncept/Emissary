@@ -39,14 +39,15 @@ func (d *DdbMetadata) Get(ctx context.Context, id string) (EmailMetadata, error)
 	}
 
 	if output.Item == nil {
-		return EmailMetadata{ID: id}, nil
+		// Older messages may have no metadata record.
+		return EmptyEmailMetadata(id), nil
 	}
 
 	var metadata EmailMetadata
 	if err := attributevalue.UnmarshalMap(output.Item, &metadata); err != nil {
 		return EmailMetadata{}, fmt.Errorf("failed to unmarshal: %w", err)
 	}
-	return metadata, nil
+	return metadata.Clone(), nil
 }
 
 func (d *DdbMetadata) Save(ctx context.Context, metadata EmailMetadata) error {

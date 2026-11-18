@@ -49,14 +49,22 @@ checks the From domain against the envelope (SPF) domain using
 logged as a warning but does not stop delivery. The sender does not
 authenticate to the MX host and uses STARTTLS when the server advertises it.
 
-## Metadata (read/flag state)
+## Metadata (JMAP keywords and received time)
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `METADATA` | `memory` | `memory`, `file` or `ddb` (alias `dynamodb`). |
 | `METADATA_FILE` | `emissary-metadata.json` | JSON file used when `METADATA=file`. |
-| `DDB_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for message read/flag state. When unset, the name is derived from `TABLE_PREFIX` (`metadata` table). |
+| `DDB_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for per-message metadata (keywords and `receivedAt`). When unset, the name is derived from `TABLE_PREFIX` (`metadata` table). |
 | `METADATA_REGION` | AWS region | Region of the DynamoDB table. |
+
+These settings are shared by the frontend API and the `s3-receiver` delivery
+consumer: the receiver creates a metadata record for each delivered message,
+stamping a server-owned `receivedAt` (RFC 3339 UTC), and the API reads and
+updates keywords over JMAP. `receivedAt` is never accepted from clients. Use a
+persistent backend (`file` or `ddb`) in production so both processes see the
+same state. A message with no record is treated as having an empty keyword set
+and no stored receive time (JMAP falls back to the message `Date` header).
 
 ## Sessions (refresh tokens)
 
@@ -93,8 +101,8 @@ The resolved table name is `<prefix><name>` when the prefix already ends
 with `-` or `_`, otherwise `<prefix>-<name>`. When `TABLE_PREFIX` is not
 set, the default prefix is `emissary` (for example `emissary-metadata`).
 
-The logical table names are `metadata` (read/flag state), `sessions`
-(refresh tokens) and `users` (the `ddb` user manager). Explicit
+The logical table names are `metadata` (JMAP keywords and `receivedAt`),
+`sessions` (refresh tokens) and `users` (the `ddb` user manager). Explicit
 `DDB_TABLE`, `SESSION_TABLE` and `USER_TABLE` values override the derived
 names.
 

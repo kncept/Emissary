@@ -24,16 +24,18 @@ func (m *MemoryMetadata) Get(ctx context.Context, id string) (EmailMetadata, err
 
 	metadata, ok := m.data[id]
 	if !ok {
-		return EmailMetadata{ID: id}, nil
+		// Missing metadata is normal for older messages: JMAP must still
+		// return the email, with no keywords and no fabricated receive time.
+		return EmptyEmailMetadata(id), nil
 	}
-	return metadata, nil
+	return metadata.Clone(), nil
 }
 
 func (m *MemoryMetadata) Save(ctx context.Context, metadata EmailMetadata) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.data[metadata.ID] = metadata
+	m.data[metadata.ID] = metadata.Clone()
 	return nil
 }
 
@@ -51,7 +53,7 @@ func (m *MemoryMetadata) List(ctx context.Context) ([]EmailMetadata, error) {
 
 	result := make([]EmailMetadata, 0, len(m.data))
 	for _, v := range m.data {
-		result = append(result, v)
+		result = append(result, v.Clone())
 	}
 	return result, nil
 }

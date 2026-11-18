@@ -107,7 +107,7 @@ Skipped (with a warning) unless `mailer/cmd/frontend/bootstrap` exists.
 - DynamoDB tables for application state (partition key `id`,
   pay-per-request), named from `TABLE_PREFIX` the same way as the
   household project (default prefix `emissary-`): `metadata` for
-  read/flag state (always created), and `sessions`/`users` when the
+  per-message metadata (JMAP keywords and `receivedAt`; always created), and `sessions`/`users` when the
   corresponding `SESSION`/`USER_MANAGER` backend is `ddb`.
 - Secrets Manager secret `emissary/<domain>/jwt-secret` — generated
   when `JWT_SECRET` is not supplied, otherwise seeded with the given

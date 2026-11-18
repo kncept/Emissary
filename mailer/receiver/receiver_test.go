@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/kncept/Emissary/mailer/email"
+	"github.com/kncept/Emissary/mailer/metadata"
+	"github.com/kncept/Emissary/mailer/storage"
 	"github.com/kncept/Emissary/mailer/usermanager"
 )
 
@@ -27,15 +28,6 @@ func (f *fakeS3) GetObject(_ context.Context, params *s3.GetObjectInput, _ ...fu
 		return nil, &types.NoSuchKey{Message: aws.String("no such key")}
 	}
 	return &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(body))}, nil
-}
-
-func (f *fakeS3) PutObject(_ context.Context, params *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-	body, err := io.ReadAll(params.Body)
-	if err != nil {
-		return nil, err
-	}
-	f.objects[aws.ToString(params.Key)] = body
-	return &s3.PutObjectOutput{}, nil
 }
 
 func (f *fakeS3) DeleteObject(_ context.Context, params *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
@@ -86,60 +78,111 @@ func (m rejectingUserManager) Lookup(_ context.Context, username string) (*userm
 	return m.fakeUserManager.Lookup(context.Background(), username)
 }
 
-func newTestReceiver(client S3Client) *Receiver {
+func newTestReceiver(client S3Client) (*Receiver, *storage.MemoryStorage, metadata.MetadataStore) {
+	return newTestReceiverWithMeta(client, metadata.NewMemoryMetadata())
+}
+
+func newTestReceiverWithMeta(client S3Client, meta metadata.MetadataStore) (*Receiver, *storage.MemoryStorage, metadata.MetadataStore) {
+	emailStore := storage.NewMemoryStorage()
 	r, err := NewReceiver(ReceiverConfig{
 		Bucket:      "bucket",
 		Domain:      "example.com",
 		UserManager: fakeUserManager{},
 		Sender:      &fakeSender{},
 		SESClient:   client,
+		Storage:     emailStore,
+		Metadata:    meta,
 	})
 	if err != nil {
 		panic(err)
 	}
-	return r
+	return r, emailStore, meta
 }
 
-func TestProcessMessageSavesWithISO8601BasicTimestamp(t *testing.T) {
+func TestProcessMessageDeliversThroughConfiguredStorage(t *testing.T) {
 	const key = "01000192a3b4c5d6"
-	// 15:30 +0100 is 14:30 UTC: the key must use UTC, without separators or a Z suffix.
 	raw := "From: sender@example.com\r\nTo: alice@example.com\r\n" +
 		"Date: Fri, 08 Mar 2024 15:30:00 +0100\r\nSubject: hi\r\n\r\nbody\r\n"
 	client := &fakeS3{objects: map[string][]byte{key: []byte(raw)}}
+	r, emailStore, _ := newTestReceiver(client)
 
-	if err := newTestReceiver(client).ProcessMessage(context.Background(), key); err != nil {
+	if err := r.ProcessMessage(context.Background(), key); err != nil {
 		t.Fatalf("ProcessMessage() error = %v", err)
 	}
 
-	want := "users/alice@example.com/inbox/20240308T143000_" + key + ".eml"
-	if _, ok := client.objects[want]; !ok {
-		t.Fatalf("message was not saved under %q; keys = %v", want, deliveredKeys(client.objects))
+	listed, err := emailStore.ListEmails(context.Background(), "alice@example.com", "inbox")
+	if err != nil {
+		t.Fatalf("ListEmails() error = %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("delivered emails = %d, want 1", len(listed))
+	}
+	if listed[0].Ref.MailboxID != "inbox" {
+		t.Errorf("mailbox = %q, want inbox", listed[0].Ref.MailboxID)
+	}
+	if listed[0].Email.Subject != "hi" {
+		t.Errorf("subject = %q, want hi", listed[0].Email.Subject)
 	}
 	if _, ok := client.objects[key]; ok {
 		t.Error("staging object was not deleted")
 	}
 }
 
-func TestProcessMessageFallbackTimestampUsesISO8601BasicFormat(t *testing.T) {
-	const key = "01000192abcdef"
-	raw := "From: sender@example.com\r\nTo: alice@example.com\r\nSubject: no date\r\n\r\nbody\r\n"
+func TestProcessMessageCreatesMetadataWithStorageID(t *testing.T) {
+	const key = "01000192a3b4c5d8"
+	raw := "From: sender@example.com\r\nTo: alice@example.com\r\n" +
+		"Date: Fri, 08 Mar 2024 15:30:00 +0100\r\nSubject: hi\r\n\r\nbody\r\n"
 	client := &fakeS3{objects: map[string][]byte{key: []byte(raw)}}
+	metaStore := metadata.NewMemoryMetadata()
+	r, emailStore, _ := newTestReceiverWithMeta(client, metaStore)
 
-	if err := newTestReceiver(client).ProcessMessage(context.Background(), key); err != nil {
+	if err := r.ProcessMessage(context.Background(), key); err != nil {
 		t.Fatalf("ProcessMessage() error = %v", err)
 	}
 
-	keys := deliveredKeys(client.objects)
-	if len(keys) != 1 {
-		t.Fatalf("got %d delivered keys, want 1: %v", len(keys), keys)
+	listed, err := emailStore.ListEmails(context.Background(), "alice@example.com", "inbox")
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("ListEmails() = %v, %v; want one delivered email", listed, err)
 	}
-	pattern := regexp.MustCompile(`^users/alice@example.com/inbox/(\d{8}T\d{6})_` + key + `\.eml$`)
-	match := pattern.FindStringSubmatch(keys[0])
-	if match == nil {
-		t.Fatalf("delivered key %q does not use ISO 8601 basic UTC timestamp", keys[0])
+	storageID := listed[0].Ref.ID
+	meta, err := metaStore.Get(context.Background(), storageID)
+	if err != nil {
+		t.Fatalf("Get(%q) error = %v", storageID, err)
 	}
-	if _, err := time.Parse(email.DeliveredTimestampFormat, match[1]); err != nil {
-		t.Fatalf("timestamp %q is not a valid %s timestamp: %v", match[1], email.DeliveredTimestampFormat, err)
+	if meta.ID != storageID {
+		t.Errorf("metadata id = %q, want storage id %q", meta.ID, storageID)
+	}
+	if len(meta.Keywords) != 0 {
+		t.Errorf("new delivery should have no keywords, got %+v", meta.Keywords)
+	}
+	if meta.ReceivedAt == "" {
+		t.Error("delivery metadata should stamp receivedAt")
+	} else if received, err := time.Parse(time.RFC3339, meta.ReceivedAt); err != nil {
+		t.Errorf("receivedAt %q is not RFC 3339: %v", meta.ReceivedAt, err)
+	} else if time.Since(received) > time.Minute {
+		t.Errorf("receivedAt %q is not from this delivery", meta.ReceivedAt)
+	}
+	entries, err := metaStore.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(entries) != 1 || entries[0].ID != storageID {
+		t.Fatalf("metadata entries = %+v, want only id %q", entries, storageID)
+	}
+}
+
+func TestProcessMessageDeliversWithoutDate(t *testing.T) {
+	const key = "01000192abcdef"
+	raw := "From: sender@example.com\r\nTo: alice@example.com\r\nSubject: no date\r\n\r\nbody\r\n"
+	client := &fakeS3{objects: map[string][]byte{key: []byte(raw)}}
+	r, emailStore, _ := newTestReceiver(client)
+
+	if err := r.ProcessMessage(context.Background(), key); err != nil {
+		t.Fatalf("ProcessMessage() error = %v", err)
+	}
+	listed, err := emailStore.ListEmails(context.Background(), "alice@example.com", "inbox")
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("ListEmails() = %v, %v; want one delivered email", listed, err)
 	}
 }
 
@@ -154,6 +197,7 @@ func TestProcessMessageSendsBounceThroughSender(t *testing.T) {
 		UserManager: rejectingUserManager{invalid: "unknown@example.com"},
 		Sender:      mailSender,
 		SESClient:   client,
+		Storage:     storage.NewMemoryStorage(),
 	})
 	if err != nil {
 		t.Fatalf("NewReceiver() error = %v", err)
@@ -183,12 +227,15 @@ func TestProcessMessageSendsBounceThroughSender(t *testing.T) {
 	}
 }
 
-func deliveredKeys(objects map[string][]byte) []string {
-	var keys []string
-	for key := range objects {
-		if strings.HasPrefix(key, "users/") {
-			keys = append(keys, key)
-		}
+func TestNewReceiverRequiresStorage(t *testing.T) {
+	_, err := NewReceiver(ReceiverConfig{
+		Bucket:      "bucket",
+		Domain:      "example.com",
+		UserManager: fakeUserManager{},
+		Sender:      &fakeSender{},
+		SESClient:   &fakeS3{objects: map[string][]byte{}},
+	})
+	if err == nil {
+		t.Fatal("NewReceiver() without Storage should fail")
 	}
-	return keys
 }

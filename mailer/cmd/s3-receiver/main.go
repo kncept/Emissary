@@ -3,14 +3,17 @@ package main
 import (
 	"context"
 	"log"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	mailerconfig "github.com/kncept/Emissary/mailer/config"
+	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/receiver"
 	"github.com/kncept/Emissary/mailer/sender"
+	"github.com/kncept/Emissary/mailer/storage"
 	"github.com/kncept/Emissary/mailer/usermanager"
 )
 
@@ -67,6 +70,26 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 		mailSender = sender.NewLogSender()
 	}
 
+	// Create the configured storage used for delivery. Staging reads and
+	// deletes still use the S3 client directly; delivery goes through this
+	// store so receiver and frontend see the same messages.
+	var emailStore storage.Storage
+	switch strings.ToLower(strings.TrimSpace(cfg.Storage.Type)) {
+	case "memory":
+		emailStore = storage.NewMemoryStorage()
+	default:
+		emailStore, err = storage.NewS3Storage(cfg.Storage.S3Bucket)
+		if err != nil {
+			log.Fatalf("Failed to create email storage: %v", err)
+		}
+	}
+
+	// Create the metadata store used to record JMAP keywords for deliveries.
+	metaStore, err := metadata.NewStore(cfg.Metadata.Type, cfg.Metadata.FilePath, cfg.MetadataTableName(), cfg.Metadata.Region)
+	if err != nil {
+		log.Fatalf("Failed to create metadata store: %v", err)
+	}
+
 	// Create receiver
 	rcvr, err := receiver.NewReceiver(receiver.ReceiverConfig{
 		Bucket:      cfg.Storage.S3Bucket,
@@ -74,6 +97,8 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 		Sender:      mailSender,
 		Domain:      cfg.UserManager.Domain,
 		SESClient:   s3Client,
+		Storage:     emailStore,
+		Metadata:    metaStore,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create receiver: %v", err)

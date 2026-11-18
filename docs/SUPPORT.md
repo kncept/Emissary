@@ -43,7 +43,7 @@ of the implementation currently backing it:
 | `server` | `http` | HTTP listener, JWT settings and administrator configuration. |
 | `storage` | `s3`, `memory` | Email storage backend. |
 | `sender` | `aws-ses`, `mta`, `log` | Outbound email sender. |
-| `metadata` | `memory`, `file`, `ddb` | Read/flag metadata store. |
+| `metadata` | `memory`, `file`, `ddb` | Per-message metadata store (JMAP keywords and server-owned `receivedAt`). |
 | `session` | `memory`, `ddb` | Refresh-token session store. |
 | `user-manager` | `none`, `ddb`, `s3`, `ldap` | Ordinary-user authentication backend (auto-selects `s3` when storage is S3). |
 | `aws` | `aws-sdk` | AWS region and DynamoDB table naming. |

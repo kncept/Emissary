@@ -360,10 +360,41 @@ func parseEmail(key, raw string) Email {
 	return email
 }
 
-// AddEmail implements the Storage interface. S3Storage is primarily for
-// receiving emails; adding emails is not supported by this implementation.
-func (s *S3Storage) AddEmail(_ context.Context, _ string, _ *email.UserEmail) (string, error) {
-	return "", errors.New("AddEmail not supported on S3Storage")
+// AddEmail implements the Storage interface. New messages go to the
+// account's inbox. Storage owns the generated id and key layout, and returns
+// the full object key so callers can key metadata by that same id. The raw
+// content is a best-effort RFC 5322 rendering of the parsed message; the
+// original wire bytes are not available through this interface.
+func (s *S3Storage) AddEmail(ctx context.Context, accountID string, message *email.UserEmail) (string, error) {
+	mailboxPrefix := email.MailboxKeyPrefix(accountID, "inbox")
+	if mailboxPrefix == "" {
+		return "", errors.New("accountID is required")
+	}
+	if message == nil {
+		return "", errors.New("invalid email")
+	}
+
+	id, err := newEmailID()
+	if err != nil {
+		return "", err
+	}
+
+	timestamp := message.Date
+	if timestamp.IsZero() {
+		timestamp = time.Now().UTC()
+	}
+	key := fmt.Sprintf("%s%s_%s.eml", s.listPrefix()+mailboxPrefix, email.FormatDeliveredTimestamp(timestamp), id)
+
+	raw := email.RawFromUserEmail(message)
+	if _, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+		Body:   strings.NewReader(string(raw)),
+	}); err != nil {
+		return "", fmt.Errorf("failed to add email %q: %w", key, err)
+	}
+
+	return key, nil
 }
 
 // DeleteEmail implements the Storage interface. It resolves the id the same

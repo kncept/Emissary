@@ -1,17 +1,140 @@
+// Package metadata stores the JMAP-mappable state of an email that is not
+// derived from the message itself: its keywords and the server-owned receive
+// time. JMAP represents read, flagged, answered, draft and spam state as
+// keywords rather than as separate boolean fields (RFC 8621 section 4.1.1), so
+// Emissary stores them that way too.
 package metadata
 
 import (
 	"context"
+	"strings"
+	"time"
 )
 
-// EmailMetadata is the per-email state tracked by a MetadataStore.
-// The struct tags keep the JSON and DynamoDB representations in sync.
+// System keywords supported by Emissary. The first four are defined by
+// RFC 8621; the rest come from the IANA "IMAP and JMAP Keywords" registry.
+const (
+	KeywordDraft     = "$draft"
+	KeywordSeen      = "$seen"
+	KeywordFlagged   = "$flagged"
+	KeywordAnswered  = "$answered"
+	KeywordForwarded = "$forwarded"
+	KeywordJunk      = "$junk"
+	KeywordNotJunk   = "$notjunk"
+	KeywordPhishing  = "$phishing"
+)
+
+// EmailMetadata is the per-email state tracked by a MetadataStore. It holds
+// two kinds of server-owned state:
+//
+//   - ReceivedAt is the time Emissary received the message. It is stamped when
+//     the record is created and is never assignable or editable by JMAP
+//     clients. It uses the same RFC 3339 UTC string shape as JMAP's
+//     Email/receivedAt property.
+//   - Keywords use the JMAP "String[Boolean]" shape: every present key has the
+//     value true.
 type EmailMetadata struct {
-	ID      string `json:"id" dynamodbav:"id"`
-	Read    bool   `json:"read" dynamodbav:"read"`
-	Flagged bool   `json:"flagged" dynamodbav:"flagged"`
+	ID         string          `json:"id" dynamodbav:"id"`
+	ReceivedAt string          `json:"receivedAt,omitempty" dynamodbav:"receivedAt,omitempty"`
+	Keywords   map[string]bool `json:"keywords,omitempty" dynamodbav:"keywords,omitempty"`
 }
 
+// FormatReceivedAt formats t as an RFC 3339 UTC timestamp for the metadata
+// receivedAt field (and JMAP Email/receivedAt).
+func FormatReceivedAt(t time.Time) string {
+	return t.UTC().Format(time.RFC3339)
+}
+
+// EmptyEmailMetadata returns metadata for an id with no stored record. It is
+// deliberately distinct from NewEmailMetadata: a missing record must not
+// fabricate a receive time, so callers can fall back to the message Date.
+func EmptyEmailMetadata(id string) EmailMetadata {
+	return EmailMetadata{ID: id, Keywords: make(map[string]bool)}
+}
+
+// NormalizeKeyword validates and lowercases a JMAP keyword. JMAP keywords are
+// case-insensitive 1-255 character strings from the printable ASCII range,
+// excluding IMAP atom specials; servers must return them in lowercase.
+func NormalizeKeyword(keyword string) (string, bool) {
+	keyword = strings.ToLower(strings.TrimSpace(keyword))
+	if len(keyword) < 1 || len(keyword) > 255 {
+		return "", false
+	}
+	for _, r := range keyword {
+		if r < 0x21 || r > 0x7e {
+			return "", false
+		}
+		switch r {
+		case '(', ')', '{', ']', '%', '*', '"', '\\':
+			return "", false
+		}
+	}
+	return keyword, true
+}
+
+// NewEmailMetadata creates a metadata record for a newly stored email with the
+// given keywords. It stamps receivedAt with the current UTC time; callers must
+// not use it as a fallback for missing records (use EmptyEmailMetadata).
+// Invalid keyword names are ignored.
+func NewEmailMetadata(id string, keywords ...string) EmailMetadata {
+	m := EmailMetadata{
+		ID:         id,
+		ReceivedAt: FormatReceivedAt(time.Now()),
+		Keywords:   make(map[string]bool),
+	}
+	for _, keyword := range keywords {
+		if normalized, ok := NormalizeKeyword(keyword); ok {
+			m.Keywords[normalized] = true
+		}
+	}
+	return m
+}
+
+// NewEmailMetadataFromMap creates a metadata record from a JMAP keyword map.
+func NewEmailMetadataFromMap(id string, keywords map[string]bool) EmailMetadata {
+	m := NewEmailMetadata(id)
+	for keyword, enabled := range keywords {
+		if !enabled {
+			continue
+		}
+		if normalized, ok := NormalizeKeyword(keyword); ok {
+			m.Keywords[normalized] = true
+		}
+	}
+	return m
+}
+
+// HasKeyword reports whether the given keyword is set.
+func (m EmailMetadata) HasKeyword(keyword string) bool {
+	normalized, ok := NormalizeKeyword(keyword)
+	if !ok {
+		return false
+	}
+	return m.Keywords[normalized]
+}
+
+// IsRead reports whether the $seen keyword is set.
+func (m EmailMetadata) IsRead() bool { return m.HasKeyword(KeywordSeen) }
+
+// IsFlagged reports whether the $flagged keyword is set.
+func (m EmailMetadata) IsFlagged() bool { return m.HasKeyword(KeywordFlagged) }
+
+// Clone returns an independent copy, so callers can patch keywords without
+// mutating a value held by a store implementation.
+func (m EmailMetadata) Clone() EmailMetadata {
+	copy := EmailMetadata{ID: m.ID, ReceivedAt: m.ReceivedAt, Keywords: make(map[string]bool, len(m.Keywords))}
+	for keyword, enabled := range m.Keywords {
+		if enabled {
+			copy.Keywords[keyword] = true
+		}
+	}
+	return copy
+}
+
+// MetadataStore stores JMAP-mappable per-email state. Get must return
+// "not found" as an EmptyEmailMetadata with no error: JMAP responses include
+// messages that predate the metadata store, and those must still be returned
+// without a fabricated receive time.
 type MetadataStore interface {
 	// Name returns the name of the metadata store implementation.
 	Name() string
@@ -28,4 +151,17 @@ type MetadataStore interface {
 
 	// List returns all stored metadata entries.
 	List(ctx context.Context) ([]EmailMetadata, error)
+}
+
+// NewStore selects a MetadataStore implementation by name. tableName is
+// expected to be fully resolved by the caller.
+func NewStore(typeName, filePath, tableName, region string) (MetadataStore, error) {
+	switch strings.ToLower(strings.TrimSpace(typeName)) {
+	case "file":
+		return NewFileMetadata(filePath)
+	case "ddb", "dynamodb":
+		return NewDdbMetadata(tableName, region)
+	default:
+		return NewMemoryMetadata(), nil
+	}
 }

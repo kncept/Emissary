@@ -328,16 +328,26 @@ async function emailClientStack(
     effect: iam.Effect.ALLOW,
   }))
 
+
+
+  
   // DynamoDB tables used by the application. Table names are derived from
   // TABLE_PREFIX the same way as the household project (default "emissary-").
+  // The metadata table is only needed when METADATA selects DynamoDB. Parse
+  // the value the same way as mailer/config: lower-cased, trimmed, with
+  // "dynamodb" accepted as an alias for "ddb".
+  const metadataType = (env.METADATA || 'memory').toLowerCase().trim()
+  const usesDdbMetadata = metadataType === 'ddb' || metadataType === 'dynamodb'
   const metadataTableName = `${ddbTablePrefix}metadata`
-  const metadataTable = new dynamodb.Table(stack, 'emissary-metadata', {
-    tableName: metadataTableName,
-    partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-    billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-    removalPolicy: cdk.RemovalPolicy.DESTROY,
-  })
-  metadataTable.grantReadWriteData(role)
+  if (usesDdbMetadata) {
+    const metadataTable = new dynamodb.Table(stack, 'emissary-metadata', {
+      tableName: metadataTableName,
+      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    })
+    metadataTable.grantReadWriteData(role)
+  }
 
   const sessionType = (env.SESSION || '').toLowerCase().trim()
   let sessionTableName = env.SESSION_TABLE || ''
@@ -439,9 +449,9 @@ async function emailClientStack(
       STORAGE: 's3',
       S3_BUCKET: inboundEmailBucketName,
       SENDER: 'aws-ses',
-      METADATA: 'ddb',
+      METADATA: metadataType,
       TABLE_PREFIX: ddbTablePrefix,
-      DDB_TABLE: metadataTable.tableName,
+      ...(usesDdbMetadata ? { DDB_TABLE: metadataTableName } : {}),
       METADATA_REGION: awsRegion,
       ...(sessionTableName ? { SESSION: env.SESSION || 'ddb', SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
       ...(userTableName ? { USER_TABLE: userTableName, USER_REGION: awsRegion } : {}),
@@ -567,9 +577,9 @@ async function emailClientStack(
       STORAGE: 's3',
       S3_BUCKET: inboundEmailBucketName,
       SENDER: 'aws-ses',
-      METADATA: 'ddb',
+      METADATA: metadataType,
       TABLE_PREFIX: ddbTablePrefix,
-      DDB_TABLE: metadataTable.tableName,
+      ...(usesDdbMetadata ? { DDB_TABLE: metadataTableName } : {}),
       METADATA_REGION: awsRegion,
       ...(sessionTableName ? { SESSION: env.SESSION || 'ddb', SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
       ...(userTableName ? { USER_TABLE: userTableName, USER_REGION: awsRegion } : {}),
