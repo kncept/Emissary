@@ -225,10 +225,14 @@ type configurationSummary struct {
 }
 
 func (h *supportHandler) configurationSummaries() []configurationSummary {
+	serverImpl := "http"
+	if h.cfg.IsLambda {
+		serverImpl = "http (lambda)"
+	}
 	return []configurationSummary{
 		{
 			name:           serverConfigurationName,
-			implementation: "http",
+			implementation: serverImpl,
 			description:    "HTTP server and authentication",
 		},
 		{
@@ -297,6 +301,7 @@ func (h *supportHandler) configurationSettings(name string) map[string]string {
 		addSetting(settings, "jwtIssuer", h.cfg.JWTIssuer)
 		addSetting(settings, "commitHash", envutil.CommitHash)
 		addSetting(settings, "buildTime", envutil.BuildTime)
+		addSetting(settings, "lambda", boolSetting(h.cfg.IsLambda))
 
 	case storageConfigurationName:
 		addSetting(settings, "type", storageImplementation(h.cfg.StorageType, h.storage))

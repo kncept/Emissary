@@ -57,6 +57,7 @@ func main() {
 
 		SenderType:    cfg.Sender.Type,
 		SenderMTAPort: cfg.Sender.MTAPort,
+		IsLambda:      awsutil.IsAwsLambda(),
 	}
 
 	h, err := handler.New(handlerCfg)

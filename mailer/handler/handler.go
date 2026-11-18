@@ -66,6 +66,7 @@ type HandlerConfig struct {
 	Sender           sender.Sender
 	SenderType       string
 	SenderMTAPort    string
+	IsLambda         bool
 }
 
 func applyDDBTablePrefix(prefix, name string) string {
