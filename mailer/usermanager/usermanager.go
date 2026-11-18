@@ -79,7 +79,7 @@ func (u *EmissaryUser) IsEnabled() bool {
 
 // Config selects and configures a user manager backend.
 type Config struct {
-	// Type is one of "none", "ddb", "ldap" or "s3".
+	// Type is one of "none", "ddb", "filesystem", "ldap" or "s3".
 	Type string
 
 	// AdminUsername and AdminPassword describe the built-in administrator.
@@ -98,6 +98,10 @@ type Config struct {
 	// stores each user as users/<email>/user.json next to the user's
 	// mailboxes.
 	S3Bucket string
+
+	// FilesystemDir is the users directory used by the "filesystem" backend
+	// (FILESYSTEM_DIR/users). Each user is a user.json file under it.
+	FilesystemDir string
 
 	// LDAP settings are reserved for the "ldap" backend.
 	LDAPURL          string
@@ -146,8 +150,10 @@ func New(cfg Config) (UserManager, error) {
 		return NewLdap(cfg), nil
 	case "s3":
 		return NewS3(cfg), nil
+	case "filesystem":
+		return NewFile(cfg)
 	default:
-		return nil, fmt.Errorf("unknown user manager type %q (want none, ddb, ldap or s3)", cfg.Type)
+		return nil, fmt.Errorf("unknown user manager type %q (want none, ddb, filesystem, ldap or s3)", cfg.Type)
 	}
 }
 

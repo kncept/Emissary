@@ -9,6 +9,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +37,7 @@ type HandlerConfig struct {
 	JWTSecret        string
 	JWTSecretTTL     time.Duration
 	S3Bucket         string
+	FilesystemDir    string
 	StorageType      string
 	AWSRegion        string
 	MetadataType     string
@@ -83,6 +86,18 @@ func resolveDDBTable(explicit, prefix, logical string) string {
 	return applyDDBTablePrefix(prefix, logical)
 }
 
+// filesystemRoot mirrors config.FILESYSTEM_DIR's default for callers that
+// build a HandlerConfig directly (tests and programmatic users).
+func filesystemRoot(dir string) string {
+	if strings.TrimSpace(dir) != "" {
+		return dir
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".emissary")
+	}
+	return ".emissary"
+}
+
 func New(cfg HandlerConfig) (http.Handler, error) {
 	var jwtSecret string
 	if cfg.JWTSecret != "" {
@@ -112,6 +127,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 			DdbTable:         resolveDDBTable(cfg.UserTable, cfg.DDBTablePrefix, "users"),
 			Region:           cfg.UserRegion,
 			S3Bucket:         cfg.S3Bucket,
+			FilesystemDir:    filepath.Join(filesystemRoot(cfg.FilesystemDir), "users"),
 			LDAPURL:          cfg.LDAPURL,
 			LDAPBindDN:       cfg.LDAPBindDN,
 			LDAPBindPassword: cfg.LDAPBindPassword,
@@ -144,6 +160,11 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 		switch strings.ToLower(strings.TrimSpace(cfg.StorageType)) {
 		case "memory":
 			emailStore = storage.NewMemoryStorage()
+		case "filesystem":
+			emailStore, err = storage.NewFileStorage(filepath.Join(filesystemRoot(cfg.FilesystemDir), "mail"))
+			if err != nil {
+				return nil, err
+			}
 		default:
 			emailStore, err = storage.NewS3Storage(cfg.S3Bucket)
 			if err != nil {

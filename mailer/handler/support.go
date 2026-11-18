@@ -304,6 +304,9 @@ func (h *supportHandler) configurationSettings(name string) map[string]string {
 		if s3store, ok := h.storage.(*storage.S3Storage); ok {
 			addSetting(settings, "bucket", s3store.BucketName())
 		}
+		if fileStore, ok := h.storage.(*storage.FileStorage); ok {
+			addSetting(settings, "dir", fileStore.RootDir())
+		}
 
 	case senderConfigurationName:
 		addSetting(settings, "type", senderImplementation(h.cfg.SenderType, h.sender))
@@ -322,6 +325,9 @@ func (h *supportHandler) configurationSettings(name string) map[string]string {
 	case userManagerConfigurationName:
 		addSetting(settings, "type", userManagerImplementation(h.cfg.UserManagerType, h.users))
 		addSetting(settings, "domain", h.cfg.UserDomain)
+		if fileUsers, ok := h.users.(*usermanager.FileManager); ok {
+			addSetting(settings, "dir", fileUsers.RootDir())
+		}
 		addSetting(settings, "table", resolveDDBTable(h.cfg.UserTable, h.cfg.DDBTablePrefix, "users"))
 		addSetting(settings, "region", h.cfg.UserRegion)
 		addSetting(settings, "ldapURL", h.cfg.LDAPURL)
@@ -358,6 +364,8 @@ func storageImplementation(configured string, store storage.Storage) string {
 		return "memory"
 	case *storage.S3Storage:
 		return "s3"
+	case *storage.FileStorage:
+		return "filesystem"
 	}
 	switch strings.ToLower(strings.TrimSpace(configured)) {
 	case "":

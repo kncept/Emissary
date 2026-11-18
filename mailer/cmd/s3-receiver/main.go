@@ -45,6 +45,7 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 		DdbTable:         cfg.UserTableName(),
 		Region:           cfg.UserManager.Region,
 		S3Bucket:         cfg.Storage.S3Bucket,
+		FilesystemDir:    cfg.FilesystemUsersDir(),
 		LDAPURL:          cfg.UserManager.LDAPURL,
 		LDAPBindDN:       cfg.UserManager.LDAPBindDN,
 		LDAPBindPassword: cfg.UserManager.LDAPBindPassword,
@@ -77,6 +78,11 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 	switch strings.ToLower(strings.TrimSpace(cfg.Storage.Type)) {
 	case "memory":
 		emailStore = storage.NewMemoryStorage()
+	case "filesystem":
+		emailStore, err = storage.NewFileStorage(cfg.FilesystemMailDir())
+		if err != nil {
+			log.Fatalf("Failed to create email storage: %v", err)
+		}
 	default:
 		emailStore, err = storage.NewS3Storage(cfg.Storage.S3Bucket)
 		if err != nil {

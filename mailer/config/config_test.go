@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -335,6 +336,8 @@ func TestLoad_FileMetadataDefaultPath(t *testing.T) {
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("METADATA", "file")
+	os.Unsetenv("METADATA_FILE")
+	os.Unsetenv("FILESYSTEM_DIR")
 	defer cleanupEnv()
 
 	cfg, err := Load(context.Background())
@@ -342,8 +345,13 @@ func TestLoad_FileMetadataDefaultPath(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	if cfg.Metadata.FilePath != "emissary-metadata.json" {
-		t.Errorf("Metadata.FilePath = %q, want %q", cfg.Metadata.FilePath, "emissary-metadata.json")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir() error = %v", err)
+	}
+	want := filepath.Join(home, ".emissary", "metadata")
+	if cfg.Metadata.FilePath != want {
+		t.Errorf("Metadata.FilePath = %q, want %q", cfg.Metadata.FilePath, want)
 	}
 }
 
@@ -671,6 +679,7 @@ func cleanupEnv() {
 	os.Unsetenv("S3_BUCKET")
 	os.Unsetenv("MTA_PORT")
 	os.Unsetenv("METADATA_FILE")
+	os.Unsetenv("FILESYSTEM_DIR")
 	os.Unsetenv("LISTEN_ADDR")
 	os.Unsetenv("DDB_TABLE")
 	os.Unsetenv("METADATA_REGION")
@@ -680,4 +689,73 @@ func cleanupEnv() {
 	os.Unsetenv("USER_REGION")
 	os.Unsetenv("AWS_REGION")
 	clearAWSCredentialEnv()
+}
+
+func TestLoad_FilesystemBackend(t *testing.T) {
+	root := t.TempDir()
+	os.Setenv("USERNAME", "user")
+	os.Setenv("PASSWORD", "pass")
+	os.Setenv("STORAGE", "filesystem")
+	os.Setenv("FILESYSTEM_DIR", root)
+	os.Setenv("METADATA", "file")
+	os.Unsetenv("USER_MANAGER")
+	os.Unsetenv("METADATA_FILE")
+	defer cleanupEnv()
+
+	cfg, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Storage.Type != "filesystem" || cfg.UserManager.Type != "filesystem" {
+		t.Errorf("storage=%q user manager=%q", cfg.Storage.Type, cfg.UserManager.Type)
+	}
+	if cfg.FilesystemDir != root {
+		t.Errorf("FilesystemDir = %q, want %q", cfg.FilesystemDir, root)
+	}
+	if cfg.Storage.FilesystemDir != root || cfg.UserManager.FilesystemDir != root {
+		t.Errorf("sub-config dirs = %q, %q", cfg.Storage.FilesystemDir, cfg.UserManager.FilesystemDir)
+	}
+	if got, want := cfg.FilesystemMailDir(), filepath.Join(root, "mail"); got != want {
+		t.Errorf("FilesystemMailDir() = %q, want %q", got, want)
+	}
+	if got, want := cfg.FilesystemUsersDir(), filepath.Join(root, "users"); got != want {
+		t.Errorf("FilesystemUsersDir() = %q, want %q", got, want)
+	}
+	if got, want := cfg.Metadata.FilePath, filepath.Join(root, "metadata"); got != want {
+		t.Errorf("metadata path = %q, want %q", got, want)
+	}
+}
+
+func TestLoad_FilesystemDirExpandsHome(t *testing.T) {
+	os.Setenv("USERNAME", "user")
+	os.Setenv("PASSWORD", "pass")
+	os.Setenv("FILESYSTEM_DIR", "~/emissary-test")
+	defer cleanupEnv()
+
+	cfg, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir() error = %v", err)
+	}
+	if want := filepath.Join(home, "emissary-test"); cfg.FilesystemDir != want {
+		t.Errorf("FilesystemDir = %q, want %q", cfg.FilesystemDir, want)
+	}
+}
+
+func TestValidate_FilesystemTypes(t *testing.T) {
+	if err := (&StorageConfig{Type: "filesystem", FilesystemDir: "/tmp/emissary"}).Validate(); err != nil {
+		t.Errorf("storage validate = %v", err)
+	}
+	if err := (&StorageConfig{Type: "filesystem"}).Validate(); err == nil {
+		t.Error("storage validate without dir succeeded")
+	}
+	if err := (&UserManagerConfig{Type: "filesystem", FilesystemDir: "/tmp/emissary"}).Validate(); err != nil {
+		t.Errorf("user manager validate = %v", err)
+	}
+	if err := (&UserManagerConfig{Type: "filesystem"}).Validate(); err == nil {
+		t.Error("user manager validate without dir succeeded")
+	}
 }

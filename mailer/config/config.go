@@ -6,10 +6,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/kncept/Emissary/mailer/envutil"
+	"github.com/kncept/Emissary/mailer/fsutil"
 )
 
 // ServerConfig holds HTTP server and authentication configuration.
@@ -38,20 +40,26 @@ func (c *ServerConfig) Validate() error {
 
 // StorageConfig holds email storage configuration.
 type StorageConfig struct {
-	Type     string // "s3" or "memory"
+	Type     string // "s3", "filesystem" or "memory"
 	S3Bucket string
+	// FilesystemDir is the shared root from FILESYSTEM_DIR. Mail is stored
+	// under its "mail" subdirectory.
+	FilesystemDir string
 }
 
 // Validate checks that the storage configuration is complete and consistent.
 func (c *StorageConfig) Validate() error {
 	var errs []error
 	switch c.Type {
-	case "s3", "memory":
+	case "s3", "filesystem", "memory":
 	default:
-		errs = append(errs, fmt.Errorf("unknown storage type %q (want s3 or memory)", c.Type))
+		errs = append(errs, fmt.Errorf("unknown storage type %q (want s3, filesystem or memory)", c.Type))
 	}
 	if c.Type == "s3" && c.S3Bucket == "" {
 		errs = append(errs, errors.New("storage=s3 requires a bucket (set S3_BUCKET)"))
+	}
+	if c.Type == "filesystem" && c.FilesystemDir == "" {
+		errs = append(errs, errors.New("storage=filesystem requires a directory (set FILESYSTEM_DIR)"))
 	}
 	return errors.Join(errs...)
 }
@@ -80,6 +88,8 @@ func (c *SenderConfig) Validate() error {
 type MetadataConfig struct {
 	Type     string // "memory", "file", "ddb", "dynamodb"
 	DdbTable string
+	// FilePath is the metadata file/directory. When METADATA_FILE is unset it
+	// defaults to <FILESYSTEM_DIR>/metadata.
 	FilePath string
 	Region   string // AWS region for DDB
 }
@@ -117,11 +127,14 @@ func (c *SessionConfig) Validate() error {
 // The USERNAME/PASSWORD administrator is configured separately and
 // is available with every backend.
 type UserManagerConfig struct {
-	Type   string // "none", "ddb", "ldap" or "s3"
+	Type   string // "none", "ddb", "filesystem", "ldap" or "s3"
 	Domain string // receiving domain for mail delivery and reporting
 	Region string // AWS region for the "ddb" and "s3" backends
 
 	DdbTable string
+	// FilesystemDir is the shared root from FILESYSTEM_DIR. Users are stored
+	// under its "users" subdirectory.
+	FilesystemDir string
 
 	LDAPURL          string
 	LDAPBindDN       string
@@ -135,12 +148,15 @@ type UserManagerConfig struct {
 func (c *UserManagerConfig) Validate() error {
 	var errs []error
 	switch c.Type {
-	case "", "none", "ddb", "dynamodb", "ldap", "s3":
+	case "", "none", "ddb", "dynamodb", "filesystem", "ldap", "s3":
 	default:
-		errs = append(errs, fmt.Errorf("unknown user manager type %q (want none, ddb, ldap or s3)", c.Type))
+		errs = append(errs, fmt.Errorf("unknown user manager type %q (want none, ddb, filesystem, ldap or s3)", c.Type))
 	}
 	if c.Type == "ldap" && c.LDAPURL == "" {
 		errs = append(errs, errors.New("user manager ldap requires a server URL (set LDAP_URL)"))
+	}
+	if c.Type == "filesystem" && c.FilesystemDir == "" {
+		errs = append(errs, errors.New("user manager filesystem requires a directory (set FILESYSTEM_DIR)"))
 	}
 	return errors.Join(errs...)
 }
@@ -157,6 +173,11 @@ type Config struct {
 	// AWSRegion is the default AWS region used when a specific service
 	// region is not configured.
 	AWSRegion string
+
+	// FilesystemDir is the shared root for the filesystem-backed stores,
+	// read from FILESYSTEM_DIR and defaulting to ~/.emissary. Storage uses
+	// <root>/mail, the user manager <root>/users and metadata <root>/metadata.
+	FilesystemDir string
 
 	// DDBTablePrefix is prepended to logical DynamoDB table names when
 	// building table names (see TABLE_PREFIX). It defaults to "emissary".
@@ -182,6 +203,22 @@ func (c *Config) Validate() error {
 		errs = append(errs, errors.New("user manager s3 requires a bucket (set S3_BUCKET)"))
 	}
 	return errors.Join(errs...)
+}
+
+// FilesystemMailDir returns the directory holding filesystem-backed mail.
+func (c *Config) FilesystemMailDir() string {
+	return filepath.Join(c.FilesystemDir, "mail")
+}
+
+// FilesystemUsersDir returns the directory holding filesystem-backed users.
+func (c *Config) FilesystemUsersDir() string {
+	return filepath.Join(c.FilesystemDir, "users")
+}
+
+// FilesystemMetadataDir returns the directory holding filesystem-backed
+// metadata records.
+func (c *Config) FilesystemMetadataDir() string {
+	return filepath.Join(c.FilesystemDir, "metadata")
 }
 
 // ApplyDDBTablePrefix names tables the same way as the household project
@@ -226,6 +263,10 @@ func (c *Config) UserTableName() string {
 // Pass a context for secret resolution (e.g., from AWS Secrets Manager).
 func Load(ctx context.Context) (*Config, error) {
 	awsRegion := firstEnv(ctx, "AWS_REGION", "AWS_DEFAULT_REGION")
+	filesystemDir, err := fsutil.ExpandDir(firstEnvDefault(ctx, "~/.emissary", "FILESYSTEM_DIR"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid FILESYSTEM_DIR: %w", err)
+	}
 
 	cfg := &Config{
 		Server: ServerConfig{
@@ -237,8 +278,9 @@ func Load(ctx context.Context) (*Config, error) {
 			JWTIssuer:   firstEnv(ctx, "JWT_ISSUER"),
 		},
 		Storage: StorageConfig{
-			Type:     strings.ToLower(strings.TrimSpace(firstEnv(ctx, "STORAGE"))),
-			S3Bucket: firstEnv(ctx, "S3_BUCKET"),
+			Type:          strings.ToLower(strings.TrimSpace(firstEnv(ctx, "STORAGE"))),
+			S3Bucket:      firstEnv(ctx, "S3_BUCKET"),
+			FilesystemDir: filesystemDir,
 		},
 		Sender: SenderConfig{
 			Type:    strings.ToLower(strings.TrimSpace(firstEnv(ctx, "SENDER"))),
@@ -259,6 +301,7 @@ func Load(ctx context.Context) (*Config, error) {
 			Type:             strings.ToLower(strings.TrimSpace(firstEnv(ctx, "USER_MANAGER"))),
 			Domain:           strings.ToLower(strings.TrimSpace(firstEnv(ctx, "DOMAIN"))),
 			DdbTable:         firstEnv(ctx, "USER_TABLE"),
+			FilesystemDir:    filesystemDir,
 			Region:           firstEnv(ctx, "USER_REGION"),
 			LDAPURL:          firstEnv(ctx, "LDAP_URL"),
 			LDAPBindDN:       firstEnv(ctx, "LDAP_BIND_DN"),
@@ -268,6 +311,7 @@ func Load(ctx context.Context) (*Config, error) {
 			LDAPCacheTTL:     firstEnv(ctx, "LDAP_CACHE_TTL"),
 		},
 		AWSRegion:      awsRegion,
+		FilesystemDir:  filesystemDir,
 		DDBTablePrefix: strings.TrimSpace(firstEnvDefault(ctx, "emissary", "TABLE_PREFIX", "DDB_TABLE_PREFIX")),
 	}
 
@@ -311,19 +355,24 @@ func Load(ctx context.Context) (*Config, error) {
 		cfg.Metadata.Type = "memory"
 	}
 	if cfg.Metadata.Type == "file" && cfg.Metadata.FilePath == "" {
-		cfg.Metadata.FilePath = "emissary-metadata.json"
+		// METADATA_FILE still overrides this, but by default the file metadata
+		// store uses one JSON file per email under FILESYSTEM_DIR/metadata.
+		cfg.Metadata.FilePath = cfg.FilesystemMetadataDir()
 	}
 	if cfg.Metadata.Region == "" {
 		cfg.Metadata.Region = cfg.AWSRegion
 	}
 
 	// User manager defaults. When no backend is selected, follow the
-	// storage backend: S3 mail storage implies the S3 user manager, so a
-	// bucket alone is enough to run with Emissary-mastered users.
+	// storage backend: S3 mail storage implies the S3 user manager and
+	// filesystem mail storage implies the filesystem user manager.
 	if cfg.UserManager.Type == "" {
-		if cfg.Storage.Type == "s3" {
+		switch cfg.Storage.Type {
+		case "s3":
 			cfg.UserManager.Type = "s3"
-		} else {
+		case "filesystem":
+			cfg.UserManager.Type = "filesystem"
+		default:
 			cfg.UserManager.Type = "none"
 		}
 	}

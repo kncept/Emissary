@@ -30,6 +30,7 @@ func main() {
 		JWTSecret:      cfg.Server.JWTSecret,
 		JWTSecretTTL:   cfg.Server.JWTExpiry,
 		S3Bucket:       cfg.Storage.S3Bucket,
+		FilesystemDir:  cfg.FilesystemDir,
 		StorageType:    cfg.Storage.Type,
 		AWSRegion:      cfg.AWSRegion,
 		MetadataType:   cfg.Metadata.Type,

@@ -242,15 +242,19 @@ run() {
 		JWT_SECRET=$(generate_guid)
 	fi
 
-	if [[ -z "${S3_BUCKET:-}" ]]; then
-		echo "Error: S3_BUCKET environment variable must be set" >&2
+	# S3 is only needed when it is the selected mail store; the memory and
+	# filesystem backends run entirely locally.
+	if [[ -z "${S3_BUCKET:-}" && "${STORAGE:-s3}" == "s3" ]]; then
+		echo "Error: S3_BUCKET environment variable must be set when STORAGE=s3" >&2
 		return 1
 	fi
 
 	export USERNAME="$USERNAME"
 	export PASSWORD="$PASSWORD"
 	export JWT_SECRET="$JWT_SECRET"
-	export S3_BUCKET="$S3_BUCKET"
+	if [[ -n "${S3_BUCKET:-}" ]]; then
+		export S3_BUCKET="$S3_BUCKET"
+	fi
 	export METADATA="${METADATA:-memory}"
 	export PORT="${PORT:-8080}"
 
@@ -262,7 +266,13 @@ run() {
 		echo "  Password: $PASSWORD"
 	fi
 	echo "  JWT Secret: $JWT_SECRET"
-	echo "  S3 Bucket: $S3_BUCKET"
+	echo "  Storage Type: ${STORAGE:-s3}"
+	if [[ -n "${S3_BUCKET:-}" ]]; then
+		echo "  S3 Bucket: $S3_BUCKET"
+	fi
+	if [[ "${STORAGE:-}" == "filesystem" ]]; then
+		echo "  Filesystem Dir: ${FILESYSTEM_DIR:-~/.emissary}"
+	fi
 	echo "  Metadata Type: $METADATA"
 	echo "  Port: $PORT"
 	echo ""

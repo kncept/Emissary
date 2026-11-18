@@ -23,8 +23,9 @@ deployed Lambda receives its JWT secret as an ARN.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `STORAGE` | `memory` | `s3` or `memory`. |
+| `STORAGE` | `memory` | `s3`, `filesystem` or `memory`. |
 | `S3_BUCKET` | — (required when `STORAGE=s3`) | Bucket holding raw inbound messages. Required when `STORAGE=s3`. Objects are read at their exact key (SES writes them at the bucket root). |
+| `FILESYSTEM_DIR` | `~/.emissary` | Shared root for filesystem-backed stores. `STORAGE=filesystem` stores mail under `<FILESYSTEM_DIR>/mail`. |
 
 ## Sender (write side of mail)
 
@@ -54,7 +55,7 @@ authenticate to the MX host and uses STARTTLS when the server advertises it.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `METADATA` | `memory` | `memory`, `file` or `ddb` (alias `dynamodb`). |
-| `METADATA_FILE` | `emissary-metadata.json` | JSON file used when `METADATA=file`. |
+| `METADATA_FILE` | `<FILESYSTEM_DIR>/metadata` | File or directory used when `METADATA=file`. By default each record is a separate `<email id>.json` file under `<FILESYSTEM_DIR>/metadata` (normally `~/.emissary/metadata`); an explicit path ending in `.json` keeps the older single-file layout. |
 | `DDB_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for per-message metadata (keywords and `receivedAt`). When unset, the name is derived from `TABLE_PREFIX` (`metadata` table). |
 | `METADATA_REGION` | AWS region | Region of the DynamoDB table. |
 
@@ -78,7 +79,7 @@ and no stored receive time (JMAP falls back to the message `Date` header).
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `USER_MANAGER` | auto-selected | `none`, `ddb`, `s3` or `ldap`. When unset: `s3` if `STORAGE=s3`, otherwise `none`. The `s3` backend stores each user as a `users/<email>/user.json` object in the mail storage bucket and requires `S3_BUCKET`. |
+| `USER_MANAGER` | auto-selected | `none`, `ddb`, `s3`, `filesystem` or `ldap`. When unset: `s3` if `STORAGE=s3`, `filesystem` if `STORAGE=filesystem`, otherwise `none`. The `s3` backend stores each user as a `users/<email>/user.json` object in the mail storage bucket and requires `S3_BUCKET`; the `filesystem` backend writes the same record to `<FILESYSTEM_DIR>/users/<email>/user.json`. |
 | `DOMAIN` | — | Receiving domain; used for mail delivery, bounce sender addresses and the CDK app. |
 | `USER_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for the `ddb` backend. When unset, the name is derived from `TABLE_PREFIX` (`users` table). |
 | `USER_REGION` | AWS region | Region of the user table (and of the `s3` backend's S3 client). |
@@ -87,6 +88,21 @@ and no stored receive time (JMAP falls back to the message `Date` header).
 | `LDAP_BASE_DN` | — | Search base for the `ldap` backend. |
 | `LDAP_USER_FILTER` | — | User search filter for the `ldap` backend. |
 | `LDAP_CACHE_TTL` | — | Cache TTL for the `ldap` backend. |
+
+## Filesystem backend layout
+
+With `FILESYSTEM_DIR=~/.emissary` (the default) the filesystem-backed stores
+share one root:
+
+| Store | Directory | Contents |
+| --- | --- | --- |
+| `STORAGE=filesystem` | `~/.emissary/mail` | `users/<account>/<mailbox>/<timestamp>_<id>.eml` and `_storage/<session>/` drafts/state. |
+| `USER_MANAGER=filesystem` | `~/.emissary/users` | `<email>/user.json` records, the same JSON shape as the S3 user manager. |
+| `METADATA=file` | `~/.emissary/metadata` | One `<email id>.json` record per message. |
+
+All three expand a leading `~` in `FILESYSTEM_DIR` to the home directory and
+create their directory on first use. Ids are validated before being mapped to
+paths, so JMAP ids cannot escape these roots.
 
 ## DynamoDB table naming
 
@@ -124,7 +140,8 @@ behaviours on top of the table above:
   explicitly setting it blank disables admin login.
 - A random `JWT_SECRET` is generated when unset.
 - `S3_BUCKET` must be set explicitly when using `STORAGE=s3`. For a
-  fully local, AWS-free run use `STORAGE=memory ./run.sh run`.
+  fully local, AWS-free run use `STORAGE=filesystem ./run.sh run`
+  (persistent, under `~/.emissary`) or `STORAGE=memory ./run.sh run`.
 - `METADATA` defaults to `memory` and `PORT` to `8080`.
 
 ## Deployed values (set by the CDK client stack)

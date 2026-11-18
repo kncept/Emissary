@@ -32,13 +32,15 @@ administrator. If `PASSWORD` is blank the administrator cannot log in,
 but other user managers can still authenticate ordinary users.
 
 The user manager is selected with `USER_MANAGER` (auto-selected to `s3`
-when `STORAGE=s3` and no backend is chosen):
+when `STORAGE=s3`, or `filesystem` when `STORAGE=filesystem`, and no backend
+is chosen):
 
 | Type | Description |
 | --- | --- |
 | `none` | Only the built-in administrator can log in. |
 | `ddb` | In-application user management backed by DynamoDB. Administrator users can manage accounts through `/api/user/`. |
 | `s3` | In-application user management in the mail storage bucket: each user is a `users/<email>/user.json` object next to the user's mailboxes. |
+| `filesystem` | In-application user management on local disk: each user is a `<FILESYSTEM_DIR>/users/<email>/user.json` record. |
 | `ldap` | Reserved for proxying authentication to an LDAP server. |
 
 The JWT carries the user id (the user's email address) in the `sub` claim,
