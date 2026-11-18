@@ -42,7 +42,7 @@ of the implementation currently backing it:
 | --- | --- | --- |
 | `server` | `http` | HTTP listener, JWT settings and administrator configuration. |
 | `storage` | `s3`, `memory` | Email storage backend. |
-| `sender` | `aws-ses`, `log` | Outbound email sender. |
+| `sender` | `aws-ses`, `mta`, `log` | Outbound email sender. |
 | `metadata` | `memory`, `file`, `ddb` | Read/flag metadata store. |
 | `session` | `memory`, `ddb` | Refresh-token session store. |
 | `user-manager` | `none`, `ddb`, `s3`, `ldap` | Ordinary-user authentication backend (auto-selects `s3` when storage is S3). |

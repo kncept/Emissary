@@ -3,7 +3,7 @@
 A minimal email service.
 
 ## Usage
-This provides a simple and lightweight way to access emails from an AWS SES S3 setup.
+This provides a simple and lightweight way to access emails from an AWS SES S3 setup, with outbound delivery through SES or directly to recipient MX hosts (`SENDER=mta`).
 
 It can be set up as a lambda, run natively or embedded in a dockerfile.
 

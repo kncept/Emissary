@@ -305,7 +305,6 @@ func (h *supportHandler) configurationSettings(name string) map[string]string {
 
 	case senderConfigurationName:
 		addSetting(settings, "type", senderImplementation(h.cfg.SenderType, h.sender))
-		addSetting(settings, "from", h.cfg.SenderFrom)
 
 	case metadataConfigurationName:
 		addSetting(settings, "type", metadataImplementation(h.cfg.MetadataType, h.metadata))
@@ -373,6 +372,8 @@ func senderImplementation(configured string, mailSender sender.Sender) string {
 	switch strings.ToLower(strings.TrimSpace(configured)) {
 	case "aws-ses", "ses":
 		return "aws-ses"
+	case "mta":
+		return "mta"
 	case "log":
 		return "log"
 	}
@@ -380,6 +381,8 @@ func senderImplementation(configured string, mailSender sender.Sender) string {
 		switch mailSender.Name() {
 		case "AwsSesSender":
 			return "aws-ses"
+		case "MtaSender":
+			return "mta"
 		case "LogSender":
 			return "log"
 		default:

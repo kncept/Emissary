@@ -30,12 +30,10 @@ type EmailResponse struct {
 }
 
 type captureSender struct {
-	from     string
 	messages []*email.UserEmail
 }
 
 func (s *captureSender) Name() string { return "capture" }
-func (s *captureSender) From() string { return s.from }
 func (s *captureSender) Send(_ context.Context, message *email.UserEmail) error {
 	s.messages = append(s.messages, message)
 	return nil
@@ -92,7 +90,7 @@ func (m *testUserManager) user(username string) (*usermanager.User, error) {
 func newHandlerForTest(t *testing.T, adminPassword string) (http.Handler, *storage.MemoryStorage, *captureSender) {
 	t.Helper()
 	store := storage.NewMemoryStorage()
-	sender := &captureSender{from: "default@example.com"}
+	sender := &captureSender{}
 	h, err := New(HandlerConfig{
 		AuthUser:     "admin",
 		AuthPass:     adminPassword,

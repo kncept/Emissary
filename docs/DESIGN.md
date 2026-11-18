@@ -9,11 +9,12 @@ control. It turns AWS SES into a small webmail application:
   stores each raw message (RFC 5322 EML) in an S3 bucket.
 - **Reading**: a single Go binary serves a React webmail client and a
   JMAP API over HTTPS that reads those S3 objects as per-user mailboxes.
-- **Sending**: outbound mail is sent through the SES `SendEmail` API.
+- **Sending**: outbound mail goes either through the SES `SendEmail` API
+  (`SENDER=aws-ses`) or directly to recipient MX hosts over SMTP (`SENDER=mta`).
 
-There is no mail transfer agent, maildir, IMAP server or relational
-database anywhere in the system. AWS does SMTP; Emissary does the web
-application.
+There is no persistent mail queue, maildir, IMAP server or relational
+database anywhere in the system. The `mta` sender speaks SMTP itself; Emissary
+does the web application.
 
 ## Goals
 
@@ -34,7 +35,8 @@ application.
 
 ## Non-goals / status
 
-- Full IMAP/SMTP interoperability. SES is the only mail transport.
+- Full IMAP/SMTP interoperability. Outbound SMTP delivery is direct and
+  unqueued; there is no local mail queue or DKIM signing.
 - The `ldap` user manager is registered but not implemented (it exists
   so deployments can select it later); it currently panics for ordinary
   users. The `ddb` user manager is implemented against DynamoDB.

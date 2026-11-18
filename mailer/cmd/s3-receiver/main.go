@@ -6,8 +6,8 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	mailerconfig "github.com/kncept/Emissary/mailer/config"
 	"github.com/kncept/Emissary/mailer/receiver"
 	"github.com/kncept/Emissary/mailer/sender"
@@ -57,21 +57,23 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 	var mailSender sender.Sender
 	switch cfg.Sender.Type {
 	case "aws-ses", "ses":
-		mailSender, err = sender.NewAwsSesSender(ctx, cfg.Sender.From)
+		mailSender, err = sender.NewAwsSesSender(ctx)
 		if err != nil {
 			log.Fatalf("Failed to create SES sender: %v", err)
 		}
+	case "mta":
+		mailSender = sender.NewMtaSender(cfg.Sender.MTAPort)
 	default:
-		mailSender = sender.NewLogSender(cfg.Sender.From)
+		mailSender = sender.NewLogSender()
 	}
 
 	// Create receiver
 	rcvr, err := receiver.NewReceiver(receiver.ReceiverConfig{
-		Bucket:       cfg.Storage.S3Bucket,
-		UserManager:  userManager,
-		Sender:       mailSender,
-		Domain:       cfg.UserManager.Domain,
-		SESClient:    s3Client,
+		Bucket:      cfg.Storage.S3Bucket,
+		UserManager: userManager,
+		Sender:      mailSender,
+		Domain:      cfg.UserManager.Domain,
+		SESClient:   s3Client,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create receiver: %v", err)

@@ -45,7 +45,7 @@ func TestHandler_EmailGet(t *testing.T) {
 		AdminUsername: "admin",
 		AdminPassword: "password",
 	})
-	testSender := sender.NewLogSender("test@example.com")
+	testSender := sender.NewLogSender()
 
 	handler := NewHandler(memStorage, memMeta, userMgr, testSender)
 
@@ -97,7 +97,7 @@ func TestHandler_MailboxGet(t *testing.T) {
 		AdminUsername: "admin",
 		AdminPassword: "password",
 	})
-	testSender := sender.NewLogSender("test@example.com")
+	testSender := sender.NewLogSender()
 
 	handler := NewHandler(memStorage, memMeta, userMgr, testSender)
 
@@ -162,7 +162,7 @@ func TestHandler_EmailQuery(t *testing.T) {
 		AdminUsername: "admin",
 		AdminPassword: "password",
 	})
-	testSender := sender.NewLogSender("test@example.com")
+	testSender := sender.NewLogSender()
 
 	handler := NewHandler(memStorage, memMeta, userMgr, testSender)
 
@@ -207,7 +207,7 @@ func TestHandler_EmailQueryScopesToAccountAndMailbox(t *testing.T) {
 
 	handler := NewHandler(memStorage, metadata.NewMemoryMetadata(),
 		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
-		sender.NewLogSender("test@example.com"))
+		sender.NewLogSender())
 
 	queryIDs := func(t *testing.T, accountID, mailboxID string) []string {
 		t.Helper()
@@ -270,7 +270,7 @@ func TestEmailSetStoresReplyTo(t *testing.T) {
 	store := storage.NewMemoryStorage()
 	handler := NewHandler(store, metadata.NewMemoryMetadata(),
 		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
-		sender.NewLogSender("test@example.com"))
+		sender.NewLogSender())
 
 	args := json.RawMessage(`{"accountId":"alice@example.com","create":{"c1":{
 		"mailboxIds":{"drafts":true},
@@ -301,12 +301,10 @@ func TestEmailSetStoresReplyTo(t *testing.T) {
 }
 
 type recordingSender struct {
-	from     string
 	messages []*email.UserEmail
 }
 
 func (s *recordingSender) Name() string { return "recording" }
-func (s *recordingSender) From() string { return s.from }
 func (s *recordingSender) Send(_ context.Context, message *email.UserEmail) error {
 	s.messages = append(s.messages, message)
 	return nil
@@ -373,7 +371,7 @@ func TestEmailSubmissionSetFromVerification(t *testing.T) {
 				Subject:   "subject",
 				Text:      "body",
 			})
-			capture := &recordingSender{from: "default@example.com"}
+			capture := &recordingSender{}
 			handler := NewHandler(store, metadata.NewMemoryMetadata(),
 				usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
 				capture)
@@ -455,7 +453,7 @@ func TestEmailSubmissionSetMasqueradeReplyTo(t *testing.T) {
 				Subject:   "subject",
 				Text:      "body",
 			})
-			capture := &recordingSender{from: "default@example.com"}
+			capture := &recordingSender{}
 			handler := NewHandler(store, metadata.NewMemoryMetadata(),
 				usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
 				capture)

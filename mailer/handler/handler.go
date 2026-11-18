@@ -61,7 +61,7 @@ type HandlerConfig struct {
 	LDAPCacheTTL     string
 	Sender           sender.Sender
 	SenderType       string
-	SenderFrom       string
+	SenderMTAPort    string
 }
 
 func applyDDBTablePrefix(prefix, name string) string {
@@ -172,12 +172,14 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 	if mailSender == nil {
 		switch strings.ToLower(strings.TrimSpace(cfg.SenderType)) {
 		case "aws-ses", "ses":
-			mailSender, err = sender.NewAwsSesSender(context.Background(), cfg.SenderFrom)
+			mailSender, err = sender.NewAwsSesSender(context.Background())
 			if err != nil {
 				return nil, err
 			}
+		case "mta":
+			mailSender = sender.NewMtaSender(cfg.SenderMTAPort)
 		default:
-			mailSender = sender.NewLogSender(cfg.SenderFrom)
+			mailSender = sender.NewLogSender()
 		}
 	}
 

@@ -17,32 +17,24 @@ var _ Sender = (*AwsSesSender)(nil)
 // AwsSesSender sends mail through the Amazon SES v2 SendEmail API.
 type AwsSesSender struct {
 	client *ses.Client
-	from   string
 }
 
-func NewAwsSesSender(ctx context.Context, from string) (*AwsSesSender, error) {
+func NewAwsSesSender(ctx context.Context) (*AwsSesSender, error) {
 	cfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
-	return &AwsSesSender{client: ses.NewFromConfig(cfg), from: from}, nil
+	return &AwsSesSender{client: ses.NewFromConfig(cfg)}, nil
 }
 
 func (s *AwsSesSender) Name() string {
 	return "AwsSesSender"
 }
 
-func (s *AwsSesSender) From() string {
-	return s.from
-}
-
 func (s *AwsSesSender) Send(ctx context.Context, message *email.UserEmail) error {
-	source := s.from
-	if message.From.Address != "" {
-		source = message.From.Address
-	}
+	source := message.From.Address
 	if source == "" {
-		return errors.New("sender address is not configured (set SES_FROM)")
+		return errors.New("message has no From address")
 	}
 
 	body := &types.Body{}

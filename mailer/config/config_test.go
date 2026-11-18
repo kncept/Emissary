@@ -19,6 +19,7 @@ func TestLoad_Defaults(t *testing.T) {
 		os.Unsetenv("JWT_SECRET")
 		os.Unsetenv("STORAGE")
 		os.Unsetenv("SENDER")
+		os.Unsetenv("MTA_PORT")
 		os.Unsetenv("SESSION")
 		os.Unsetenv("SESSION_TABLE")
 		os.Unsetenv("SESSION_REGION")
@@ -76,7 +77,6 @@ func TestLoad_CustomValues(t *testing.T) {
 	os.Setenv("JWT_TTL", "12h")
 	os.Setenv("PORT", "9090")
 	os.Setenv("S3_BUCKET", "my-bucket")
-	os.Setenv("SES_FROM", "sender@example.com")
 	os.Setenv("METADATA_FILE", "/tmp/meta.json")
 	os.Setenv("METADATA_REGION", "ap-southeast-1")
 	os.Setenv("AWS_REGION", "us-east-1")
@@ -113,9 +113,6 @@ func TestLoad_CustomValues(t *testing.T) {
 	}
 	if cfg.Storage.S3Bucket != "my-bucket" {
 		t.Errorf("Storage.S3Bucket = %q", cfg.Storage.S3Bucket)
-	}
-	if cfg.Sender.From != "sender@example.com" {
-		t.Errorf("Sender.From = %q", cfg.Sender.From)
 	}
 	if cfg.Metadata.FilePath != "/tmp/meta.json" {
 		t.Errorf("Metadata.FilePath = %q", cfg.Metadata.FilePath)
@@ -466,6 +463,7 @@ func TestSenderConfig_Validate(t *testing.T) {
 		{"log", SenderConfig{Type: "log"}, false},
 		{"aws-ses", SenderConfig{Type: "aws-ses"}, false},
 		{"ses alias", SenderConfig{Type: "ses"}, false},
+		{"mta", SenderConfig{Type: "mta"}, false},
 		{"unknown", SenderConfig{Type: "smtp"}, true},
 		{"empty", SenderConfig{}, true},
 	}
@@ -476,6 +474,24 @@ func TestSenderConfig_Validate(t *testing.T) {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestLoad_MtaSenderConfig(t *testing.T) {
+	os.Setenv("USERNAME", "testuser")
+	os.Setenv("SENDER", "mta")
+	os.Setenv("MTA_PORT", "1025")
+	defer cleanupEnv()
+
+	cfg, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Sender.Type != "mta" {
+		t.Errorf("Sender.Type = %q, want mta", cfg.Sender.Type)
+	}
+	if cfg.Sender.MTAPort != "1025" {
+		t.Errorf("Sender.MTAPort = %q", cfg.Sender.MTAPort)
 	}
 }
 
@@ -593,7 +609,7 @@ func cleanupEnv() {
 	os.Unsetenv("JWT_TTL")
 	os.Unsetenv("PORT")
 	os.Unsetenv("S3_BUCKET")
-	os.Unsetenv("SES_FROM")
+	os.Unsetenv("MTA_PORT")
 	os.Unsetenv("METADATA_FILE")
 	os.Unsetenv("LISTEN_ADDR")
 	os.Unsetenv("DDB_TABLE")

@@ -10,7 +10,6 @@ import (
 // implementing this interface and selecting them with SENDER.
 type Sender interface {
 	Name() string
-	From() string
 	Send(ctx context.Context, message *email.UserEmail) error
 	// SendBounce sends a bounce message for a failed delivery.
 	// originalMessageID is the SES message ID of the original message.

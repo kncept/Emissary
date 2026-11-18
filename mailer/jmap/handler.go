@@ -1088,14 +1088,12 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 				}
 			}
 		}
-		// A JMAP account is normally the user's email address. Fall back to
-		// the configured sender only when the account is not an address (for
-		// example the built-in "admin" account).
+		// A JMAP account is normally the user's email address, so it is the
+		// final source for From when neither the envelope nor the draft carries
+		// one. An account without an address (for example the built-in "admin"
+		// account) cannot send from itself.
 		if from == "" && strings.Contains(accountID, "@") {
 			from = accountID
-		}
-		if from == "" {
-			from = h.sender.From()
 		}
 
 		// Validate the From address syntax.

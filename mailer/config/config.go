@@ -57,19 +57,23 @@ func (c *StorageConfig) Validate() error {
 }
 
 // SenderConfig holds outbound email sender configuration. The SES region is
-// resolved from the AWS SDK configuration, not from the environment.
+// resolved from the AWS SDK configuration, not from the environment. There is
+// no configured From address: each message carries the submitting user's own
+// address (or the masquerade target's address).
 type SenderConfig struct {
-	Type string // "aws-ses" or "log"
-	From string // SES from address
+	Type    string // "aws-ses", "mta" or "log"
+	MTAPort string // SMTP port for the MTA sender (default 25)
 }
 
 // Validate checks that the sender configuration is complete and consistent.
 func (c *SenderConfig) Validate() error {
+	var errs []error
 	switch c.Type {
-	case "aws-ses", "ses", "log":
-		return nil
+	case "aws-ses", "ses", "mta", "log":
+	default:
+		errs = append(errs, fmt.Errorf("unknown sender type %q (want aws-ses, mta or log)", c.Type))
 	}
-	return fmt.Errorf("unknown sender type %q (want aws-ses or log)", c.Type)
+	return errors.Join(errs...)
 }
 
 // MetadataConfig holds email metadata storage configuration.
@@ -237,8 +241,8 @@ func Load(ctx context.Context) (*Config, error) {
 			S3Bucket: firstEnv(ctx, "S3_BUCKET"),
 		},
 		Sender: SenderConfig{
-			Type: strings.ToLower(strings.TrimSpace(firstEnv(ctx, "SENDER"))),
-			From: firstEnv(ctx, "SES_FROM"),
+			Type:    strings.ToLower(strings.TrimSpace(firstEnv(ctx, "SENDER"))),
+			MTAPort: firstEnvDefault(ctx, "25", "MTA_PORT"),
 		},
 		Metadata: MetadataConfig{
 			Type:     strings.ToLower(strings.TrimSpace(firstEnv(ctx, "METADATA"))),
@@ -293,11 +297,7 @@ func Load(ctx context.Context) (*Config, error) {
 
 	// Sender defaults
 	if cfg.Sender.Type == "" {
-		if cfg.Sender.From != "" {
-			cfg.Sender.Type = "aws-ses"
-		} else {
-			cfg.Sender.Type = "log"
-		}
+		cfg.Sender.Type = "log"
 	}
 
 	// Metadata defaults

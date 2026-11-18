@@ -167,7 +167,6 @@ deploy_show_env() {
 		echo "PASSWORD: (not defined)"
 	fi
 	echo "JWT_SECRET: $(if [[ -n "${JWT_SECRET:-}" ]]; then echo "(defined)"; else echo "<not set (will generate)>"; fi)"
-	echo "SES_FROM: ${SES_FROM:-<not set (defaults to no-reply@DOMAIN)>}"
 	echo "========================================="
 }
 

@@ -87,7 +87,7 @@ instantiated in `handler.New`:
 | Seam | Interface | Selector | Implementations | Notes |
 | --- | --- | --- | --- | --- |
 | Inbound messages | `storage.Storage` | `STORAGE` | `s3`, `memory` | `s3` needs `S3_BUCKET`. Defaults to `memory`. |
-| Outbound mail | `sender.Sender` | `SENDER` | `aws-ses`, `log` | Defaults to `aws-ses` when `SES_FROM` is set, else `log`. |
+| Outbound mail | `sender.Sender` | `SENDER` | `aws-ses`, `mta`, `log` | Defaults to `log`. The From address comes from the submitting user (or masquerade target), not from configuration. |
 | Message state | `metadata.MetadataStore` | `METADATA` | `memory` (default), `file`, `ddb` | `ddb` uses `DDB_TABLE` or the `metadata` table derived from `TABLE_PREFIX`. |
 | Users | `usermanager.Manager` | `USER_MANAGER` | `none`, `ddb`, `s3`, `ldap` | Auto-selects `s3` when storage is S3, else `none`. `ddb` uses `USER_TABLE` or the `users` table derived from `TABLE_PREFIX`; `s3` stores each user as `users/<email>/user.json` in the mail bucket. Both are Emissary-mastered. `ldap` is unimplemented. |
 
@@ -183,15 +183,17 @@ enabling independent management (move, delete, flag) per user.
 2. The handler verifies the submitted email belongs to the request's
    `accountId`, then resolves the From address from the envelope sender, the
    draft's From header, or (on a reply) the original recipient, falling back
-   to the account address and finally the sender's configured `From`
-   (`SES_FROM`).
+   to the account address (the user's id). There is no configured From
+   address.
 3. The From address must match the authenticated user's account, unless the
    caller has `EmissaryUserManagement` and may masquerade as another user.
    A mismatched From is rejected with a `forbidden` submission error. When
    masquerading, Reply-To must match From (it defaults to From when omitted).
-4. The message is handed to the configured `sender.Sender` implementation —
-   in production the SES v2 `SendEmail` API (including Reply-To addresses), in
-   development a log line.
+4. The message is handed to the configured `sender.Sender` implementation.
+   `aws-ses` uses the SES v2 `SendEmail` API (including Reply-To addresses);
+   `mta` resolves the recipient domains' MX records and delivers directly over
+   SMTP on port 25, after a DMARC/SPF alignment warning check; `log` writes a
+   line to the process log.
 5. On success, the session draft is deleted; on failure it is kept so the
    client can retry without re-entering the message.
 

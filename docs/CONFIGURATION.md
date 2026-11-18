@@ -30,8 +30,24 @@ deployed Lambda receives its JWT secret as an ARN.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SENDER` | `aws-ses` if `SES_FROM` is set, else `log` | `aws-ses` (alias `ses`) or `log`. |
-| `SES_FROM` | — | The From address used when a request does not carry one (`no-reply@<DOMAIN>` in the CDK deployment). Required for real sending. |
+| `SENDER` | `log` | `aws-ses` (alias `ses`), `mta` or `log`. |
+| `MTA_PORT` | `25` | SMTP port used by the `mta` sender (e.g. `1025` for a local mail sink). |
+
+There is no configured From address. From is always the submitting user's own
+address (or the masquerade target's when a User Manager sends on behalf of
+another account). Reply-To is carried on the message and, when masquerading,
+must match From (it defaults to From when omitted).
+
+`SENDER=mta` delivers directly: for each recipient domain it resolves MX
+records, connects to the preferred mail exchanger on `MTA_PORT` and speaks SMTP.
+MX hosts are tried in preference order, then the domain itself as a last
+resort. Recipients are grouped by domain, and Bcc addresses appear only in the
+SMTP envelope. The envelope sender and EHLO/HELO identity are taken from the
+message's From address. Before delivery the sender
+checks the From domain against the envelope (SPF) domain using
+`github.com/mjl-/mox/dmarc`; a misaligned domain is
+logged as a warning but does not stop delivery. The sender does not
+authenticate to the MX host and uses STARTTLS when the server advertises it.
 
 ## Metadata (read/flag state)
 
@@ -110,7 +126,6 @@ variables for the enabled DDB-backed stores (including
 `METADATA_REGION`/`DDB_TABLE`), `JWT_SECRET` as the Secrets Manager ARN,
 plus `USERNAME`, `PASSWORD` (only when provided at deploy time),
 `USER_MANAGER` (only when provided at deploy time; the app auto-selects
-the `s3` backend since storage is S3), `DOMAIN`, `SES_FROM` (default
-`no-reply@<DOMAIN>`), `JWT_AUDIENCE=mail.<DOMAIN>` and
+the `s3` backend since storage is S3), `DOMAIN`, `JWT_AUDIENCE=mail.<DOMAIN>` and
 `JWT_ISSUER=emissary-<DOMAIN>`. Deploy-time variables are listed in
 [DEPLOYMENT.md](DEPLOYMENT.md#deploy-time-variables).

@@ -121,10 +121,12 @@ STORAGE=memory ./run.sh run
 `run.sh run` builds first, then starts `.build/frontend`. It defaults
 `USERNAME=Emissary`, generates `PASSWORD` and `JWT_SECRET` when unset
 (printed at startup). `S3_BUCKET` must be set explicitly when using
-`STORAGE=s3` — set `STORAGE=memory` explicitly for an AWS-free run. With
-no `SES_FROM`, outbound mail uses the log sender (messages appear in
-stdout only). See [CONFIGURATION.md](CONFIGURATION.md) for the full
-variable list and defaults.
+`STORAGE=s3` — set `STORAGE=memory` explicitly for an AWS-free run. Outbound
+mail uses the log sender by default (messages appear in stdout only); the From
+address always comes from the sending user rather than from configuration. For
+direct SMTP delivery set `SENDER=mta`; `MTA_PORT=1025` is handy with a local
+mail sink. See
+[CONFIGURATION.md](CONFIGURATION.md) for the full variable list and defaults.
 
 For pure UI work, `cd frontend && npm run dev` starts the Vite dev
 server, but it does not proxy `/api` — end-to-end work happens against
@@ -146,8 +148,8 @@ add a new implementation, three places change:
    - `usermanager.UserManager` — `Name`, `Authenticate`, `Lookup`,
      `Autocomplete` (`mailer/usermanager`)
 2. Register it in the `switch` that builds that component
-   (`handler.New` for storage/metadata/sender; `usermanager.New` for
-   user managers).
+   (`handler.New` for storage/metadata/sender, plus
+   `cmd/s3-receiver` for senders; `usermanager.New` for user managers).
 3. Teach `mailer/config` to validate the new selector value and any
    required companion variables.
 

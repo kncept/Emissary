@@ -63,7 +63,10 @@ JSON, directory creation) plus a concurrency test. `usermanager`
 covers `none` and `ddb` (through a fake DynamoDB client), and
 that `ldap` constructs and selects but panics with `"unimplemented"`
 for ordinary users.
-`sender` covers the log sender; the SES sender is only constructed.
+`sender` covers the log sender and the MTA sender end to end over a
+`net.Pipe` SMTP session (MX preference/failover, recipient grouping, Bcc
+envelope handling, bounces) plus DMARC/SPF alignment checks with mox's mock
+DNS resolver. The SES sender is only constructed.
 
 ### HTTP handler
 

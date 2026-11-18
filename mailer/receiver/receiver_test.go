@@ -67,7 +67,6 @@ type fakeSender struct {
 }
 
 func (*fakeSender) Name() string                                 { return "fake" }
-func (*fakeSender) From() string                                 { return "mailer@example.com" }
 func (*fakeSender) Send(context.Context, *email.UserEmail) error { return nil }
 func (s *fakeSender) SendBounce(_ context.Context, originalMessageID, bounceSender, recipient, bounceType string, original *email.UserEmail) error {
 	s.bounces = append(s.bounces, bounceCall{originalMessageID, bounceSender, recipient, bounceType, original})

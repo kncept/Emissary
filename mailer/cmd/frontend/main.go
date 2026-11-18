@@ -54,8 +54,8 @@ func main() {
 		LDAPUserFilter:   cfg.UserManager.LDAPUserFilter,
 		LDAPCacheTTL:     cfg.UserManager.LDAPCacheTTL,
 
-		SenderType: cfg.Sender.Type,
-		SenderFrom: cfg.Sender.From,
+		SenderType:    cfg.Sender.Type,
+		SenderMTAPort: cfg.Sender.MTAPort,
 	}
 
 	h, err := handler.New(handlerCfg)
