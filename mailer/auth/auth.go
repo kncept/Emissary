@@ -36,11 +36,13 @@ type jwtHeader struct {
 
 // Claims is the verified content of an Emissary JWT. Subject is the user id;
 // Admin is present (and true) only for the built-in administrator.
+// SystemManager indicates the user has system management privileges.
 // EmissaryUserManagement indicates the user can manage other users (requires Emissary-mastered backend).
 type Claims struct {
 	Subject                string `json:"sub"`
 	SID                    string `json:"sid,omitempty"`
 	Admin                  bool   `json:"admin,omitempty"`
+	SystemManager          bool   `json:"systemManager,omitempty"`
 	EmissaryUserManagement bool   `json:"EmissaryUserManagement,omitempty"`
 	Issue                  int    `json:"issue,omitempty"`
 	IssuedAt               int64  `json:"iat"`
@@ -55,13 +57,14 @@ type jwtClaims = Claims
 // Authenticator validates users through a pluggable user manager and issues
 // HS256 JWTs.
 type Authenticator struct {
-	users        usermanager.UserManager
-	sessionStore session.SessionStore
-	secret       []byte
-	ttl          time.Duration // legacy, not used for new tokens
-	now          func() time.Time
-	audience     string
-	issuer       string
+	users         usermanager.UserManager
+	sessionStore  session.SessionStore
+	secret        []byte
+	ttl           time.Duration // legacy, not used for new tokens
+	now           func() time.Time
+	audience      string
+	issuer        string
+	adminUsername string
 }
 
 // New preserves the original single-account constructor. It is equivalent to
@@ -71,11 +74,11 @@ func New(username, password, secret string, ttl time.Duration, audience, issuer 
 		AdminUsername: username,
 		AdminPassword: password,
 	})
-	return NewWithUserManager(users, nil, secret, ttl, audience, issuer)
+	return NewWithUserManager(users, nil, secret, ttl, audience, issuer, username)
 }
 
 // NewWithUserManager creates an authenticator backed by users.
-func NewWithUserManager(users usermanager.UserManager, sessionStore session.SessionStore, secret string, ttl time.Duration, audience, issuer string) *Authenticator {
+func NewWithUserManager(users usermanager.UserManager, sessionStore session.SessionStore, secret string, ttl time.Duration, audience, issuer string, adminUsername string) *Authenticator {
 	if ttl <= 0 {
 		ttl = defaultTokenTTL
 	}
@@ -86,13 +89,14 @@ func NewWithUserManager(users usermanager.UserManager, sessionStore session.Sess
 		sessionStore = session.NewMemorySessionStore()
 	}
 	return &Authenticator{
-		users:        users,
-		sessionStore: sessionStore,
-		secret:       []byte(secret),
-		ttl:          ttl,
-		now:          time.Now,
-		audience:     audience,
-		issuer:       issuer,
+		users:         users,
+		sessionStore:  sessionStore,
+		secret:        []byte(secret),
+		ttl:           ttl,
+		now:           time.Now,
+		audience:      audience,
+		issuer:        issuer,
+		adminUsername: adminUsername,
 	}
 }
 
@@ -206,11 +210,23 @@ func (a *Authenticator) issueTokens(ctx context.Context, user *usermanager.User)
 	}
 	sid := base64.RawURLEncoding.EncodeToString(sidBytes)
 
-	// Only an Emissary-mastered user manager can manage its own users, and
-	// only administrators of that store receive the management claim.
+	// Determine claims based on user type:
+	// - The built-in admin always has system management privileges, regardless
+	//   of the configured user manager backend.
+	// - EmissaryUserManagement additionally requires an Emissary-mastered
+	//   backend; the built-in admin gets it when one is configured.
+	// - Other users get both flags from their stored record.
+	isBuiltInAdmin := a.adminUsername != "" && strings.EqualFold(user.ID, a.adminUsername)
+	systemManager := isBuiltInAdmin
 	var emissaryUserMgmt bool
-	if _, ok := a.users.(usermanager.EmissaryAuthManager); ok {
-		emissaryUserMgmt = user.Admin
+
+	if em, ok := a.users.(usermanager.EmissaryAuthManager); ok {
+		if isBuiltInAdmin {
+			emissaryUserMgmt = true
+		} else if eu, err := em.Get(ctx, user.ID); err == nil && eu != nil {
+			emissaryUserMgmt = eu.UserManager
+			systemManager = eu.SystemManager
+		}
 	}
 
 	// Create or update session
@@ -231,6 +247,7 @@ func (a *Authenticator) issueTokens(ctx context.Context, user *usermanager.User)
 		Subject:                user.ID,
 		SID:                    sid,
 		Admin:                  user.Admin,
+		SystemManager:          systemManager,
 		EmissaryUserManagement: emissaryUserMgmt,
 		IssuedAt:               now.Unix(),
 		ExpiresAt:              accessExpiresAt.Unix(),

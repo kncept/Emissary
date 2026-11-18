@@ -52,7 +52,7 @@ describe('auth api', () => {
       const { checkAuth } = await importApi();
       window.localStorage.setItem(TOKEN_KEY, makeJwt({
         sub: 'Emissary',
-        admin: true,
+        SystemManager: true,
         EmissaryUserManagement: true,
         exp: 9999999999,
       }));
@@ -65,7 +65,7 @@ describe('auth api', () => {
       expect(result).toEqual({
         authenticated: true,
         username: 'Emissary',
-        admin: true,
+        systemManager: true,
         emissaryUserManagement: true,
       });
     });

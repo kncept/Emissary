@@ -56,10 +56,11 @@ func (h *usersHandler) ListUsers(ctx context.Context, params usersapi.ListUsersP
 	}
 	for _, u := range users {
 		response.Users = append(response.Users, usersapi.User{
-			Email:   u.Email,
-			Enabled: u.Enabled,
-			Admin:   u.Admin,
-			Rules:   u.Rules,
+			Email:          u.Email,
+			Enabled:        u.Enabled,
+			SystemManager:  u.SystemManager,
+			Rules:          u.Rules,
+			UserManager:    u.UserManager,
 		})
 	}
 
@@ -76,6 +77,15 @@ func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserR
 		return &usersapi.CreateUserForbidden{Error: "insufficient permissions"}, nil
 	}
 
+	// SystemManager can only be assigned by a user who also has SystemManager permission
+	systemManager := false
+	if req.SystemManager.IsSet() {
+		systemManager = req.SystemManager.Value
+		if systemManager && !claims.SystemManager {
+			return &usersapi.CreateUserForbidden{Error: "insufficient permissions to assign SystemManager role"}, nil
+		}
+	}
+
 	if req.Email == "" {
 		return &usersapi.CreateUserBadRequest{Error: "email is required"}, nil
 	}
@@ -88,9 +98,9 @@ func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserR
 		enabled = req.Enabled.Value
 	}
 
-	admin := false
-	if req.Admin.IsSet() {
-		admin = req.Admin.Value
+	userManager := false
+	if req.UserManager.IsSet() {
+		userManager = req.UserManager.Value
 	}
 
 	rules := req.Rules
@@ -102,11 +112,12 @@ func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserR
 		Enabled:        enabled,
 		SaltedPassword: req.Password,
 		Rules:          rules,
+		UserManager:    userManager,
+		SystemManager:  systemManager,
 	}
 	user.ID = req.Email
 	user.Username = req.Email
 	user.Email = req.Email
-	user.Admin = admin
 
 	if err := h.manager.Create(ctx, user); err != nil {
 		log.Printf("create user: %v", err)
@@ -117,10 +128,11 @@ func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserR
 	}
 
 	return &usersapi.UserResponse{
-		Email:   user.Email,
-		Enabled: user.Enabled,
-		Admin:   user.Admin,
-		Rules:   user.Rules,
+		Email:          user.Email,
+		Enabled:        user.Enabled,
+		SystemManager:  user.SystemManager,
+		UserManager:    user.UserManager,
+		Rules:          user.Rules,
 	}, nil
 }
 
@@ -137,10 +149,11 @@ func (h *usersHandler) GetUser(ctx context.Context, params usersapi.GetUserParam
 	}
 
 	return &usersapi.UserResponse{
-		Email:   user.Email,
-		Enabled: user.Enabled,
-		Admin:   user.Admin,
-		Rules:   user.Rules,
+		Email:          user.Email,
+		Enabled:        user.Enabled,
+		SystemManager:  user.SystemManager,
+		UserManager:    user.UserManager,
+		Rules:          user.Rules,
 	}, nil
 }
 
@@ -148,6 +161,11 @@ func (h *usersHandler) UpdateUser(ctx context.Context, req *usersapi.UpdateUserR
 	claims := currentClaimsFromContext(ctx)
 	if claims == nil || !claims.EmissaryUserManagement {
 		return &usersapi.UpdateUserForbidden{Error: "insufficient permissions"}, nil
+	}
+
+	// SystemManager can only be assigned by a user who also has SystemManager permission
+	if req.SystemManager.IsSet() && req.SystemManager.Value && !claims.SystemManager {
+		return &usersapi.UpdateUserForbidden{Error: "insufficient permissions to assign SystemManager role"}, nil
 	}
 
 	user, err := h.manager.Get(ctx, params.Email)
@@ -159,8 +177,11 @@ func (h *usersHandler) UpdateUser(ctx context.Context, req *usersapi.UpdateUserR
 	if req.Enabled.IsSet() {
 		user.Enabled = req.Enabled.Value
 	}
-	if req.Admin.IsSet() {
-		user.Admin = req.Admin.Value
+	if req.SystemManager.IsSet() {
+		user.SystemManager = req.SystemManager.Value
+	}
+	if req.UserManager.IsSet() {
+		user.UserManager = req.UserManager.Value
 	}
 	if req.Rules != nil {
 		user.Rules = req.Rules
@@ -175,10 +196,11 @@ func (h *usersHandler) UpdateUser(ctx context.Context, req *usersapi.UpdateUserR
 	}
 
 	return &usersapi.UserResponse{
-		Email:   user.Email,
-		Enabled: user.Enabled,
-		Admin:   user.Admin,
-		Rules:   user.Rules,
+		Email:          user.Email,
+		Enabled:        user.Enabled,
+		SystemManager:  user.SystemManager,
+		UserManager:    user.UserManager,
+		Rules:          user.Rules,
 	}, nil
 }
 

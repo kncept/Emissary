@@ -352,8 +352,9 @@ components:
       required:
       - email
       - enabled
-      - admin
+      - systemManager
       - rules
+      - userManager
       properties:
         email:
           type: string
@@ -362,14 +363,17 @@ components:
         enabled:
           type: boolean
           description: When false, the user is kept but cannot log in
-        admin:
+        systemManager:
           type: boolean
-          description: Whether the user has administrator privileges
+          description: Whether the user has system management privileges
         rules:
           type: array
           description: System rules applied to mail for this user (e.g., "bounce", "delete")
           items:
             type: string
+        userManager:
+          type: boolean
+          description: Whether the user has user management privileges
       additionalProperties: false
     CreateUserRequest:
       type: object
@@ -390,10 +394,14 @@ components:
           type: boolean
           default: true
           description: Whether the user can log in
-        admin:
+        systemManager:
           type: boolean
           default: false
-          description: Whether the user has administrator privileges
+          description: Whether the user has system management privileges
+        userManager:
+          type: boolean
+          default: false
+          description: Whether the user has user management privileges
         rules:
           type: array
           description: System rules for mail handling
@@ -407,9 +415,12 @@ components:
         enabled:
           type: boolean
           description: Whether the user can log in
-        admin:
+        systemManager:
           type: boolean
-          description: Whether the user has administrator privileges
+          description: Whether the user has system management privileges
+        userManager:
+          type: boolean
+          description: Whether the user has user management privileges
         rules:
           type: array
           description: System rules for mail handling
@@ -422,8 +433,9 @@ components:
       required:
       - email
       - enabled
-      - admin
+      - systemManager
       - rules
+      - userManager
       properties:
         email:
           type: string
@@ -432,14 +444,17 @@ components:
         enabled:
           type: boolean
           description: When false, the user is kept but cannot log in
-        admin:
+        systemManager:
           type: boolean
-          description: Whether the user has administrator privileges
+          description: Whether the user has system management privileges
         rules:
           type: array
           description: System rules applied to mail for this user
           items:
             type: string
+        userManager:
+          type: boolean
+          description: Whether the user has user management privileges
       additionalProperties: false
     UsersListResponse:
       type: object

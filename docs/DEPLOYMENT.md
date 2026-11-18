@@ -47,7 +47,7 @@ AWS, not the application directly):
 | `S3_BUCKET` | no | Use this existing bucket for inbound mail instead of the created one. |
 | `USERNAME` | no | Administrator username baked into the Lambda env. |
 | `PASSWORD` | no | Administrator password baked into the Lambda env (a warning is printed when unset). |
-| `USER_MANAGER` | no | User-manager backend for the deployed app (default `none`). When set to `ddb`, a users table is created. |
+| `USER_MANAGER` | no | User-manager backend for the deployed app. Unset → the app auto-selects `s3` (storage is always S3 in a deploy); users then live as `users/<email>/user.json` objects in the mail bucket. When set to `ddb`, a users table is created. |
 | `SESSION` | no | Session backend for the deployed app. When set to `ddb`, a sessions table is created. |
 | `SES_FROM` | no | Default From address (default `no-reply@<DOMAIN>`). |
 | `JWT_SECRET` | no | Signing secret for the app. Unset → CDK generates a 64-character secret in Secrets Manager. |

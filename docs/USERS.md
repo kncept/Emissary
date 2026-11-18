@@ -17,13 +17,18 @@ hold:
 2. The configured user manager is Emissary-mastered — it owns its
    user store rather than proxying to an external directory.
 
-The backends selected with `USER_MANAGER` are `none`, `ddb` and
-`ldap` (see [CONFIGURATION.md](CONFIGURATION.md)); only the in-
-application `ddb` backend is Emissary-mastered. When using DynamoDB, table
-names are derived from `TABLE_PREFIX` the same way as the household project
-(default `emissary`), with explicit `USER_TABLE`/`DDB_TABLE`/`SESSION_TABLE`
-overrides available (see [CONFIGURATION.md](CONFIGURATION.md#dynamodb-table-naming)). The API layer
-determines condition 2 by type assertion: the configured
+The backends selected with `USER_MANAGER` are `none`, `ddb`, `s3` and
+`ldap` (see [CONFIGURATION.md](CONFIGURATION.md)); the in-application
+`ddb` and `s3` backends are Emissary-mastered. When no backend is selected
+and the storage backend is S3, the `s3` backend is selected automatically.
+When using DynamoDB, table names are derived from `TABLE_PREFIX` the same
+way as the household project (default `emissary`), with explicit
+`USER_TABLE`/`DDB_TABLE`/`SESSION_TABLE` overrides available (see
+[CONFIGURATION.md](CONFIGURATION.md#dynamodb-table-naming)). The `s3`
+backend stores each user as a `users/<email>/user.json` object in the mail
+storage bucket, next to the user's mailboxes (see
+[S3.md](S3.md#bucket-layout)). The API layer determines condition 2 by
+type assertion: the configured
 `UserManager` is Emissary-mastered when it also implements
 `EmissaryAuthManager`, the superinterface defined below.
 
@@ -77,7 +82,7 @@ Any authenticated user can change their own password via `POST /api/user/{email}
 
 Administrators with the `EmissaryUserManagement` claim can change any user's password. When an admin changes another user's password, the `oldPassword` field is optional (but if provided, it is verified).
 
-The endpoint is only available when the configured user manager implements `EmissaryAuthManager` (i.e., the `ddb` backend). Otherwise, it returns `403 Forbidden`.
+The endpoint is only available when the configured user manager implements `EmissaryAuthManager` (i.e., the `ddb` or `s3` backend). Otherwise, it returns `403 Forbidden`.
 
 Request body:
 ```json
@@ -186,7 +191,7 @@ The autocomplete endpoint lives under the `/api/user/` prefix but is served dire
 | --- | --- | --- | --- |
 | `GET` | `/api/user/autocomplete` | Bearer\* | Search users by partial user ID (email address) for admin masquerade. |
 
-\* Requires `EmissaryUserManagement` JWT claim and Emissary-mastered user manager (`ddb` backend).
+\* Requires `EmissaryUserManagement` JWT claim and Emissary-mastered user manager (`ddb` or `s3` backend).
 
 **Request:**
 - Query parameter `q` (string): the partial user ID (email address) to search (minimum 3 characters).
@@ -225,6 +230,6 @@ masquerade by checking the `admin` claim.
 
 ## Status
 
-The user management API is implemented in `api/users.yaml` and `mailer/handler/users.go`. The `ddb` user manager is implemented in `mailer/usermanager/ddb.go` and backs the `users` DynamoDB table, using the user's email address as the `id` partition key. Passwords are stored using the salt-prefix scheme described above (defaulting to bcrypt for new hashes; existing records use `p2-` PBKDF2-SHA256). The `ldap` and `none` backends do not implement `EmissaryAuthManager` and therefore do not support user management operations (including password change).
+The user management API is implemented in `api/users.yaml` and `mailer/handler/users.go`. The `ddb` user manager is implemented in `mailer/usermanager/ddb.go` and backs the `users` DynamoDB table, using the user's email address as the `id` partition key. The `s3` user manager is implemented in `mailer/usermanager/s3.go` and stores each user as a plain JSON write-out of the `EmissaryUser` at `users/<email>/user.json` in the mail storage bucket; a mailbox directory without a `user.json` is not a user. Passwords are stored using the salt-prefix scheme described above (defaulting to bcrypt for new hashes; existing `ddb` records use `p2-` PBKDF2-SHA256). The `ldap` and `none` backends do not implement `EmissaryAuthManager` and therefore do not support user management operations (including password change).
 
 See [AUTH.md](AUTH.md) for login, refresh and the token claims, [API.md](API.md) for the endpoints as implemented, and [CONFIGURATION.md](CONFIGURATION.md) for `USER_MANAGER` and the backend settings.

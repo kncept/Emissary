@@ -18,7 +18,11 @@ func (s *CreateUserRequest) setDefaults() {
 	}
 	{
 		val := bool(false)
-		s.Admin.SetTo(val)
+		s.SystemManager.SetTo(val)
+	}
+	{
+		val := bool(false)
+		s.UserManager.SetTo(val)
 	}
 	{
 		var defaultVal0 []string

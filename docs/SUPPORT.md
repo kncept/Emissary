@@ -44,7 +44,7 @@ of the implementation currently backing it:
 | `sender` | `aws-ses`, `log` | Outbound email sender. |
 | `metadata` | `memory`, `file`, `ddb` | Read/flag metadata store. |
 | `session` | `memory`, `ddb` | Refresh-token session store. |
-| `user-manager` | `none`, `ddb`, `ldap` | Ordinary-user authentication backend. |
+| `user-manager` | `none`, `ddb`, `s3`, `ldap` | Ordinary-user authentication backend (auto-selects `s3` when storage is S3). |
 | `aws` | `aws-sdk` | AWS region and DynamoDB table naming. |
 
 Example response (`200`):

@@ -28,7 +28,8 @@ export default function Login({ onAuthenticated }: LoginProps) {
         authenticated: true,
         username: result.username,
         email: result.email,
-        admin: result.admin,
+        systemManager: result.systemManager,
+        emissaryUserManagement: result.emissaryUserManagement,
       });
       navigate('/');
     } else {

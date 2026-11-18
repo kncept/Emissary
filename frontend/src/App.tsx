@@ -62,18 +62,18 @@ function App() {
               <Layout
                 onLogout={handleLogout}
                 canManageUsers={auth.emissaryUserManagement}
-                canMasquerade={auth.admin}
+                canMasquerade={auth.systemManager}
               >
                 <Routes>
                   <Route path="/" element={<EmailList />} />
                   <Route path="/email/:id" element={<EmailView />} />
-                  <Route path="/compose" element={<Compose admin={auth.admin} currentUser={auth.username} />} />
-                  <Route path="/compose/:id" element={<Compose admin={auth.admin} currentUser={auth.username} />} />
+                  <Route path="/compose" element={<Compose systemManager={auth.systemManager} currentUser={auth.username} />} />
+                  <Route path="/compose/:id" element={<Compose systemManager={auth.systemManager} currentUser={auth.username} />} />
                   <Route path="/settings" element={<Settings auth={auth} />} />
                   <Route
                     path="/support"
                     element={
-                      auth.admin ? (
+                      auth.systemManager ? (
                         <Support />
                       ) : (
                         <Navigate to="/" replace />

@@ -138,7 +138,7 @@ Emissary/
 │   ├── sender/          outbound: AWS SES, log
 │   ├── server/          older HTTP server package, currently unused
 │   ├── storage/         inbound messages: S3, memory
-│   └── usermanager/     login backends: none, ddb*, ldap*
+│   └── usermanager/     login backends: none, ddb*, s3*, ldap*
 ├── deploy/          AWS CDK app (three stacks)
 ├── run.sh           build / test / run / deploy entry point
 └── .github/         CI (test) and release (build artifacts) workflows
@@ -153,7 +153,8 @@ interface, and wires them into the HTTP handler (`mailer/handler`):
 - **Storage** (read side of mail) — `STORAGE`: `s3` or `memory`.
 - **Sender** (write side of mail) — `SENDER`: `aws-ses` or `log`.
 - **Metadata** — `METADATA`: `memory`, `file` or `ddb`.
-- **User manager** — `USER_MANAGER`: `none`, `ddb` or `ldap`.
+- **User manager** — `USER_MANAGER`: `none`, `ddb`, `s3` or `ldap`.
+  When unset, the `s3` backend is selected automatically if storage is S3.
 
 The sender and the storage are intentionally independent: a deployment
 can read mail from S3 while logging outbound mail (or vice versa).

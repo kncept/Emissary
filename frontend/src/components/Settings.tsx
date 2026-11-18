@@ -45,16 +45,16 @@ export default function Settings({ auth }: SettingsProps) {
           </div>
         )}
 
-        {auth.admin && (
+        {auth.systemManager && (
           <div className="settings-field">
-            <label>Admin Status</label>
+            <label>System Manager Status</label>
             <div className="settings-value admin-badge">
-              <span className="badge admin">Admin</span>
+              <span className="badge admin">System Manager</span>
             </div>
           </div>
         )}
 
-        {auth.admin && auth.emissaryUserManagement && (
+        {auth.systemManager && auth.emissaryUserManagement && (
           <div className="settings-field">
             <label>Emissary User Management</label>
             <div className="settings-value admin-badge">
@@ -77,7 +77,7 @@ export default function Settings({ auth }: SettingsProps) {
         </button>
       </section>
 
-      {auth.admin && (
+      {auth.systemManager && (
         <section className="settings-section">
           <h3>Support</h3>
           <p style={{ color: 'var(--color-text-muted)', marginBottom: '1rem' }}>

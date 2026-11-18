@@ -159,7 +159,7 @@ deploy_show_env() {
 	echo "TABLE_PREFIX: ${TABLE_PREFIX:-${DDB_TABLE_PREFIX:-<not set (defaults to emissary-)>}}"
 	echo "SESSION: ${SESSION:-<not set (defaults to none)>}"
 	echo "SESSION_TABLE: ${SESSION_TABLE:-<not set>}"
-	echo "USER_MANAGER: ${USER_MANAGER:-<not set (defaults to none)>}"
+	echo "USER_MANAGER: ${USER_MANAGER:-<not set (defaults to s3 when STORAGE=s3, else none)>}"
 	echo "USER_TABLE: ${USER_TABLE:-<not set>}"
 	echo "USERNAME: ${USERNAME:-<not set (no admin user)>}"
 	if [[ -n "${PASSWORD+x}" ]]; then

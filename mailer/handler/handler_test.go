@@ -179,7 +179,7 @@ func jmapRequest(t *testing.T, h http.Handler, token string, using []string, met
 		"methodCalls": methodCalls,
 	}
 	body, _ := json.Marshal(requestBody)
-	w := request(t, h, http.MethodPost, "/api/", string(body), token)
+	w := request(t, h, http.MethodPost, "/api/jmap/", string(body), token)
 	if w.Code != http.StatusOK {
 		t.Fatalf("JMAP request failed with status %d: %s", w.Code, w.Body.String())
 	}

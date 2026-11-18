@@ -106,7 +106,7 @@ export async function getUsers(cursor?: string, pageSize = 20) {
   if (!response.ok) {
     throw new Error(data.error || 'Failed to load users');
   }
-  return data as { users: Array<{ email: string; enabled: boolean; admin: boolean; rules: string[] }>; nextCursor?: string };
+  return data as { users: Array<{ email: string; enabled: boolean; systemManager: boolean; userManager: boolean; rules: string[] }>; nextCursor?: string };
 }
 
 export async function autocompleteUsers(q: string): Promise<{ users: string[] }> {
@@ -125,10 +125,10 @@ export async function getUser(email: string) {
   if (!response.ok) {
     throw new Error(data.error || 'Failed to load user');
   }
-  return data as { email: string; enabled: boolean; admin: boolean; rules: string[] };
+  return data as { email: string; enabled: boolean; systemManager: boolean; userManager: boolean; rules: string[] };
 }
 
-export async function createUser(body: { email: string; password: string; enabled?: boolean; admin?: boolean; rules?: string[] }) {
+export async function createUser(body: { email: string; password: string; enabled?: boolean; systemManager?: boolean; userManager?: boolean; rules?: string[] }) {
   const response = await authenticatedFetch(`${API_BASE}/user/`, {
     method: 'POST',
     body: JSON.stringify(body),
@@ -140,7 +140,7 @@ export async function createUser(body: { email: string; password: string; enable
   return data;
 }
 
-export async function updateUser(email: string, body: { enabled?: boolean; admin?: boolean; rules?: string[] }) {
+export async function updateUser(email: string, body: { enabled?: boolean; systemManager?: boolean; userManager?: boolean; rules?: string[] }) {
   const response = await authenticatedFetch(`${API_BASE}/user/${encodeURIComponent(email)}`, {
     method: 'PATCH',
     body: JSON.stringify(body),
@@ -220,14 +220,14 @@ export async function checkAuth(): Promise<AuthState> {
     return { authenticated: false };
   }
 
-  // Parse JWT claims from the token (username, admin, emissaryUserManagement)
+  // Parse JWT claims from the token (username, systemManager, emissaryUserManagement)
   let username = '';
-  let admin = false;
+  let systemManager = false;
   let emissaryUserManagement = false;
   try {
     const payload = JSON.parse(atob(token.split('.')[1]));
     username = payload.sub || '';
-    admin = payload.Admin === true || payload.admin === true;
+    systemManager = payload.SystemManager === true || payload.systemManager === true;
     emissaryUserManagement = payload.EmissaryUserManagement === true || payload.emissaryUserManagement === true;
   } catch {
     // Ignore parse errors
@@ -240,7 +240,7 @@ export async function checkAuth(): Promise<AuthState> {
     return { authenticated: false };
   }
 
-  return { authenticated: true, username, admin, emissaryUserManagement };
+  return { authenticated: true, username, systemManager, emissaryUserManagement };
 }
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
@@ -256,12 +256,12 @@ export async function login(username: string, password: string): Promise<LoginRe
 
   // Parse username from access token (JWT)
   let usernameFromToken = username;
-  let admin = false;
+  let systemManager = false;
   let emissaryUserManagement = false;
   try {
     const payload = JSON.parse(atob(tokens.accessToken.split('.')[1]));
     usernameFromToken = payload.sub || username;
-    admin = payload.Admin === true || payload.admin === true;
+    systemManager = payload.SystemManager === true || payload.systemManager === true;
     emissaryUserManagement = payload.EmissaryUserManagement === true || payload.emissaryUserManagement === true;
   } catch {
     // Ignore parse errors
@@ -273,7 +273,7 @@ export async function login(username: string, password: string): Promise<LoginRe
     expiresAt: tokens.expiresAt,
     username: usernameFromToken,
     email: usernameFromToken,
-    admin,
+    systemManager,
     emissaryUserManagement,
   };
 }

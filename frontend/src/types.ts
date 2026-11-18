@@ -13,7 +13,7 @@ export interface AuthState {
   authenticated: boolean;
   username?: string;
   email?: string;
-  admin?: boolean;
+  systemManager?: boolean;
   emissaryUserManagement?: boolean;
 }
 
@@ -23,7 +23,7 @@ export interface LoginResponse {
   expiresAt?: string;
   username?: string;
   email?: string;
-  admin?: boolean;
+  systemManager?: boolean;
   emissaryUserManagement?: boolean;
   error?: string;
 }

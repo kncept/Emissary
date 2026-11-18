@@ -133,6 +133,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 			Domain:           cfg.UserDomain,
 			DdbTable:         resolveDDBTable(cfg.UserTable, cfg.DDBTablePrefix, "users"),
 			Region:           cfg.UserRegion,
+			S3Bucket:         cfg.S3Bucket,
 			LDAPURL:          cfg.LDAPURL,
 			LDAPBindDN:       cfg.LDAPBindDN,
 			LDAPBindPassword: cfg.LDAPBindPassword,
@@ -156,7 +157,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 		sessionStore = session.NewMemorySessionStore()
 	}
 
-	authenticator := auth.NewWithUserManager(users, sessionStore, jwtSecret, jwtTTL, cfg.JWTAudience, cfg.JWTIssuer)
+	authenticator := auth.NewWithUserManager(users, sessionStore, jwtSecret, jwtTTL, cfg.JWTAudience, cfg.JWTIssuer, cfg.AuthUser)
 
 	var emailStore storage.Storage
 	if cfg.Storage != nil {
@@ -279,7 +280,7 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 	mux.Handle("GET /.well-known/jmap", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPSession(w, r)
 	})))
-	mux.Handle("POST /api/", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /api/jmap/", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPAPIRequest(w, r, dispatcher)
 	})))
 	mux.Handle("POST /upload/", requireAuth(authenticator, http.HandlerFunc(handleJMAPUpload)))
@@ -542,7 +543,7 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request) {
 			"urn:ietf:params:jmap:vacationresponse": username,
 		},
 		"username":       username,
-		"apiUrl":         "/api/",
+		"apiUrl":         "/api/jmap/",
 		"downloadUrl":    "/download/{accountId}/{blobId}/{name}",
 		"uploadUrl":      "/upload/{accountId}/",
 		"eventSourceUrl": "/eventsource/",

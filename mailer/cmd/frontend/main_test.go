@@ -105,7 +105,7 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 	h, authenticator := newTestHandler()
 	token, _, _ := authenticator.Issue("user")
 	// Test JMAP endpoint which requires auth
-	w := doRequest(h, http.MethodPost, "/api/", `{"using":["urn:ietf:params:jmap:mail"],"methodCalls":[["Email/query",{"accountId":"user","filter":{"inMailbox":"inbox"}}, "q1"]]}`, token)
+	w := doRequest(h, http.MethodPost, "/api/jmap/", `{"using":["urn:ietf:params:jmap:mail"],"methodCalls":[["Email/query",{"accountId":"user","filter":{"inMailbox":"inbox"}}, "q1"]]}`, token)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -114,7 +114,7 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 
 func TestAuthMiddleware_InvalidToken(t *testing.T) {
 	h, _ := newTestHandler()
-	w := doRequest(h, http.MethodPost, "/api/", `{"using":["urn:ietf:params:jmap:mail"],"methodCalls":[["Email/query",{"accountId":"user","filter":{"inMailbox":"inbox"}}, "q1"]]}`, "invalid-token")
+	w := doRequest(h, http.MethodPost, "/api/jmap/", `{"using":["urn:ietf:params:jmap:mail"],"methodCalls":[["Email/query",{"accountId":"user","filter":{"inMailbox":"inbox"}}, "q1"]]}`, "invalid-token")
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
@@ -123,7 +123,7 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 
 func TestAuthMiddleware_MissingToken(t *testing.T) {
 	h, _ := newTestHandler()
-	w := doRequest(h, http.MethodPost, "/api/", `{"using":["urn:ietf:params:jmap:mail"],"methodCalls":[["Email/query",{"accountId":"user","filter":{"inMailbox":"inbox"}}, "q1"]]}`, "")
+	w := doRequest(h, http.MethodPost, "/api/jmap/", `{"using":["urn:ietf:params:jmap:mail"],"methodCalls":[["Email/query",{"accountId":"user","filter":{"inMailbox":"inbox"}}, "q1"]]}`, "")
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)

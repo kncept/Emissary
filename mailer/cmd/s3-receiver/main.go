@@ -41,6 +41,7 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 		Domain:           cfg.UserManager.Domain,
 		DdbTable:         cfg.UserTableName(),
 		Region:           cfg.UserManager.Region,
+		S3Bucket:         cfg.Storage.S3Bucket,
 		LDAPURL:          cfg.UserManager.LDAPURL,
 		LDAPBindDN:       cfg.UserManager.LDAPBindDN,
 		LDAPBindPassword: cfg.UserManager.LDAPBindPassword,

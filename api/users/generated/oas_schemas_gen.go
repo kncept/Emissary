@@ -113,8 +113,10 @@ type CreateUserRequest struct {
 	Password string `json:"password"`
 	// Whether the user can log in.
 	Enabled OptBool `json:"enabled"`
-	// Whether the user has administrator privileges.
-	Admin OptBool `json:"admin"`
+	// Whether the user has system management privileges.
+	SystemManager OptBool `json:"systemManager"`
+	// Whether the user has user management privileges.
+	UserManager OptBool `json:"userManager"`
 	// System rules for mail handling.
 	Rules []string `json:"rules"`
 }
@@ -134,9 +136,14 @@ func (s *CreateUserRequest) GetEnabled() OptBool {
 	return s.Enabled
 }
 
-// GetAdmin returns the value of Admin.
-func (s *CreateUserRequest) GetAdmin() OptBool {
-	return s.Admin
+// GetSystemManager returns the value of SystemManager.
+func (s *CreateUserRequest) GetSystemManager() OptBool {
+	return s.SystemManager
+}
+
+// GetUserManager returns the value of UserManager.
+func (s *CreateUserRequest) GetUserManager() OptBool {
+	return s.UserManager
 }
 
 // GetRules returns the value of Rules.
@@ -159,9 +166,14 @@ func (s *CreateUserRequest) SetEnabled(val OptBool) {
 	s.Enabled = val
 }
 
-// SetAdmin sets the value of Admin.
-func (s *CreateUserRequest) SetAdmin(val OptBool) {
-	s.Admin = val
+// SetSystemManager sets the value of SystemManager.
+func (s *CreateUserRequest) SetSystemManager(val OptBool) {
+	s.SystemManager = val
+}
+
+// SetUserManager sets the value of UserManager.
+func (s *CreateUserRequest) SetUserManager(val OptBool) {
+	s.UserManager = val
 }
 
 // SetRules sets the value of Rules.
@@ -392,8 +404,10 @@ func (*UpdateUserNotFound) updateUserRes() {}
 type UpdateUserRequest struct {
 	// Whether the user can log in.
 	Enabled OptBool `json:"enabled"`
-	// Whether the user has administrator privileges.
-	Admin OptBool `json:"admin"`
+	// Whether the user has system management privileges.
+	SystemManager OptBool `json:"systemManager"`
+	// Whether the user has user management privileges.
+	UserManager OptBool `json:"userManager"`
 	// System rules for mail handling.
 	Rules []string `json:"rules"`
 }
@@ -403,9 +417,14 @@ func (s *UpdateUserRequest) GetEnabled() OptBool {
 	return s.Enabled
 }
 
-// GetAdmin returns the value of Admin.
-func (s *UpdateUserRequest) GetAdmin() OptBool {
-	return s.Admin
+// GetSystemManager returns the value of SystemManager.
+func (s *UpdateUserRequest) GetSystemManager() OptBool {
+	return s.SystemManager
+}
+
+// GetUserManager returns the value of UserManager.
+func (s *UpdateUserRequest) GetUserManager() OptBool {
+	return s.UserManager
 }
 
 // GetRules returns the value of Rules.
@@ -418,9 +437,14 @@ func (s *UpdateUserRequest) SetEnabled(val OptBool) {
 	s.Enabled = val
 }
 
-// SetAdmin sets the value of Admin.
-func (s *UpdateUserRequest) SetAdmin(val OptBool) {
-	s.Admin = val
+// SetSystemManager sets the value of SystemManager.
+func (s *UpdateUserRequest) SetSystemManager(val OptBool) {
+	s.SystemManager = val
+}
+
+// SetUserManager sets the value of UserManager.
+func (s *UpdateUserRequest) SetUserManager(val OptBool) {
+	s.UserManager = val
 }
 
 // SetRules sets the value of Rules.
@@ -439,10 +463,12 @@ type User struct {
 	Email string `json:"email"`
 	// When false, the user is kept but cannot log in.
 	Enabled bool `json:"enabled"`
-	// Whether the user has administrator privileges.
-	Admin bool `json:"admin"`
+	// Whether the user has system management privileges.
+	SystemManager bool `json:"systemManager"`
 	// System rules applied to mail for this user (e.g., "bounce", "delete").
 	Rules []string `json:"rules"`
+	// Whether the user has user management privileges.
+	UserManager bool `json:"userManager"`
 }
 
 // GetEmail returns the value of Email.
@@ -455,14 +481,19 @@ func (s *User) GetEnabled() bool {
 	return s.Enabled
 }
 
-// GetAdmin returns the value of Admin.
-func (s *User) GetAdmin() bool {
-	return s.Admin
+// GetSystemManager returns the value of SystemManager.
+func (s *User) GetSystemManager() bool {
+	return s.SystemManager
 }
 
 // GetRules returns the value of Rules.
 func (s *User) GetRules() []string {
 	return s.Rules
+}
+
+// GetUserManager returns the value of UserManager.
+func (s *User) GetUserManager() bool {
+	return s.UserManager
 }
 
 // SetEmail sets the value of Email.
@@ -475,14 +506,19 @@ func (s *User) SetEnabled(val bool) {
 	s.Enabled = val
 }
 
-// SetAdmin sets the value of Admin.
-func (s *User) SetAdmin(val bool) {
-	s.Admin = val
+// SetSystemManager sets the value of SystemManager.
+func (s *User) SetSystemManager(val bool) {
+	s.SystemManager = val
 }
 
 // SetRules sets the value of Rules.
 func (s *User) SetRules(val []string) {
 	s.Rules = val
+}
+
+// SetUserManager sets the value of UserManager.
+func (s *User) SetUserManager(val bool) {
+	s.UserManager = val
 }
 
 // A user account (without the salted password).
@@ -492,10 +528,12 @@ type UserResponse struct {
 	Email string `json:"email"`
 	// When false, the user is kept but cannot log in.
 	Enabled bool `json:"enabled"`
-	// Whether the user has administrator privileges.
-	Admin bool `json:"admin"`
+	// Whether the user has system management privileges.
+	SystemManager bool `json:"systemManager"`
 	// System rules applied to mail for this user.
 	Rules []string `json:"rules"`
+	// Whether the user has user management privileges.
+	UserManager bool `json:"userManager"`
 }
 
 // GetEmail returns the value of Email.
@@ -508,14 +546,19 @@ func (s *UserResponse) GetEnabled() bool {
 	return s.Enabled
 }
 
-// GetAdmin returns the value of Admin.
-func (s *UserResponse) GetAdmin() bool {
-	return s.Admin
+// GetSystemManager returns the value of SystemManager.
+func (s *UserResponse) GetSystemManager() bool {
+	return s.SystemManager
 }
 
 // GetRules returns the value of Rules.
 func (s *UserResponse) GetRules() []string {
 	return s.Rules
+}
+
+// GetUserManager returns the value of UserManager.
+func (s *UserResponse) GetUserManager() bool {
+	return s.UserManager
 }
 
 // SetEmail sets the value of Email.
@@ -528,14 +571,19 @@ func (s *UserResponse) SetEnabled(val bool) {
 	s.Enabled = val
 }
 
-// SetAdmin sets the value of Admin.
-func (s *UserResponse) SetAdmin(val bool) {
-	s.Admin = val
+// SetSystemManager sets the value of SystemManager.
+func (s *UserResponse) SetSystemManager(val bool) {
+	s.SystemManager = val
 }
 
 // SetRules sets the value of Rules.
 func (s *UserResponse) SetRules(val []string) {
 	s.Rules = val
+}
+
+// SetUserManager sets the value of UserManager.
+func (s *UserResponse) SetUserManager(val bool) {
+	s.UserManager = val
 }
 
 func (*UserResponse) createUserRes() {}

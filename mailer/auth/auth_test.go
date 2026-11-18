@@ -56,7 +56,7 @@ func TestAuthenticator_Authenticate(t *testing.T) {
 }
 
 func TestAuthenticator_LoginReturnsDisabledUserError(t *testing.T) {
-	a := NewWithUserManager(disabledUserManager{}, nil, "secret", time.Hour, "", "")
+	a := NewWithUserManager(disabledUserManager{}, nil, "secret", time.Hour, "", "", "")
 
 	_, err := a.Login(context.Background(), "user@example.com", "password")
 	if !errors.Is(err, usermanager.ErrUserDisabled) {
@@ -65,19 +65,17 @@ func TestAuthenticator_LoginReturnsDisabledUserError(t *testing.T) {
 }
 
 type masteredUserManager struct {
-	user usermanager.User
+	user *usermanager.EmissaryUser
 }
 
 func (m masteredUserManager) Name() string { return "mastered" }
 
 func (m masteredUserManager) Authenticate(context.Context, string, string) (*usermanager.User, error) {
-	user := m.user
-	return &user, nil
+	return &m.user.User, nil
 }
 
 func (m masteredUserManager) Lookup(context.Context, string) (*usermanager.User, error) {
-	user := m.user
-	return &user, nil
+	return &m.user.User, nil
 }
 
 func (masteredUserManager) Autocomplete(context.Context, string) ([]string, error) {
@@ -91,8 +89,8 @@ func (masteredUserManager) List(context.Context, string, int) ([]*usermanager.Em
 func (masteredUserManager) Create(context.Context, *usermanager.EmissaryUser) error { return nil }
 func (masteredUserManager) Save(context.Context, *usermanager.EmissaryUser) error   { return nil }
 
-func (masteredUserManager) Get(context.Context, string) (*usermanager.EmissaryUser, error) {
-	return nil, usermanager.ErrUserNotFound
+func (m masteredUserManager) Get(context.Context, string) (*usermanager.EmissaryUser, error) {
+	return m.user, nil
 }
 
 func (masteredUserManager) Delete(context.Context, string) error { return nil }
@@ -102,19 +100,26 @@ func (masteredUserManager) ChangePassword(context.Context, string, string, strin
 
 func TestAuthenticator_EmissaryUserManagementClaim(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		admin bool
-		want  bool
+		name           string
+		userManager    bool
+		systemManager  bool
+		wantMgmt       bool
+		wantSysMgmt    bool
 	}{
-		{"admin", true, true},
-		{"ordinary", false, false},
+		{"user manager only", true, false, true, false},
+		{"system manager only", false, true, false, true},
+		{"both managers", true, true, true, true},
+		{"ordinary user", false, false, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := NewWithUserManager(masteredUserManager{user: usermanager.User{
-				ID:    "user@example.com",
-				Email: "user@example.com",
-				Admin: tc.admin,
-			}}, nil, "secret", time.Hour, "", "")
+			a := NewWithUserManager(masteredUserManager{user: &usermanager.EmissaryUser{
+				User: usermanager.User{
+					ID:    "user@example.com",
+					Email: "user@example.com",
+				},
+				UserManager:   tc.userManager,
+				SystemManager: tc.systemManager,
+			}}, nil, "secret", time.Hour, "", "", "admin@example.com")
 
 			result, err := a.Login(context.Background(), "user@example.com", "password")
 			if err != nil {
@@ -124,11 +129,61 @@ func TestAuthenticator_EmissaryUserManagementClaim(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ValidateClaims() error = %v", err)
 			}
-			if claims.EmissaryUserManagement != tc.want {
-				t.Errorf("EmissaryUserManagement = %v, want %v", claims.EmissaryUserManagement, tc.want)
+			if claims.EmissaryUserManagement != tc.wantMgmt {
+				t.Errorf("EmissaryUserManagement = %v, want %v", claims.EmissaryUserManagement, tc.wantMgmt)
+			}
+			if claims.SystemManager != tc.wantSysMgmt {
+				t.Errorf("SystemManager = %v, want %v", claims.SystemManager, tc.wantSysMgmt)
 			}
 		})
 	}
+}
+
+func TestAuthenticator_BuiltInAdminClaims(t *testing.T) {
+	const admin = "admin@example.com"
+
+	t.Run("mastered backend", func(t *testing.T) {
+		a := NewWithUserManager(masteredUserManager{user: &usermanager.EmissaryUser{
+			User: usermanager.User{ID: admin, Email: admin, Admin: true},
+		}}, nil, "secret", time.Hour, "", "", admin)
+
+		result, err := a.Login(context.Background(), admin, "password")
+		if err != nil {
+			t.Fatalf("Login() error = %v", err)
+		}
+		claims, err := a.ValidateClaims(result.AccessToken)
+		if err != nil {
+			t.Fatalf("ValidateClaims() error = %v", err)
+		}
+		if !claims.SystemManager {
+			t.Error("SystemManager = false, want true for built-in admin")
+		}
+		if !claims.EmissaryUserManagement {
+			t.Error("EmissaryUserManagement = false, want true when backend is mastered")
+		}
+	})
+
+	t.Run("non-mastered backend", func(t *testing.T) {
+		a := NewWithUserManager(usermanager.NewNone(usermanager.Config{
+			AdminUsername: admin,
+			AdminPassword: "password",
+		}), nil, "secret", time.Hour, "", "", admin)
+
+		result, err := a.Login(context.Background(), admin, "password")
+		if err != nil {
+			t.Fatalf("Login() error = %v", err)
+		}
+		claims, err := a.ValidateClaims(result.AccessToken)
+		if err != nil {
+			t.Fatalf("ValidateClaims() error = %v", err)
+		}
+		if !claims.SystemManager {
+			t.Error("SystemManager = false, want true for built-in admin")
+		}
+		if claims.EmissaryUserManagement {
+			t.Error("EmissaryUserManagement = true, want false when backend is not mastered")
+		}
+	})
 }
 
 func TestAuthenticator_IssueAndValidate(t *testing.T) {
@@ -160,7 +215,7 @@ func TestAuthenticator_IssueAndValidate(t *testing.T) {
 func TestAuthenticator_Validate_ExpiredToken(t *testing.T) {
 	// Create an authenticator with a short TTL, then manipulate time to make token expired
 	// Use a custom TTL of 1 hour for access tokens for this test
-	a := NewWithUserManager(usermanager.NewNone(usermanager.Config{AdminUsername: "user", AdminPassword: "pass"}), nil, "secret", 9*time.Hour, "", "")
+	a := NewWithUserManager(usermanager.NewNone(usermanager.Config{AdminUsername: "user", AdminPassword: "pass"}), nil, "secret", 9*time.Hour, "", "", "user")
 
 	// Create token with custom time in the past
 	past := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)

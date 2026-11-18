@@ -54,10 +54,10 @@ deployed Lambda receives its JWT secret as an ARN.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `USER_MANAGER` | `none` | `none`, `ddb` or `ldap`. |
+| `USER_MANAGER` | auto-selected | `none`, `ddb`, `s3` or `ldap`. When unset: `s3` if `STORAGE=s3`, otherwise `none`. The `s3` backend stores each user as a `users/<email>/user.json` object in the mail storage bucket and requires `S3_BUCKET`. |
 | `DOMAIN` | — | Receiving domain; used for mail delivery, bounce sender addresses and the CDK app. |
 | `USER_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for the `ddb` backend. When unset, the name is derived from `TABLE_PREFIX` (`users` table). |
-| `USER_REGION` | AWS region | Region of the user table. |
+| `USER_REGION` | AWS region | Region of the user table (and of the `s3` backend's S3 client). |
 | `LDAP_URL` | — | LDAP server URL; required by the `ldap` backend (not yet implemented). |
 | `LDAP_BIND_DN` / `LDAP_BIND_PASSWORD` | — | Bind credentials for the `ldap` backend. |
 | `LDAP_BASE_DN` | — | Search base for the `ldap` backend. |
@@ -109,7 +109,8 @@ The Lambda is created with: `STORAGE=s3`, `SENDER=aws-ses`,
 variables for the enabled DDB-backed stores (including
 `METADATA_REGION`/`DDB_TABLE`), `JWT_SECRET` as the Secrets Manager ARN,
 plus `USERNAME`, `PASSWORD` (only when provided at deploy time),
-`USER_MANAGER` (default `none`), `DOMAIN`, `SES_FROM` (default
+`USER_MANAGER` (only when provided at deploy time; the app auto-selects
+the `s3` backend since storage is S3), `DOMAIN`, `SES_FROM` (default
 `no-reply@<DOMAIN>`), `JWT_AUDIENCE=mail.<DOMAIN>` and
 `JWT_ISSUER=emissary-<DOMAIN>`. Deploy-time variables are listed in
 [DEPLOYMENT.md](DEPLOYMENT.md#deploy-time-variables).

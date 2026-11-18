@@ -128,6 +128,93 @@ func TestLoad_CustomValues(t *testing.T) {
 	}
 }
 
+func TestLoad_UserManagerAutoSelect(t *testing.T) {
+	tests := []struct {
+		name         string
+		storage      string
+		s3Bucket     string
+		userManager  string
+		wantStorage  string
+		wantUserType string
+	}{
+		{
+			name:         "s3 storage auto-selects s3 user manager",
+			storage:      "s3",
+			s3Bucket:     "my-bucket",
+			wantStorage:  "s3",
+			wantUserType: "s3",
+		},
+		{
+			name:         "s3 storage with explicit backend keeps it",
+			storage:      "s3",
+			s3Bucket:     "my-bucket",
+			userManager:  "ddb",
+			wantStorage:  "s3",
+			wantUserType: "ddb",
+		},
+		{
+			name:         "s3 storage with explicit none stays none",
+			storage:      "s3",
+			s3Bucket:     "my-bucket",
+			userManager:  "none",
+			wantStorage:  "s3",
+			wantUserType: "none",
+		},
+		{
+			name:         "bucket without storage type auto-selects s3",
+			storage:      "",
+			s3Bucket:     "my-bucket",
+			wantStorage:  "s3",
+			wantUserType: "s3",
+		},
+		{
+			name:         "memory storage auto-selects none",
+			storage:      "",
+			s3Bucket:     "",
+			wantStorage:  "memory",
+			wantUserType: "none",
+		},
+		{
+			name:         "memory storage with explicit none stays none",
+			storage:      "memory",
+			s3Bucket:     "",
+			userManager:  "none",
+			wantStorage:  "memory",
+			wantUserType: "none",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			os.Setenv("USERNAME", "user")
+			os.Setenv("PASSWORD", "pass")
+			os.Unsetenv("USER_MANAGER")
+			os.Unsetenv("STORAGE")
+			os.Unsetenv("S3_BUCKET")
+			if tt.storage != "" {
+				os.Setenv("STORAGE", tt.storage)
+			}
+			if tt.s3Bucket != "" {
+				os.Setenv("S3_BUCKET", tt.s3Bucket)
+			}
+			if tt.userManager != "" {
+				os.Setenv("USER_MANAGER", tt.userManager)
+			}
+			defer cleanupEnv()
+
+			cfg, err := Load(context.Background())
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Storage.Type != tt.wantStorage {
+				t.Errorf("Storage.Type = %q, want %q", cfg.Storage.Type, tt.wantStorage)
+			}
+			if cfg.UserManager.Type != tt.wantUserType {
+				t.Errorf("UserManager.Type = %q, want %q", cfg.UserManager.Type, tt.wantUserType)
+			}
+		})
+	}
+}
+
 func TestLoad_MissingUsername(t *testing.T) {
 	os.Unsetenv("USERNAME")
 	os.Setenv("PASSWORD", "pass")
@@ -475,6 +562,7 @@ func TestUserManagerConfig_Validate(t *testing.T) {
 		{"none", UserManagerConfig{Type: "none"}, false},
 		{"ddb", UserManagerConfig{Type: "ddb"}, false},
 		{"dynamodb", UserManagerConfig{Type: "dynamodb"}, false},
+		{"s3", UserManagerConfig{Type: "s3"}, false},
 		{"ldap with URL", UserManagerConfig{Type: "ldap", LDAPURL: "ldap://localhost:389"}, false},
 		{"ldap without URL", UserManagerConfig{Type: "ldap"}, true},
 		{"removed any backend", UserManagerConfig{Type: "any", Domain: "example.com"}, true},

@@ -28,8 +28,10 @@ export interface User {
   email: string;
   /** When false, the user is kept but cannot log in */
   enabled: boolean;
-  /** Whether the user has administrator privileges */
-  admin: boolean;
+  /** Whether the user has system management privileges */
+  systemManager: boolean;
   /** System rules applied to mail for this user (e.g., "bounce", "delete") */
   rules: string[];
+  /** Whether the user has user management privileges */
+  userManager: boolean;
 }

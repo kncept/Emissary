@@ -4,11 +4,11 @@ import { getEmail, sendEmail } from '../api.ts';
 import type { Email } from '../types.ts';
 
 interface ComposeProps {
-  admin?: boolean;
+  systemManager?: boolean;
   currentUser?: string;
 }
 
-export default function Compose({ admin = false, currentUser }: ComposeProps) {
+export default function Compose({ systemManager = false, currentUser }: ComposeProps) {
   const { id } = useParams<{ id: string }>();
   // Reply links encode the full delivered object key; decode only when a
   // router left the escaped form intact.
@@ -21,7 +21,7 @@ export default function Compose({ admin = false, currentUser }: ComposeProps) {
     }
   })();
   const navigate = useNavigate();
-  const [from, setFrom] = useState(admin ? '' : currentUser || '');
+  const [from, setFrom] = useState(systemManager ? '' : currentUser || '');
   const [to, setTo] = useState('');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
@@ -31,7 +31,7 @@ export default function Compose({ admin = false, currentUser }: ComposeProps) {
 
   useEffect(() => {
     if (!emailID) {
-      setFrom(admin ? '' : currentUser || '');
+      setFrom(systemManager ? '' : currentUser || '');
       return;
     }
 
@@ -41,7 +41,7 @@ export default function Compose({ admin = false, currentUser }: ComposeProps) {
         if (!active) return;
         setTo(original.from);
         setSubject(original.subject ? `Re: ${original.subject}` : 'Re:');
-        if (admin) {
+        if (systemManager) {
           // Reply as the user whose inbox the original message is in.
           setFrom(original.to);
         } else {
@@ -55,7 +55,7 @@ export default function Compose({ admin = false, currentUser }: ComposeProps) {
     return () => {
       active = false;
     };
-  }, [emailID, admin, currentUser]);
+  }, [emailID, systemManager, currentUser]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -90,7 +90,7 @@ export default function Compose({ admin = false, currentUser }: ComposeProps) {
         {error && <div className="error-message">{error}</div>}
         {success && <div className="success-message">Email sent successfully!</div>}
         <form onSubmit={handleSubmit} className="compose-form">
-          {admin && (
+          {systemManager && (
             <div className="form-group">
               <label htmlFor="from">From</label>
               <input

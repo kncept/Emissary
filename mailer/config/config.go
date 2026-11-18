@@ -113,9 +113,9 @@ func (c *SessionConfig) Validate() error {
 // The USERNAME/PASSWORD administrator is configured separately and
 // is available with every backend.
 type UserManagerConfig struct {
-	Type   string // "none", "ddb" or "ldap"
+	Type   string // "none", "ddb", "ldap" or "s3"
 	Domain string // receiving domain for mail delivery and reporting
-	Region string // AWS region for the "ddb" backend
+	Region string // AWS region for the "ddb" and "s3" backends
 
 	DdbTable string
 
@@ -131,9 +131,9 @@ type UserManagerConfig struct {
 func (c *UserManagerConfig) Validate() error {
 	var errs []error
 	switch c.Type {
-	case "", "none", "ddb", "dynamodb", "ldap":
+	case "", "none", "ddb", "dynamodb", "ldap", "s3":
 	default:
-		errs = append(errs, fmt.Errorf("unknown user manager type %q (want none, ddb or ldap)", c.Type))
+		errs = append(errs, fmt.Errorf("unknown user manager type %q (want none, ddb, ldap or s3)", c.Type))
 	}
 	if c.Type == "ldap" && c.LDAPURL == "" {
 		errs = append(errs, errors.New("user manager ldap requires a server URL (set LDAP_URL)"))
@@ -162,14 +162,22 @@ type Config struct {
 // Validate checks the entire configuration for consistency. It returns a
 // composite error containing all validation failures from the sub-configs.
 func (c *Config) Validate() error {
-	return errors.Join(
+	errs := []error{
 		c.Server.Validate(),
 		c.Storage.Validate(),
 		c.Sender.Validate(),
 		c.Metadata.Validate(),
 		c.Session.Validate(),
 		c.UserManager.Validate(),
-	)
+	}
+	// The s3 user manager stores users in the mail storage bucket. The
+	// storage validation already enforces S3_BUCKET when STORAGE=s3 (which
+	// also covers the auto-selected backend); this catches an explicit
+	// USER_MANAGER=s3 with no bucket at all.
+	if c.UserManager.Type == "s3" && c.Storage.S3Bucket == "" {
+		errs = append(errs, errors.New("user manager s3 requires a bucket (set S3_BUCKET)"))
+	}
+	return errors.Join(errs...)
 }
 
 // ApplyDDBTablePrefix names tables the same way as the household project
@@ -303,9 +311,15 @@ func Load(ctx context.Context) (*Config, error) {
 		cfg.Metadata.Region = cfg.AWSRegion
 	}
 
-	// User manager defaults
+	// User manager defaults. When no backend is selected, follow the
+	// storage backend: S3 mail storage implies the S3 user manager, so a
+	// bucket alone is enough to run with Emissary-mastered users.
 	if cfg.UserManager.Type == "" {
-		cfg.UserManager.Type = "none"
+		if cfg.Storage.Type == "s3" {
+			cfg.UserManager.Type = "s3"
+		} else {
+			cfg.UserManager.Type = "none"
+		}
 	}
 	if cfg.UserManager.Region == "" {
 		cfg.UserManager.Region = cfg.AWSRegion

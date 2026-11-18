@@ -549,9 +549,15 @@ func (s *CreateUserRequest) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
-		if s.Admin.Set {
-			e.FieldStart("admin")
-			s.Admin.Encode(e)
+		if s.SystemManager.Set {
+			e.FieldStart("systemManager")
+			s.SystemManager.Encode(e)
+		}
+	}
+	{
+		if s.UserManager.Set {
+			e.FieldStart("userManager")
+			s.UserManager.Encode(e)
 		}
 	}
 	{
@@ -566,12 +572,13 @@ func (s *CreateUserRequest) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfCreateUserRequest = [5]string{
+var jsonFieldsNameOfCreateUserRequest = [6]string{
 	0: "email",
 	1: "password",
 	2: "enabled",
-	3: "admin",
-	4: "rules",
+	3: "systemManager",
+	4: "userManager",
+	5: "rules",
 }
 
 // Decode decodes CreateUserRequest from json.
@@ -618,15 +625,25 @@ func (s *CreateUserRequest) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"enabled\"")
 			}
-		case "admin":
+		case "systemManager":
 			if err := func() error {
-				s.Admin.Reset()
-				if err := s.Admin.Decode(d); err != nil {
+				s.SystemManager.Reset()
+				if err := s.SystemManager.Decode(d); err != nil {
 					return err
 				}
 				return nil
 			}(); err != nil {
-				return errors.Wrap(err, "decode field \"admin\"")
+				return errors.Wrap(err, "decode field \"systemManager\"")
+			}
+		case "userManager":
+			if err := func() error {
+				s.UserManager.Reset()
+				if err := s.UserManager.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"userManager\"")
 			}
 		case "rules":
 			if err := func() error {
@@ -1438,9 +1455,15 @@ func (s *UpdateUserRequest) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
-		if s.Admin.Set {
-			e.FieldStart("admin")
-			s.Admin.Encode(e)
+		if s.SystemManager.Set {
+			e.FieldStart("systemManager")
+			s.SystemManager.Encode(e)
+		}
+	}
+	{
+		if s.UserManager.Set {
+			e.FieldStart("userManager")
+			s.UserManager.Encode(e)
 		}
 	}
 	{
@@ -1455,10 +1478,11 @@ func (s *UpdateUserRequest) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfUpdateUserRequest = [3]string{
+var jsonFieldsNameOfUpdateUserRequest = [4]string{
 	0: "enabled",
-	1: "admin",
-	2: "rules",
+	1: "systemManager",
+	2: "userManager",
+	3: "rules",
 }
 
 // Decode decodes UpdateUserRequest from json.
@@ -1479,15 +1503,25 @@ func (s *UpdateUserRequest) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"enabled\"")
 			}
-		case "admin":
+		case "systemManager":
 			if err := func() error {
-				s.Admin.Reset()
-				if err := s.Admin.Decode(d); err != nil {
+				s.SystemManager.Reset()
+				if err := s.SystemManager.Decode(d); err != nil {
 					return err
 				}
 				return nil
 			}(); err != nil {
-				return errors.Wrap(err, "decode field \"admin\"")
+				return errors.Wrap(err, "decode field \"systemManager\"")
+			}
+		case "userManager":
+			if err := func() error {
+				s.UserManager.Reset()
+				if err := s.UserManager.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"userManager\"")
 			}
 		case "rules":
 			if err := func() error {
@@ -1588,8 +1622,8 @@ func (s *User) encodeFields(e *jx.Encoder) {
 		e.Bool(s.Enabled)
 	}
 	{
-		e.FieldStart("admin")
-		e.Bool(s.Admin)
+		e.FieldStart("systemManager")
+		e.Bool(s.SystemManager)
 	}
 	{
 		e.FieldStart("rules")
@@ -1599,13 +1633,18 @@ func (s *User) encodeFields(e *jx.Encoder) {
 		}
 		e.ArrEnd()
 	}
+	{
+		e.FieldStart("userManager")
+		e.Bool(s.UserManager)
+	}
 }
 
-var jsonFieldsNameOfUser = [4]string{
+var jsonFieldsNameOfUser = [5]string{
 	0: "email",
 	1: "enabled",
-	2: "admin",
+	2: "systemManager",
 	3: "rules",
+	4: "userManager",
 }
 
 // Decode decodes User from json.
@@ -1641,17 +1680,17 @@ func (s *User) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"enabled\"")
 			}
-		case "admin":
+		case "systemManager":
 			requiredBitSet[0] |= 1 << 2
 			if err := func() error {
 				v, err := d.Bool()
-				s.Admin = bool(v)
+				s.SystemManager = bool(v)
 				if err != nil {
 					return err
 				}
 				return nil
 			}(); err != nil {
-				return errors.Wrap(err, "decode field \"admin\"")
+				return errors.Wrap(err, "decode field \"systemManager\"")
 			}
 		case "rules":
 			requiredBitSet[0] |= 1 << 3
@@ -1673,6 +1712,18 @@ func (s *User) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"rules\"")
 			}
+		case "userManager":
+			requiredBitSet[0] |= 1 << 4
+			if err := func() error {
+				v, err := d.Bool()
+				s.UserManager = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"userManager\"")
+			}
 		default:
 			return errors.Errorf("unexpected field %q", k)
 		}
@@ -1683,7 +1734,7 @@ func (s *User) Decode(d *jx.Decoder) error {
 	// Validate required fields.
 	var failures []validate.FieldError
 	for i, mask := range [1]uint8{
-		0b00001111,
+		0b00011111,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -1747,8 +1798,8 @@ func (s *UserResponse) encodeFields(e *jx.Encoder) {
 		e.Bool(s.Enabled)
 	}
 	{
-		e.FieldStart("admin")
-		e.Bool(s.Admin)
+		e.FieldStart("systemManager")
+		e.Bool(s.SystemManager)
 	}
 	{
 		e.FieldStart("rules")
@@ -1758,13 +1809,18 @@ func (s *UserResponse) encodeFields(e *jx.Encoder) {
 		}
 		e.ArrEnd()
 	}
+	{
+		e.FieldStart("userManager")
+		e.Bool(s.UserManager)
+	}
 }
 
-var jsonFieldsNameOfUserResponse = [4]string{
+var jsonFieldsNameOfUserResponse = [5]string{
 	0: "email",
 	1: "enabled",
-	2: "admin",
+	2: "systemManager",
 	3: "rules",
+	4: "userManager",
 }
 
 // Decode decodes UserResponse from json.
@@ -1800,17 +1856,17 @@ func (s *UserResponse) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"enabled\"")
 			}
-		case "admin":
+		case "systemManager":
 			requiredBitSet[0] |= 1 << 2
 			if err := func() error {
 				v, err := d.Bool()
-				s.Admin = bool(v)
+				s.SystemManager = bool(v)
 				if err != nil {
 					return err
 				}
 				return nil
 			}(); err != nil {
-				return errors.Wrap(err, "decode field \"admin\"")
+				return errors.Wrap(err, "decode field \"systemManager\"")
 			}
 		case "rules":
 			requiredBitSet[0] |= 1 << 3
@@ -1832,6 +1888,18 @@ func (s *UserResponse) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"rules\"")
 			}
+		case "userManager":
+			requiredBitSet[0] |= 1 << 4
+			if err := func() error {
+				v, err := d.Bool()
+				s.UserManager = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"userManager\"")
+			}
 		default:
 			return errors.Errorf("unexpected field %q", k)
 		}
@@ -1842,7 +1910,7 @@ func (s *UserResponse) Decode(d *jx.Decoder) error {
 	// Validate required fields.
 	var failures []validate.FieldError
 	for i, mask := range [1]uint8{
-		0b00001111,
+		0b00011111,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.

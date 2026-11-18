@@ -433,7 +433,9 @@ async function emailClientStack(
       // Configuration consumed by mailer/config (and the current frontend).
       USERNAME: authUsername,
       DOMAIN: emissaryDomain,
-      USER_MANAGER: env.USER_MANAGER || 'none',
+      // Only set when provided: with STORAGE=s3 the app auto-selects the
+      // s3 user manager when USER_MANAGER is unset.
+      ...(env.USER_MANAGER ? { USER_MANAGER: env.USER_MANAGER } : {}),
       STORAGE: 's3',
       S3_BUCKET: inboundEmailBucketName,
       SENDER: 'aws-ses',
@@ -560,7 +562,9 @@ async function emailClientStack(
       // Same environment variables as the frontend/api lambda
       USERNAME: authUsername,
       DOMAIN: emissaryDomain,
-      USER_MANAGER: env.USER_MANAGER || 'none',
+      // Only set when provided: with STORAGE=s3 the app auto-selects the
+      // s3 user manager when USER_MANAGER is unset.
+      ...(env.USER_MANAGER ? { USER_MANAGER: env.USER_MANAGER } : {}),
       STORAGE: 's3',
       S3_BUCKET: inboundEmailBucketName,
       SENDER: 'aws-ses',

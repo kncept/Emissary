@@ -5,7 +5,8 @@ import ConfirmDialog from './ConfirmDialog.tsx';
 interface User {
   email: string;
   enabled: boolean;
-  admin: boolean;
+  systemManager: boolean;
+  userManager: boolean;
   rules: string[];
 }
 
@@ -20,12 +21,14 @@ export default function Users() {
   const [createEmail, setCreateEmail] = useState('');
   const [createPassword, setCreatePassword] = useState('');
   const [createEnabled, setCreateEnabled] = useState(true);
-  const [createAdmin, setCreateAdmin] = useState(false);
+  const [createSystemManager, setCreateSystemManager] = useState(false);
+  const [createUserManager, setCreateUserManager] = useState(false);
   const [createRules, setCreateRules] = useState('');
 
   const [editing, setEditing] = useState<User | null>(null);
   const [editEnabled, setEditEnabled] = useState(true);
-  const [editAdmin, setEditAdmin] = useState(false);
+  const [editSystemManager, setEditSystemManager] = useState(false);
+  const [editUserManager, setEditUserManager] = useState(false);
   const [editRules, setEditRules] = useState('');
 
   const [passwordFor, setPasswordFor] = useState<string | null>(null);
@@ -69,14 +72,16 @@ export default function Users() {
         email: createEmail.trim(),
         password: createPassword,
         enabled: createEnabled,
-        admin: createAdmin,
+        systemManager: createSystemManager,
+        userManager: createUserManager,
         rules: parseRules(createRules),
       });
       setShowCreate(false);
       setCreateEmail('');
       setCreatePassword('');
       setCreateEnabled(true);
-      setCreateAdmin(false);
+      setCreateSystemManager(false);
+      setCreateUserManager(false);
       setCreateRules('');
       setMessage('User created');
       await load();
@@ -90,7 +95,8 @@ export default function Users() {
   const openEdit = (user: User) => {
     setEditing(user);
     setEditEnabled(user.enabled);
-    setEditAdmin(user.admin);
+    setEditSystemManager(user.systemManager);
+    setEditUserManager(user.userManager);
     setEditRules((user.rules || []).join(', '));
     setMessage('');
     setError('');
@@ -105,7 +111,8 @@ export default function Users() {
     try {
       await updateUser(editing.email, {
         enabled: editEnabled,
-        admin: editAdmin,
+        systemManager: editSystemManager,
+        userManager: editUserManager,
         rules: parseRules(editRules),
       });
       setEditing(null);
@@ -182,7 +189,8 @@ export default function Users() {
           </div>
           <div className="form-group" style={{ flexDirection: 'row', gap: '1.5rem', alignItems: 'center' }}>
             <label><input type="checkbox" checked={createEnabled} onChange={(e) => setCreateEnabled(e.target.checked)} disabled={busy} /> Enabled</label>
-            <label><input type="checkbox" checked={createAdmin} onChange={(e) => setCreateAdmin(e.target.checked)} disabled={busy} /> Admin</label>
+            <label><input type="checkbox" checked={createSystemManager} onChange={(e) => setCreateSystemManager(e.target.checked)} disabled={busy} /> System Manager</label>
+            <label><input type="checkbox" checked={createUserManager} onChange={(e) => setCreateUserManager(e.target.checked)} disabled={busy} /> User Manager</label>
           </div>
           <div className="form-group">
             <label htmlFor="create-rules">Rules (comma-separated)</label>
@@ -197,7 +205,8 @@ export default function Users() {
           <h3 style={{ marginBottom: '1rem' }}>Edit {editing.email}</h3>
           <div className="form-group" style={{ flexDirection: 'row', gap: '1.5rem', alignItems: 'center' }}>
             <label><input type="checkbox" checked={editEnabled} onChange={(e) => setEditEnabled(e.target.checked)} disabled={busy} /> Enabled</label>
-            <label><input type="checkbox" checked={editAdmin} onChange={(e) => setEditAdmin(e.target.checked)} disabled={busy} /> Admin</label>
+            <label><input type="checkbox" checked={editSystemManager} onChange={(e) => setEditSystemManager(e.target.checked)} disabled={busy} /> System Manager</label>
+            <label><input type="checkbox" checked={editUserManager} onChange={(e) => setEditUserManager(e.target.checked)} disabled={busy} /> User Manager</label>
           </div>
           <div className="form-group">
             <label htmlFor="edit-rules">Rules (comma-separated)</label>
@@ -214,7 +223,7 @@ export default function Users() {
         <form className="compose-card" style={{ marginBottom: '1.5rem', padding: '1rem' }} onSubmit={onChangePassword}>
           <h3 style={{ marginBottom: '1rem' }}>Change password for {passwordFor}</h3>
           <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem', marginBottom: '1rem' }}>
-            Old password is required when changing your own password; optional for admins changing another user.
+            Old password is required when changing your own password; optional for system managers changing another user.
           </p>
           <div className="form-group">
             <label htmlFor="old-password">Old password (if required)</label>
@@ -242,7 +251,8 @@ export default function Users() {
               <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--color-border)' }}>
                 <th style={{ padding: '0.75rem 1rem' }}>Email</th>
                 <th style={{ padding: '0.75rem 1rem' }}>Enabled</th>
-                <th style={{ padding: '0.75rem 1rem' }}>Admin</th>
+                <th style={{ padding: '0.75rem 1rem' }}>System Manager</th>
+                <th style={{ padding: '0.75rem 1rem' }}>User Manager</th>
                 <th style={{ padding: '0.75rem 1rem' }}>Rules</th>
                 <th style={{ padding: '0.75rem 1rem' }}>Actions</th>
               </tr>
@@ -252,7 +262,8 @@ export default function Users() {
                 <tr key={u.email} style={{ borderBottom: '1px solid var(--color-border)' }}>
                   <td style={{ padding: '0.75rem 1rem' }}>{u.email}</td>
                   <td style={{ padding: '0.75rem 1rem' }}>{u.enabled ? 'Yes' : 'No'}</td>
-                  <td style={{ padding: '0.75rem 1rem' }}>{u.admin ? 'Yes' : 'No'}</td>
+                  <td style={{ padding: '0.75rem 1rem' }}>{u.systemManager ? 'Yes' : 'No'}</td>
+                  <td style={{ padding: '0.75rem 1rem' }}>{u.userManager ? 'Yes' : 'No'}</td>
                   <td style={{ padding: '0.75rem 1rem' }}>{(u.rules || []).join(', ') || '—'}</td>
                   <td style={{ padding: '0.75rem 1rem' }}>
                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>

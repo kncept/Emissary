@@ -91,7 +91,7 @@ instantiated in `handler.New`:
 | Inbound messages | `storage.Storage` | `STORAGE` | `s3`, `memory` | `s3` needs `S3_BUCKET`. Defaults to `memory`. |
 | Outbound mail | `sender.Sender` | `SENDER` | `aws-ses`, `log` | Defaults to `aws-ses` when `SES_FROM` is set, else `log`. |
 | Message state | `metadata.MetadataStore` | `METADATA` | `memory` (default), `file`, `ddb` | `ddb` uses `DDB_TABLE` or the `metadata` table derived from `TABLE_PREFIX`. |
-| Users | `usermanager.Manager` | `USER_MANAGER` | `none` (default), `ddb`, `ldap` | `ddb` uses `USER_TABLE` or the `users` table derived from `TABLE_PREFIX` and is Emissary-mastered. `ldap` is unimplemented. |
+| Users | `usermanager.Manager` | `USER_MANAGER` | `none`, `ddb`, `s3`, `ldap` | Auto-selects `s3` when storage is S3, else `none`. `ddb` uses `USER_TABLE` or the `users` table derived from `TABLE_PREFIX`; `s3` stores each user as `users/<email>/user.json` in the mail bucket. Both are Emissary-mastered. `ldap` is unimplemented. |
 
 ## Inbound mail flow
 

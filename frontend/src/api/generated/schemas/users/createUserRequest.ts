@@ -30,8 +30,10 @@ export interface CreateUserRequest {
   password: string;
   /** Whether the user can log in */
   enabled?: boolean;
-  /** Whether the user has administrator privileges */
-  admin?: boolean;
+  /** Whether the user has system management privileges */
+  systemManager?: boolean;
+  /** Whether the user has user management privileges */
+  userManager?: boolean;
   /** System rules for mail handling */
   rules?: string[];
 }

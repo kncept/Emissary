@@ -28,7 +28,7 @@ vi.mock('../api.ts', () => ({
     read: false,
     flagged: false,
   })),
-  getUsers: vi.fn(async () => ({ users: [{ email: 'alice@example.com', enabled: true, admin: false, rules: [] }] })),
+  getUsers: vi.fn(async () => ({ users: [{ email: 'alice@example.com', enabled: true, systemManager: false, rules: [] }] })),
   deleteEmail: vi.fn(async () => {}),
   deleteUser: vi.fn(async () => ({})),
   markRead: vi.fn(),

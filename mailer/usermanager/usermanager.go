@@ -71,6 +71,18 @@ type EmissaryUser struct {
 
 	// Rules are the system rules applied to mail for this user.
 	Rules []string
+
+	// UserManager reports whether the user has user management privileges
+	// (can create, update, delete users via the API).
+	UserManager bool
+
+	// SystemManager reports whether the user has system management privileges
+	// (can access support endpoints, masquerade as other users, etc.).
+	SystemManager bool
+
+	// SchemaVersion tracks the data schema version for migrations.
+	// Defaults to "1.0.0" when creating new users. Empty string means legacy (pre-schema versioning).
+	SchemaVersion string
 }
 
 // IsEnabled reports whether the user may log in.
@@ -80,7 +92,7 @@ func (u *EmissaryUser) IsEnabled() bool {
 
 // Config selects and configures a user manager backend.
 type Config struct {
-	// Type is one of "none", "ddb" or "ldap".
+	// Type is one of "none", "ddb", "ldap" or "s3".
 	Type string
 
 	// AdminUsername and AdminPassword describe the built-in administrator.
@@ -94,6 +106,11 @@ type Config struct {
 	// DdbTable is the DynamoDB table used by the "ddb" backend.
 	DdbTable string
 	Region   string
+
+	// S3Bucket is the mail storage bucket used by the "s3" backend, which
+	// stores each user as users/<email>/user.json next to the user's
+	// mailboxes.
+	S3Bucket string
 
 	// LDAP settings are reserved for the "ldap" backend.
 	LDAPURL          string
@@ -140,8 +157,10 @@ func New(cfg Config) (UserManager, error) {
 		return NewDdb(cfg), nil
 	case "ldap":
 		return NewLdap(cfg), nil
+	case "s3":
+		return NewS3(cfg), nil
 	default:
-		return nil, fmt.Errorf("unknown user manager type %q (want none, ddb or ldap)", cfg.Type)
+		return nil, fmt.Errorf("unknown user manager type %q (want none, ddb, ldap or s3)", cfg.Type)
 	}
 }
 

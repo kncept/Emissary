@@ -73,6 +73,9 @@ type ddbUser struct {
 	SaltedPassword string   `dynamodbav:"saltedPassword"`
 	Salt           string   `dynamodbav:"salt"`
 	Rules          []string `dynamodbav:"rules"`
+	UserManager    bool     `dynamodbav:"userManager"`
+	SystemManager  bool     `dynamodbav:"systemManager"`
+	SchemaVersion  string   `dynamodbav:"schemaVersion"`
 }
 
 func NewDdb(cfg Config) *DdbManager {
@@ -466,6 +469,10 @@ func decodeUserCursor(cursor string) (string, error) {
 }
 
 func ddbUserFrom(user *EmissaryUser) ddbUser {
+	schemaVersion := user.SchemaVersion
+	if schemaVersion == "" {
+		schemaVersion = "1.0.0"
+	}
 	return ddbUser{
 		ID:             user.ID,
 		Username:       user.Username,
@@ -475,6 +482,9 @@ func ddbUserFrom(user *EmissaryUser) ddbUser {
 		SaltedPassword: user.SaltedPassword,
 		Salt:           user.Salt,
 		Rules:          user.Rules,
+		UserManager:    user.UserManager,
+		SystemManager:  user.SystemManager,
+		SchemaVersion:  schemaVersion,
 	}
 }
 
@@ -494,6 +504,9 @@ func (u ddbUser) emissaryUser() *EmissaryUser {
 		SaltedPassword: u.SaltedPassword,
 		Salt:           u.Salt,
 		Rules:          rules,
+		UserManager:    u.UserManager,
+		SystemManager:  u.SystemManager,
+		SchemaVersion:  u.SchemaVersion,
 	}
 }
 
