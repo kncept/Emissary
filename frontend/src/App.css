@@ -965,7 +965,16 @@ input, textarea {
   margin-bottom: 1rem;
 }
 /* Masquerade */
+.mask-icon {
+  width: 1.15em;
+  height: 1.15em;
+  flex: none;
+}
+
 .masquerade-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   background: transparent;
   color: var(--color-text);
   border: 1px solid var(--color-border);

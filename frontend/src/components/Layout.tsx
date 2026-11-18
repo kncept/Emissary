@@ -1,7 +1,12 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 import MasqueradeModal from './MasqueradeModal';
+import MaskIcon from './MaskIcon';
 import { MASQUERADE_AS_KEY } from '../api/jmap-client';
+import {
+  clearMasquerade as stopMasquerade,
+  setMasqueradeTarget as startMasquerade,
+} from '../masquerade.ts';
 
 interface LayoutProps {
   children?: React.ReactNode;
@@ -34,25 +39,15 @@ export default function Layout({
     ...(canManageUsers ? [{ path: '/users', label: 'Users', icon: '👥' }] : []),
   ];
 
-  const setMasqueradeTarget = (value: string) => {
-    try {
-      window.localStorage.setItem(MASQUERADE_AS_KEY, value);
-    } catch {
-      // ignore storage errors
-    }
+  const selectMasqueradeTarget = (value: string) => {
+    startMasquerade(value);
     setMasqueradeAs(value);
     setMasqueradeOpen(false);
-    window.location.assign('/');
   };
 
-  const clearMasquerade = () => {
-    try {
-      window.localStorage.removeItem(MASQUERADE_AS_KEY);
-    } catch {
-      // ignore storage errors
-    }
+  const stopMasquerading = () => {
+    stopMasquerade();
     setMasqueradeAs(null);
-    window.location.assign('/');
   };
 
   return (
@@ -83,7 +78,7 @@ export default function Layout({
               <button
                 type="button"
                 className="masquerade-indicator-clear"
-                onClick={clearMasquerade}
+                onClick={stopMasquerading}
                 aria-label="Stop masquerading"
                 title="Stop masquerading"
               >
@@ -97,6 +92,7 @@ export default function Layout({
               onClick={() => setMasqueradeOpen(true)}
               type="button"
             >
+              <MaskIcon />
               Masquerade
             </button>
           )}
@@ -120,7 +116,7 @@ export default function Layout({
       <MasqueradeModal
         open={masqueradeOpen}
         onClose={() => setMasqueradeOpen(false)}
-        onSelect={setMasqueradeTarget}
+        onSelect={selectMasqueradeTarget}
       />
     </div>
   );

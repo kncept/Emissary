@@ -89,6 +89,11 @@ func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserR
 	if req.Email == "" {
 		return &usersapi.CreateUserBadRequest{Error: "email is required"}, nil
 	}
+	// Match the frontend email input rule: an @ with content before and after it.
+	at := strings.LastIndexByte(req.Email, '@')
+	if at <= 0 || at == len(req.Email)-1 || strings.Contains(req.Email[:at], "@") {
+		return &usersapi.CreateUserBadRequest{Error: "email must contain an @ with content before and after it"}, nil
+	}
 
 	// An omitted or blank password creates an account that cannot log in.
 	password := req.Password.Or("")

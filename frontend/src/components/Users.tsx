@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { getUsers, createUser, updateUser, deleteUser, changeUserPassword } from '../api.ts';
 import ConfirmDialog from './ConfirmDialog.tsx';
+import MaskIcon from './MaskIcon.tsx';
+import { setMasqueradeTarget } from '../masquerade.ts';
 
 interface User {
   email: string;
@@ -292,6 +294,16 @@ export default function Users() {
                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                       <button className="btn btn-secondary" onClick={() => openEdit(u)} disabled={busy}>Edit</button>
                       <button className="btn btn-secondary" onClick={() => { setPasswordFor(u.email); setOldPassword(''); setNewPassword(''); setMessage(''); setError(''); }} disabled={busy}>Password</button>
+                      <button
+                        className="btn btn-secondary"
+                        onClick={() => setMasqueradeTarget(u.email)}
+                        disabled={busy}
+                        aria-label={`Masquerade as ${u.email}`}
+                        title={`Masquerade as ${u.email}`}
+                      >
+                        <MaskIcon />
+                        Masquerade
+                      </button>
                       <button className="btn btn-danger" onClick={() => { setDeleteTarget(u.email); setMessage(''); setError(''); }} disabled={busy}>Delete</button>
                     </div>
                   </td>

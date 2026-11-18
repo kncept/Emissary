@@ -181,8 +181,9 @@ masquerade; it governs the support tools instead.
 
 ### Frontend UI
 
-- A **"Masquerade" button** appears in the top header bar for users with admin permissions (the `EmissaryUserManagement` claim in their JWT).
+- A **"Masquerade" button** (with a mask icon) appears in the top header bar for users with admin permissions (the `EmissaryUserManagement` claim in their JWT).
 - Clicking the button opens a **modal** with a user ID (email address) input field and an autocomplete results area.
+- The **User Management** user list also has a **"Masquerade" action** in each row's Actions column; it switches directly to that user's account.
 - **Autocomplete behavior:**
   - Search begins only after **at least 3 characters** are entered.
   - Requests are **debounced by 100 ms** after the last keystroke.

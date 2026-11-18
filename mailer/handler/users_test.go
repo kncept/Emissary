@@ -68,6 +68,45 @@ func TestCreateUserWithoutPassword(t *testing.T) {
 	}
 }
 
+func TestCreateUserInvalidEmail(t *testing.T) {
+	manager, err := usermanager.NewFile(usermanager.Config{
+		AdminUsername: "admin",
+		AdminPassword: "admin-pass",
+		FilesystemDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewFile() error = %v", err)
+	}
+	h := NewUsersHandler(manager, nil)
+	ctx := context.WithValue(context.Background(), claimsContextKey{}, &auth.Claims{
+		Subject:                "admin",
+		SystemManager:          true,
+		EmissaryUserManagement: true,
+	})
+
+	for _, email := range []string{
+		"no-at-sign.example.com",
+		"@example.com",
+		"user@",
+		"user@@example.com",
+		"@",
+	} {
+		t.Run(email, func(t *testing.T) {
+			res, err := h.CreateUser(ctx, &usersapi.CreateUserRequest{Email: email})
+			if err != nil {
+				t.Fatalf("CreateUser() error = %v", err)
+			}
+			bad, ok := res.(*usersapi.CreateUserBadRequest)
+			if !ok {
+				t.Fatalf("CreateUser() response = %T, want CreateUserBadRequest", res)
+			}
+			if bad.Error == "" {
+				t.Error("CreateUser() error message is blank")
+			}
+		})
+	}
+}
+
 func TestNoPasswordUserOverHTTP(t *testing.T) {
 	manager, err := usermanager.NewFile(usermanager.Config{
 		AdminUsername: "admin",
