@@ -22,6 +22,12 @@ function downloadRawMime(raw: string, id: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+// Render HTML mail in a sandboxed frame so message styles cannot leak into the
+// app and message scripts cannot run.
+function emailHtmlDocument(html: string): string {
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px;line-height:1.6;color:#1e293b;word-wrap:break-word}img{max-width:100%;height:auto}a{color:#2563eb}</style></head><body>${html}</body></html>`;
+}
+
 export default function EmailView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -221,7 +227,16 @@ export default function EmailView() {
         </div>
       </header>
       <div className="email-body">
-        <pre>{email.body}</pre>
+        {email.html ? (
+          <iframe
+            className="email-html-frame"
+            title="Email content"
+            sandbox=""
+            srcDoc={emailHtmlDocument(email.html)}
+          />
+        ) : (
+          <pre>{email.body}</pre>
+        )}
       </div>
       <ConfirmDialog
         open={confirmDelete}

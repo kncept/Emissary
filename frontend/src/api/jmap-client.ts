@@ -4,6 +4,8 @@ import type {
   Session,
   Invocation,
 } from './generated/schemas/jmap';
+import { htmlToText } from '../html.ts';
+import type { EmailBodyFormat } from '../types.ts';
 
 const SESSION_URL = '/.well-known/jmap';
 export const MASQUERADE_AS_KEY = 'masquerade_as';
@@ -141,6 +143,7 @@ export interface Email {
   to: string;
   subject: string;
   body: string;
+  html?: string;
   timestamp: string;
   read: boolean;
   flagged: boolean;
@@ -223,9 +226,11 @@ export async function getEmail(id: string): Promise<Email> {
           'keywords',
           'mailboxIds',
           'textBody',
+          'htmlBody',
           'bodyValues',
         ],
         fetchTextBodyValues: true,
+        fetchHTMLBodyValues: true,
       },
       id: 'get1',
     },
@@ -252,6 +257,17 @@ export async function getEmail(id: string): Promise<Email> {
       email.body = bodyValues[partId].value;
     } else if (blobId && bodyValues[blobId]) {
       email.body = bodyValues[blobId].value;
+    }
+  }
+
+  const htmlBody = list[0].htmlBody as Array<Record<string, unknown>> | undefined;
+  if (htmlBody && htmlBody.length > 0 && bodyValues) {
+    const partId = htmlBody[0].partId as string | undefined;
+    const blobId = htmlBody[0].blobId as string | undefined;
+    if (partId && bodyValues[partId]) {
+      email.html = bodyValues[partId].value;
+    } else if (blobId && bodyValues[blobId]) {
+      email.html = bodyValues[blobId].value;
     }
   }
 
@@ -337,26 +353,44 @@ export async function sendEmail(data: {
   to: string;
   subject: string;
   body: string;
+  format: EmailBodyFormat;
   replyToId?: string;
 }): Promise<{ success: boolean; message?: string }> {
   const createId = 'create1';
   const submissionId = 'submission1';
-  const bodySize = new TextEncoder().encode(data.body).length;
+  const isHtml = data.format === 'html';
+  // Plain messages are sent as text/plain only. HTML messages include a plain
+  // alternative so clients without HTML support still have a readable body.
+  const plainText = isHtml ? htmlToText(data.body) : data.body;
+  const textSize = new TextEncoder().encode(plainText).length;
+
+  const createArgs: Record<string, unknown> = {
+    mailboxIds: { drafts: true },
+    keywords: { $draft: true },
+    from: [{ email: data.from || '', name: '' }],
+    to: [{ email: data.to, name: '' }],
+    subject: data.subject,
+    textBody: [{ partId: 'text1', type: 'text/plain', size: textSize }],
+    bodyValues: {
+      text1: { value: plainText, isEncodingProblem: false, isTruncated: false },
+    },
+  };
+
+  if (isHtml) {
+    createArgs.htmlBody = [{
+      partId: 'html1',
+      type: 'text/html',
+      size: new TextEncoder().encode(data.body).length,
+    }];
+    (createArgs.bodyValues as Record<string, unknown>).html1 = {
+      value: data.body,
+      isEncodingProblem: false,
+      isTruncated: false,
+    };
+  }
 
   const emailCreateArgs: Record<string, unknown> = {
-    create: {
-      [createId]: {
-        mailboxIds: { drafts: true },
-        keywords: { $draft: true },
-        from: [{ email: data.from || '', name: '' }],
-        to: [{ email: data.to, name: '' }],
-        subject: data.subject,
-        textBody: [{ partId: 'text1', type: 'text/plain', size: bodySize }],
-        bodyValues: {
-          text1: { value: data.body, isEncodingProblem: false, isTruncated: false },
-        },
-      },
-    },
+    create: { [createId]: createArgs },
   };
 
   if (data.replyToId) {

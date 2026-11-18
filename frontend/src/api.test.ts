@@ -301,4 +301,77 @@ describe('auth api', () => {
       expect(body.methodCalls[0][1].accountId).toBe('admin@example.com');
     });
   });
+
+  describe('sendEmail body formats', () => {
+    function stubJmapFetch() {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/.well-known/jmap') {
+          return createMockResponse({
+            username: 'test@example.com',
+            apiUrl: '/api/',
+            primaryAccounts: { 'urn:ietf:params:jmap:mail': 'test@example.com' },
+          });
+        }
+        if (url === '/api/') {
+          return createMockResponse({
+            methodResponses: [
+              ['Email/set', { accountId: 'test@example.com', created: { create1: { id: 'draft1' } }, notCreated: {} }, 'emailCreate'],
+              ['EmailSubmission/set', { accountId: 'test@example.com', created: { submission1: { id: 'sub1' } }, notCreated: {} }, 'submissionCreate'],
+            ],
+            sessionState: '1',
+          });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    }
+
+    async function sentCreateArgs(fetchMock: ReturnType<typeof stubJmapFetch>) {
+      const apiCall = fetchMock.mock.calls.find((call) => call[0] === '/api/');
+      const body = JSON.parse(String(apiCall?.[1]?.body));
+      return body.methodCalls[0][1].create.create1;
+    }
+
+    beforeEach(() => {
+      window.localStorage.clear();
+      window.localStorage.setItem(TOKEN_KEY, 'abc123');
+    });
+
+    it('sends a text/plain-only message in plain mode', async () => {
+      const { sendEmail } = await importApi();
+      const fetchMock = stubJmapFetch();
+
+      await sendEmail({
+        to: 'bob@example.com',
+        subject: 'Hi',
+        body: 'Hello <b>world</b>',
+        format: 'plain',
+      });
+
+      const create = await sentCreateArgs(fetchMock);
+      expect(create.textBody).toEqual([{ partId: 'text1', type: 'text/plain', size: 18 }]);
+      expect(create.bodyValues.text1.value).toBe('Hello <b>world</b>');
+      expect(create.htmlBody).toBeUndefined();
+      expect(create.bodyValues.html1).toBeUndefined();
+    });
+
+    it('sends an HTML message with a plain alternative in HTML mode', async () => {
+      const { sendEmail } = await importApi();
+      const fetchMock = stubJmapFetch();
+
+      await sendEmail({
+        to: 'bob@example.com',
+        subject: 'Hi',
+        body: '<p>Hello <b>world</b></p>',
+        format: 'html',
+      });
+
+      const create = await sentCreateArgs(fetchMock);
+      expect(create.htmlBody).toEqual([{ partId: 'html1', type: 'text/html', size: 25 }]);
+      expect(create.bodyValues.html1.value).toBe('<p>Hello <b>world</b></p>');
+      expect(create.bodyValues.text1.value).toBe('Hello world');
+    });
+  });
 });

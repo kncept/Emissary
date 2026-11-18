@@ -4,6 +4,7 @@ export interface Email {
   to: string;
   subject: string;
   body: string;
+  html?: string;
   timestamp: string;
   read: boolean;
   flagged: boolean;
@@ -28,10 +29,13 @@ export interface LoginResponse {
   error?: string;
 }
 
+export type EmailBodyFormat = 'plain' | 'html';
+
 export interface SendEmailRequest {
   from?: string;
   to: string;
   subject: string;
   body: string;
+  format: EmailBodyFormat;
   replyToId?: string;
 }

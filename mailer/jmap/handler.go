@@ -443,11 +443,26 @@ type EmailHeader struct {
 	Value string `json:"value"`
 }
 
+func (m *JMAPEmail) setBodyValues(e *email.UserEmail, fetchText, fetchHTML bool) {
+	values := map[string]EmailBodyValue{}
+	if fetchText && e.Text != "" {
+		values["text1"] = EmailBodyValue{Value: e.Text}
+	}
+	if fetchHTML && e.HTML != "" {
+		values["html1"] = EmailBodyValue{Value: e.HTML}
+	}
+	if len(values) > 0 {
+		m.BodyValues = values
+	}
+}
+
 func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID  string   `json:"accountId"`
-		IDs        []string `json:"ids,omitempty"`
-		Properties []string `json:"properties,omitempty"`
+		AccountID           string   `json:"accountId"`
+		IDs                 []string `json:"ids,omitempty"`
+		Properties          []string `json:"properties,omitempty"`
+		FetchTextBodyValues bool     `json:"fetchTextBodyValues"`
+		FetchHTMLBodyValues bool     `json:"fetchHTMLBodyValues"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
@@ -477,6 +492,7 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 				if err != nil {
 					return nil, err
 				}
+				jmapEmail.setBodyValues(e, req.FetchTextBodyValues, req.FetchHTMLBodyValues)
 				list = append(list, *jmapEmail)
 			} else {
 				notFound = append(notFound, id)
@@ -488,6 +504,7 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 			if err != nil {
 				return nil, err
 			}
+			jmapEmail.setBodyValues(e, req.FetchTextBodyValues, req.FetchHTMLBodyValues)
 			list = append(list, *jmapEmail)
 		}
 	}
@@ -598,21 +615,47 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			subject = s
 		}
 
-		var text string
-		var textBodySize int
-		if tbArr, ok := createMap["textBody"].([]interface{}); ok && len(tbArr) > 0 {
-			if tb, ok := tbArr[0].(map[string]interface{}); ok {
-				textBodySize = int(tb["size"].(float64))
-			}
-		}
+		bodyValues := map[string]string{}
 		if bvMap, ok := createMap["bodyValues"].(map[string]interface{}); ok {
-			for _, v := range bvMap {
+			for partID, v := range bvMap {
 				if bv, ok := v.(map[string]interface{}); ok {
 					if val, ok := bv["value"].(string); ok {
-						text = val
-						break
+						bodyValues[partID] = val
 					}
 				}
+			}
+		}
+
+		var text string
+		var html string
+		var textBodySize int
+		var htmlBodySize int
+		if tbArr, ok := createMap["textBody"].([]interface{}); ok && len(tbArr) > 0 {
+			if tb, ok := tbArr[0].(map[string]interface{}); ok {
+				if size, ok := tb["size"].(float64); ok {
+					textBodySize = int(size)
+				}
+				if partID, ok := tb["partId"].(string); ok {
+					text = bodyValues[partID]
+				}
+			}
+		}
+		if hbArr, ok := createMap["htmlBody"].([]interface{}); ok && len(hbArr) > 0 {
+			if hb, ok := hbArr[0].(map[string]interface{}); ok {
+				if size, ok := hb["size"].(float64); ok {
+					htmlBodySize = int(size)
+				}
+				if partID, ok := hb["partId"].(string); ok {
+					html = bodyValues[partID]
+				}
+			}
+		}
+		// Clients that only send a single body value (without a matching part
+		// id) still populate the text part.
+		if text == "" && html == "" {
+			for _, value := range bodyValues {
+				text = value
+				break
 			}
 		}
 
@@ -680,7 +723,8 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			Subject:    subject,
 			Date:       now,
 			Text:       text,
-			Size:       int64(textBodySize),
+			HTML:       html,
+			Size:       int64(textBodySize + htmlBodySize),
 			InReplyTo:  inReplyTo,
 			References: references,
 		}
@@ -1202,6 +1246,7 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 			Subject: emailMsg.Subject,
 			Date:    time.Now().UTC(),
 			Text:    emailMsg.Text,
+			HTML:    emailMsg.HTML,
 		}
 
 		// Send the email
@@ -1548,6 +1593,17 @@ func (h *Handler) toJMAPEmail(ctx context.Context, e *email.UserEmail) (*JMAPEma
 	preview = strings.ReplaceAll(preview, "\n", " ")
 	preview = strings.TrimSpace(preview)
 
+	textPartID := "text1"
+	htmlPartID := "html1"
+	textBody := []EmailBodyPart{}
+	htmlBody := []EmailBodyPart{}
+	if e.Text != "" {
+		textBody = append(textBody, EmailBodyPart{PartID: &textPartID, Type: "text/plain", Size: len(e.Text)})
+	}
+	if e.HTML != "" {
+		htmlBody = append(htmlBody, EmailBodyPart{PartID: &htmlPartID, Type: "text/html", Size: len(e.HTML)})
+	}
+
 	// Format dates
 	receivedAt := e.Date.UTC().Format(time.RFC3339)
 	sentAt := e.Date.UTC().Format(time.RFC3339)
@@ -1575,8 +1631,8 @@ func (h *Handler) toJMAPEmail(ctx context.Context, e *email.UserEmail) (*JMAPEma
 		Preview:       preview,
 		BodyStructure: nil,
 		BodyValues:    nil,
-		TextBody:      []EmailBodyPart{},
-		HTMLBody:      []EmailBodyPart{},
+		TextBody:      textBody,
+		HTMLBody:      htmlBody,
 		Attachments:   []EmailBodyPart{},
 		Headers:       []EmailHeader{},
 	}, nil

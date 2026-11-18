@@ -16,7 +16,8 @@
     "date-fns": "^4.1.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "react-router-dom": "^7.0.0"
+    "react-router-dom": "^7.0.0",
+    "react-simple-wysiwyg": "^3.4.1"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

@@ -300,6 +300,72 @@ func TestEmailSetStoresReplyTo(t *testing.T) {
 	}
 }
 
+func TestEmailSetStoresHTMLBodyAndEmailGetReturnsIt(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewMemoryStorage()
+	handler := NewHandler(store, metadata.NewMemoryMetadata(),
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+
+	args := json.RawMessage(`{"accountId":"alice@example.com","create":{"c1":{
+		"mailboxIds":{"drafts":true},
+		"from":[{"email":"alice@example.com"}],
+		"to":[{"email":"bob@example.com"}],
+		"subject":"HTML mail",
+		"textBody":[{"partId":"text1","type":"text/plain","size":5}],
+		"htmlBody":[{"partId":"html1","type":"text/html","size":16}],
+		"bodyValues":{
+			"text1":{"value":"hello"},
+			"html1":{"value":"<p>hello</p>"}
+		}}}}`)
+	result, err := handler.EmailSet(ctx, "alice@example.com", args)
+	if err != nil {
+		t.Fatalf("EmailSet() error = %v", err)
+	}
+	var createdResp struct {
+		Created map[string]struct {
+			ID string `json:"id"`
+		} `json:"created"`
+	}
+	if err := json.Unmarshal(result, &createdResp); err != nil {
+		t.Fatalf("unmarshal create response: %v", err)
+	}
+	id := createdResp.Created["c1"].ID
+
+	draft, err := store.GetEmail(ctx, id)
+	if err != nil {
+		t.Fatalf("GetEmail(%q) error = %v", id, err)
+	}
+	if draft.Text != "hello" || draft.HTML != "<p>hello</p>" {
+		t.Fatalf("stored bodies = text %q, html %q", draft.Text, draft.HTML)
+	}
+
+	getResult, err := handler.EmailGet(ctx, "alice@example.com", json.RawMessage(
+		`{"accountId":"alice@example.com","ids":["`+id+`"],"fetchTextBodyValues":true,"fetchHTMLBodyValues":true}`))
+	if err != nil {
+		t.Fatalf("EmailGet() error = %v", err)
+	}
+	var getResp struct {
+		List []JMAPEmail `json:"list"`
+	}
+	if err := json.Unmarshal(getResult, &getResp); err != nil {
+		t.Fatalf("unmarshal get response: %v", err)
+	}
+	if len(getResp.List) != 1 {
+		t.Fatalf("Email/get returned %d messages, want 1", len(getResp.List))
+	}
+	msg := getResp.List[0]
+	if len(msg.TextBody) != 1 || msg.TextBody[0].PartID == nil || *msg.TextBody[0].PartID != "text1" {
+		t.Fatalf("textBody = %+v, want part text1", msg.TextBody)
+	}
+	if len(msg.HTMLBody) != 1 || msg.HTMLBody[0].PartID == nil || *msg.HTMLBody[0].PartID != "html1" {
+		t.Fatalf("htmlBody = %+v, want part html1", msg.HTMLBody)
+	}
+	if got := msg.BodyValues["html1"].Value; got != "<p>hello</p>" {
+		t.Fatalf("html1 body value = %q, want %q", got, "<p>hello</p>")
+	}
+}
+
 type recordingSender struct {
 	messages []*email.UserEmail
 }
@@ -311,6 +377,39 @@ func (s *recordingSender) Send(_ context.Context, message *email.UserEmail) erro
 }
 func (s *recordingSender) SendBounce(_ context.Context, _, _, _, _ string, _ *email.UserEmail) error {
 	return nil
+}
+
+func TestEmailSubmissionSetForwardsHTMLBody(t *testing.T) {
+	const accountID = "alice@example.com"
+	store := storage.NewMemoryStorage()
+	store.Add(&email.UserEmail{
+		ID:        "draft1",
+		AccountID: accountID,
+		From:      email.Address{Address: accountID},
+		To:        []email.Address{{Address: "bob@example.com"}},
+		Subject:   "HTML mail",
+		Text:      "hello",
+		HTML:      "<p>hello</p>",
+	})
+	capture := &recordingSender{}
+	handler := NewHandler(store, metadata.NewMemoryMetadata(),
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		capture)
+
+	ctx := ContextWithClaims(context.Background(), &auth.Claims{Subject: accountID})
+	args := json.RawMessage(fmt.Sprintf(
+		`{"accountId":%q,"create":{"s1":{"identityId":"primary","emailId":"draft1"}}}`,
+		accountID))
+	if _, err := handler.EmailSubmissionSet(ctx, accountID, args); err != nil {
+		t.Fatalf("EmailSubmissionSet() error = %v", err)
+	}
+	if len(capture.messages) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(capture.messages))
+	}
+	msg := capture.messages[0]
+	if msg.Text != "hello" || msg.HTML != "<p>hello</p>" {
+		t.Fatalf("sent bodies = text %q, html %q", msg.Text, msg.HTML)
+	}
 }
 
 // TestEmailSubmissionSetFromVerification exercises the From rules directly at
