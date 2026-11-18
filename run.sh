@@ -76,7 +76,6 @@ build_backend() {
 		cd mailer
 
 		go build -ldflags="${LDFLAGS}" -o ../.build/frontend ./cmd/frontend
-		go build -ldflags="${LDFLAGS}" -o ../.build/sns-receiver ./cmd/sns-receiver
 		go build -ldflags="${LDFLAGS}" -o ../.build/s3-receiver ./cmd/s3-receiver
 	)
 }

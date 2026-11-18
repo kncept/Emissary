@@ -150,42 +150,12 @@ func (s *S3Storage) ListAccountEmails(ctx context.Context, accountID, mailboxID 
 		}
 
 		for _, obj := range output.Contents {
-			if obj.Key == nil || strings.HasSuffix(*obj.Key, "/") {
+			// Delivered messages live in a per-user mailbox subfolder and end
+			// in .eml. Skip system files such as users/<account>/user.json,
+			// directory markers and anything else that is not a message.
+			if obj.Key == nil || !email.IsDeliveredMessageKey(*obj.Key) {
 				continue
 			}
-			message, err := s.getEmailByKey(ctx, *obj.Key)
-			if err != nil {
-				log.Printf("s3: skipping object %q: %v", *obj.Key, err)
-				continue
-			}
-			emails = append(emails, message)
-		}
-	}
-	return emails, nil
-}
-
-// ListAllEmails implements the Storage interface. It is retained for
-// administrative callers; request handling uses ListAccountEmails.
-func (s *S3Storage) ListAllEmails(ctx context.Context) ([]*email.UserEmail, error) {
-	var emails []*email.UserEmail
-	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
-		Bucket: aws.String(s.bucket),
-		Prefix: aws.String(s.listPrefix()),
-	})
-
-	for paginator.HasMorePages() {
-		output, err := paginator.NextPage(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list objects: %w", err)
-		}
-
-		for _, obj := range output.Contents {
-			if obj.Key == nil || strings.HasSuffix(*obj.Key, "/") {
-				continue
-			}
-			// Read the object by its exact key. SES stores inbound messages
-			// under the raw message ID (no extension), so deriving a different
-			// key here would make every message fail to load and be skipped.
 			message, err := s.getEmailByKey(ctx, *obj.Key)
 			if err != nil {
 				log.Printf("s3: skipping object %q: %v", *obj.Key, err)
@@ -287,36 +257,6 @@ func isObjectNotFound(err error) bool {
 // Name returns the storage name.
 func (s *S3Storage) Name() string {
 	return "S3Storage"
-}
-
-// ListEmails is kept for backward compatibility.
-func (s *S3Storage) ListEmails(ctx context.Context) ([]Email, error) {
-	emails, err := s.ListAllEmails(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	var result []Email
-	for _, e := range emails {
-		// Convert to legacy Email type
-		from := ""
-		if len(e.From.Address) > 0 {
-			from = e.From.Address
-		}
-		to := ""
-		if len(e.To) > 0 {
-			to = e.To[0].Address
-		}
-		result = append(result, Email{
-			ID:        e.ID,
-			From:      from,
-			To:        to,
-			Subject:   e.Subject,
-			Body:      e.Text,
-			Timestamp: e.Date.Format(time.RFC3339),
-		})
-	}
-	return result, nil
 }
 
 // Email is the legacy email type for backward compatibility.

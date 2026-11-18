@@ -77,6 +77,28 @@ func TestMailboxFromID(t *testing.T) {
 	}
 }
 
+func TestIsDeliveredMessageKey(t *testing.T) {
+	tests := []struct {
+		key  string
+		want bool
+	}{
+		{"users/alice@example.com/inbox/20261117T120000Z_ses-id.eml", true},
+		{"emails/users/bob@example.com/sent/20261117_ses-id.eml", true},
+		{"users/alice@example.com/inbox/MESSAGE.EML", true},
+		{"users/alice@example.com/user.json", false},
+		{"users/alice@example.com/inbox/", false},
+		{"users/alice@example.com/inbox/notes.txt", false},
+		{"users/alice@example.com/20261117_ses-id.eml", false},
+		{"ses-staging-message-id", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := IsDeliveredMessageKey(tt.key); got != tt.want {
+			t.Errorf("IsDeliveredMessageKey(%q) = %v, want %v", tt.key, got, tt.want)
+		}
+	}
+}
+
 func TestParse_DerivesAccountAndMailboxFromDeliveredKey(t *testing.T) {
 	const key = "users/alice@example.com/inbox/20261117T120000Z_ses-id.eml"
 	raw := "From: sender@example.com\r\nSubject: Hello\r\nDate: Mon, 1 Jan 2024 12:00:00 +0000\r\n\r\nBody\r\n"

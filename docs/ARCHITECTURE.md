@@ -67,19 +67,17 @@ listens with `net/http` and uses the memory/log implementations.
 | Package | Responsibility |
 | --- | --- |
 | `cmd/frontend` | Entry point; chooses Lambda vs. native listener. |
-| `cmd/sns-receiver` | Placeholder for a future SNS-to-S3 relay Lambda. |
 | `config` | Loads and validates environment configuration. |
 | `envutil` | Cached environment lookups; resolves `arn:aws:` values via Secrets Manager. |
 | `awsutil` | Lambda detection and Secrets Manager access. |
 | `auth` | JWT issue/validate (`Claims`: `sub`, `sid`, `admin`, `iat`, `exp`, optional `aud`/`iss`). |
 | `usermanager` | Pluggable login backends; every backend also knows the built-in admin. |
-| `storage` | Mail source: `ListAccountEmails` (scoped by JMAP `accountId`/`mailboxId`), plus `GetEmail`, `DeleteEmail` and a legacy `ListAllEmails` for admin/support callers. |
+| `storage` | Mail source: `ListAccountEmails` (scoped by JMAP `accountId`/`mailboxId`), plus `GetEmail`, `DeleteEmail`, and support-only bucket operations. |
 | `sender` | Write side of mail: `Send`. |
 | `metadata` | Per-message read/flag state, discarded when a message is deleted. |
 | `email` | RFC 5322 parsing: `WireFormatEmail` (full structure) and `UserEmail` (simplified). |
 | `handler` | The HTTP API, auth middleware, panic recovery, and the embedded frontend. |
 | `gui` | `//go:embed all:frontend/dist` — the built SPA. |
-| `server` | An older HTTP server package with a different API shape; currently nothing imports it. It is kept for reference. |
 
 ## Pluggable components
 
@@ -116,7 +114,8 @@ instantiated in `handler.New`:
    `GetObject`s each message, and parses it with `email.Parse`.
    Unparseable objects are logged and skipped, not fatal.
 6. `handler` merges read/flag state from the metadata store into each
-   response. JMAP never calls the cross-account `ListAllEmails`.
+   response. Listing is always scoped to one account; there is no
+   cross-account email listing API.
 
 The email ID used throughout the JMAP API is the full delivered S3 object key
 (e.g., `users/alice@example.com/inbox/2026-11-17T10:30:45Z_01000192a3b4c5d6.eml`),

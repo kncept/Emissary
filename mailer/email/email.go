@@ -63,6 +63,22 @@ func MailboxKeyPrefix(accountID, mailboxID string) string {
 	return prefix
 }
 
+// IsDeliveredMessageKey reports whether key has the layout of a delivered
+// message: a per-user mailbox subfolder and a .eml suffix.
+//
+//	users/<accountId>/<mailboxId>/<file>.eml
+//
+// System records such as users/<accountId>/user.json, directory markers and
+// raw SES staging objects at the bucket root do not match. Storage listings
+// use this to avoid returning non-message objects as mail.
+func IsDeliveredMessageKey(key string) bool {
+	if !strings.HasSuffix(strings.ToLower(key), ".eml") {
+		return false
+	}
+	_, _, ok := MailboxFromID(key)
+	return ok
+}
+
 // MailboxFromID extracts the account and mailbox from a delivered message ID.
 // A delivered ID is the full object key of the .eml file (including the
 // timestamp), so it also identifies which account's mailbox the message lives

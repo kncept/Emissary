@@ -93,7 +93,7 @@ not generated from `users.yaml`: it is served directly by the configured
 | `GET` | `/api/support/bucket/root` | Bearer‡ | List unprocessed staging objects at the bucket root. |
 | `POST` | `/api/support/process-email` | Bearer‡ | Run the inbound pipeline on a staging object. |
 | `GET` | `/.well-known/jmap` | Bearer | Get the JMAP Session object (capabilities, accounts). |
-| `POST` | `/api/` | Bearer | JMAP batch API endpoint for all mail operations. |
+| `POST` | `/api/jmap/` | Bearer | JMAP batch API endpoint for all mail operations. |
 | `POST` | `/upload/{accountId}` | Bearer | Upload binary data (attachments). |
 | `GET` | `/download/{accountId}/{blobId}/{name}` | Bearer | Download binary data. |
 | `GET` | `/eventsource/` | Bearer | EventSource push connection. |
@@ -106,7 +106,7 @@ not generated from `users.yaml`: it is served directly by the configured
 
 ## JMAP Mail Operations
 
-All email operations are performed via the JMAP batch endpoint (`POST /api/`).
+All email operations are performed via the JMAP batch endpoint (`POST /api/jmap/`).
 Mail is modeled with JMAP's **account → mailbox → email** hierarchy: the
 `accountId` selects the user's account and `filter.inMailbox` selects a
 JMAP mailbox such as `inbox`, `sent`, `drafts`, `trash`, `archive` or
@@ -242,7 +242,7 @@ and API endpoints:
     "urn:ietf:params:jmap:vacationresponse": "user@example.com"
   },
   "username": "user@example.com",
-  "apiUrl": "/api/",
+  "apiUrl": "/api/jmap/",
   "downloadUrl": "/download/{accountId}/{blobId}/{name}",
   "uploadUrl": "/upload/{accountId}/",
   "eventSourceUrl": "/eventsource/",
@@ -250,7 +250,7 @@ and API endpoints:
 }
 ```
 
-## `POST /api/` (JMAP Batch Request)
+## `POST /api/jmap/` (JMAP Batch Request)
 
 Processes an ordered batch of JMAP method calls. The request and
 response bodies are JSON `Request` and `Response` objects. Method

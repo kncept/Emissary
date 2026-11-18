@@ -17,6 +17,18 @@ import (
 	"github.com/kncept/Emissary/mailer/usermanager"
 )
 
+// EmailResponse is the test DTO used to decode email results from JMAP responses.
+type EmailResponse struct {
+	ID        string `json:"id"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Subject   string `json:"subject"`
+	Body      string `json:"body"`
+	Timestamp string `json:"timestamp"`
+	Read      bool   `json:"read"`
+	Flagged   bool   `json:"flagged"`
+}
+
 type captureSender struct {
 	from     string
 	messages []*email.UserEmail

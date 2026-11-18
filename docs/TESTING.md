@@ -40,7 +40,7 @@ this document explains the reasoning behind them.
 | --- | --- | --- | --- |
 | Pure units | `go test` | `mailer/email`, `mailer/auth`, `mailer/config` | RFC 5322 parsing, JWT issue/validate, env-var defaults and validation |
 | Seam implementations | `go test` | `mailer/storage`, `mailer/metadata`, `mailer/usermanager`, `mailer/sender` | each backend behind its interface |
-| HTTP handler | `go test` + `httptest` | `mailer/handler`, `mailer/cmd/frontend`, `mailer/server` | the whole API: routing, middleware, auth, visibility, sends |
+| HTTP handler | `go test` + `httptest` | `mailer/handler`, `mailer/cmd/frontend` | the whole API: routing, middleware, auth, visibility, sends |
 | Frontend | vitest + jsdom | `frontend/src/*.test.{ts,tsx}` | API client, app rendering/routing, and in-app confirmation modals |
 | End-to-end | manual | `STORAGE=memory ./run.sh run` | the real binary with the embedded UI, exercised in a browser |
 
@@ -71,9 +71,7 @@ for ordinary users.
 `New(HandlerConfig)` with `MemoryStorage` and a capturing sender,
 then drive it with `httptest`: login, authenticated requests, listing,
 reading, flagging, deleting and sending. This is where the
-authorization model is pinned. `mailer/server` is the older, unused
-server package; its tests use hand-rolled mocks and keep the old
-behavior pinned until the package is removed.
+authorization model is pinned.
 
 ### Frontend
 
@@ -138,7 +136,7 @@ it. When renaming tests, keep this table in sync.
 | Deleting an email also removes its metadata | `handler` `TestDeleteEmailAlsoDeletesMetadata` |
 | Expired, future and wrong-audience/issuer tokens are rejected | `auth` `TestAuthenticator_Validate_*` |
 | Delivered ids are full object keys (timestamp + `.eml`) and account/mailbox are derived from them | `email` `TestMailboxFromID`, `TestParse_DerivesAccountAndMailboxFromDeliveredKey`, `storage` `TestS3StorageListAccountEmails*` |
-| S3 `ListAccountEmails` is limited to the account/mailbox prefix; legacy SES staging keys still resolve without an `.eml` suffix | `storage` `TestS3StorageListAccountEmails*`, `TestS3StorageListAllEmailsReadsSESMessageKeys` |
+| S3 `ListAccountEmails` is limited to the account/mailbox prefix and skips non-`.eml` system files; legacy SES staging keys still resolve by exact key without an `.eml` suffix | `storage` `TestS3StorageListAccountEmails*`, `TestS3StorageGetEmailReadsSESMessageKey` |
 | Unknown selector values and missing companion variables fail at startup | `config` `TestLoad_Unknown*`, `TestLoad_*Requires*` |
 | Frontend uses no native browser dialogs; destructive actions require an in-app confirmation | `.oxlintrc.json` `no-alert` (CI via `run.sh test`), throwing stubs in `src/test-setup.ts`, `ConfirmDialog` and `DeleteConfirmation` tests |
 
@@ -196,9 +194,7 @@ it. When renaming tests, keep this table in sync.
   and asserting on the produced resources (receipt rule recipients,
   bucket policy, least-privilege IAM). `aws-cdk-local` is also
   installed if LocalStack-style checks are wanted.
-- **Untouched packages:** `envutil`, `awsutil`, `gui` have no tests;
-  `cmd/sns-receiver` is an unimplemented placeholder (see
-  [DESIGN.md](DESIGN.md) status notes and `TODO.md`).
+- **Untouched packages:** `envutil`, `awsutil`, `gui` have no tests.
 - **No integration tests against real AWS services** — S3, DynamoDB
   and SES are covered only through fakes. If real-service coverage
   becomes necessary, prefer an opt-in suite gated behind a build tag

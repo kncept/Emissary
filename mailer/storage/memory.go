@@ -83,23 +83,6 @@ func (s *MemoryStorage) ListAccountEmails(_ context.Context, accountID, mailboxI
 	return emails, nil
 }
 
-func (s *MemoryStorage) ListAllEmails(context.Context) ([]*email.UserEmail, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	emails := make([]*email.UserEmail, 0, len(s.emails))
-	for _, e := range s.emails {
-		emails = append(emails, clone(e))
-	}
-	sort.Slice(emails, func(i, j int) bool {
-		if emails[i].Date.Equal(emails[j].Date) {
-			return emails[i].ID > emails[j].ID
-		}
-		return emails[i].Date.After(emails[j].Date)
-	})
-	return emails, nil
-}
-
 func (s *MemoryStorage) GetEmail(_ context.Context, id string) (*email.UserEmail, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

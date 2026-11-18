@@ -104,9 +104,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 
-			case 'a': // Prefix: "api"
+			case 'a': // Prefix: "api/jmap/"
 
-				if l := len("api"); len(elem) >= l && elem[0:l] == "api" {
+				if l := len("api/jmap/"); len(elem) >= l && elem[0:l] == "api/jmap/" {
 					elem = elem[l:]
 				} else {
 					break
@@ -399,9 +399,9 @@ func (s *Server) FindPath(method string, u *url.URL) (r Route, _ bool) {
 					}
 				}
 
-			case 'a': // Prefix: "api"
+			case 'a': // Prefix: "api/jmap/"
 
-				if l := len("api"); len(elem) >= l && elem[0:l] == "api" {
+				if l := len("api/jmap/"); len(elem) >= l && elem[0:l] == "api/jmap/" {
 					elem = elem[l:]
 				} else {
 					break
@@ -415,7 +415,7 @@ func (s *Server) FindPath(method string, u *url.URL) (r Route, _ bool) {
 						r.summary = "Make a JMAP API request"
 						r.operationID = "apiRequest"
 						r.operationGroup = ""
-						r.pathPattern = "/api"
+						r.pathPattern = "/api/jmap/"
 						r.args = args
 						r.count = 0
 						return r, true

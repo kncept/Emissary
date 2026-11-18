@@ -21,10 +21,6 @@ type Storage interface {
 	// belonging to the account. Implementations must never read outside the
 	// account's own storage.
 	ListAccountEmails(ctx context.Context, accountID, mailboxID string) ([]*email.UserEmail, error)
-	// ListAllEmails lists messages across every account. It is intended for
-	// administrative/reference callers only; request handling must use
-	// ListAccountEmails so a user only reads their own account.
-	ListAllEmails(ctx context.Context) ([]*email.UserEmail, error)
 	GetEmail(ctx context.Context, id string) (*email.UserEmail, error)
 	// AddEmail adds a new email to the store. Returns ErrNotFound if
 	// an email with the same ID already exists.

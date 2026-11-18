@@ -35,7 +35,7 @@ type Invoker interface {
 	// and `Response` objects. Method failures are returned inside `methodResponses` as `error`
 	// invocations; only request-level failures use an HTTP error status.
 	//
-	// POST /api
+	// POST /api/jmap/
 	ApiRequest(ctx context.Context, request *JmapRequest) (ApiRequestRes, error)
 	// DownloadBinary invokes downloadBinary operation.
 	//
@@ -115,7 +115,7 @@ func (c *Client) requestURL(ctx context.Context) *url.URL {
 // and `Response` objects. Method failures are returned inside `methodResponses` as `error`
 // invocations; only request-level failures use an HTTP error status.
 //
-// POST /api
+// POST /api/jmap/
 func (c *Client) ApiRequest(ctx context.Context, request *JmapRequest) (ApiRequestRes, error) {
 	res, err := c.sendApiRequest(ctx, request)
 	return res, err
@@ -125,7 +125,7 @@ func (c *Client) sendApiRequest(ctx context.Context, request *JmapRequest) (res 
 	otelAttrs := []attribute.KeyValue{
 		otelogen.OperationID("apiRequest"),
 		semconv.HTTPRequestMethodKey.String("POST"),
-		semconv.URLTemplateKey.String("/api"),
+		semconv.URLTemplateKey.String("/api/jmap/"),
 	}
 	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
 
@@ -159,7 +159,7 @@ func (c *Client) sendApiRequest(ctx context.Context, request *JmapRequest) (res 
 	stage = "BuildURL"
 	u := uri.Clone(c.requestURL(ctx))
 	var pathParts [1]string
-	pathParts[0] = "/api"
+	pathParts[0] = "/api/jmap/"
 	uri.AddPathParts(u, pathParts[:]...)
 
 	stage = "EncodeRequest"

@@ -53,7 +53,7 @@ goes to stdout), and `npx cdk ...` is `npm run cdk -- ...`.
    compiles the SPA into `mailer/gui/frontend/dist` (the output
    directory is set in `frontend/vite.config.ts`). The frontend build
    consumes the generated TypeScript API client.
-3. **Backends**: `go build` of `cmd/frontend` and `cmd/sns-receiver`
+3. **Backends**: `go build` of `cmd/frontend` and `cmd/s3-receiver`
    into `.build/`. The Go code uses the generated server interfaces
    from step 1.
 4. **Lambda binary**: `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build
@@ -110,8 +110,7 @@ the invariants that must stay covered — is documented in
 
 CI (`.github/workflows/ci.yml`) runs `./run.sh test` on every push and
 pull request. Tagging `v*` triggers the release workflow, which runs
-`./run.sh build` and uploads the `.build/frontend` and
-`.build/sns-receiver` binaries as artifacts.
+`./run.sh build` and uploads the `.build/frontend` binary as an artifact.
 
 ## Run locally
 
@@ -138,10 +137,9 @@ Each pluggable seam is a small interface plus a selector switch. To
 add a new implementation, three places change:
 
 1. Implement the interface (in its package, next to the others):
-   - `storage.Storage` — `Name`, `ListAccountEmails`,
-     `ListAllEmails` (legacy/admin only), `GetEmail`, `DeleteEmail`
-     (`mailer/storage`). Listings must be scoped by JMAP `accountId`
-     and optional `mailboxId`.
+   - `storage.Storage` — `Name`, `ListAccountEmails`, `GetEmail`,
+     `DeleteEmail` (`mailer/storage`). Listings must be scoped by JMAP
+     `accountId` and optional `mailboxId`.
    - `sender.Sender` — `Name`, `From`, `Send` (`mailer/sender`)
    - `metadata.MetadataStore` — `Get`, `SetRead`, `SetFlagged`, `Delete`,
      `List` (`mailer/metadata`)
@@ -159,7 +157,5 @@ both implementations through the interface).
 
 Currently open implementation work (see also `TODO.md`):
 
-- `cmd/sns-receiver` — the SNS-to-S3 relay Lambda (planned to re-write
-  SES notifications as RFC 822 objects keyed by SMTP message id).
 - `usermanager` `ldap` backend (registered, panics when reached).
 - Bounce handling, e.g. reacting to SES receipt verdicts.

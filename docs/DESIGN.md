@@ -35,10 +35,6 @@ application.
 ## Non-goals / status
 
 - Full IMAP/SMTP interoperability. SES is the only mail transport.
-- `mailer/cmd/sns-receiver` is a placeholder. The plan is a convenience
-  Lambda that reads raw messages from SNS and writes them (RFC 822,
-  keyed by SMTP message id) into one or more S3 buckets; it currently
-  panics and is not wired into the CDK app.
 - The `ldap` user manager is registered but not implemented (it exists
   so deployments can select it later); it currently panics for ordinary
   users. The `ddb` user manager is implemented against DynamoDB.
@@ -126,7 +122,6 @@ Emissary/
 │   └── src/         application code and vitest tests
 ├── mailer/          Go module: github.com/kncept/Emissary/mailer
 │   ├── cmd/frontend/    webmail application binary + Lambda bootstrap
-│   ├── cmd/sns-receiver/ placeholder SNS-to-S3 Lambda (not implemented)
 │   ├── auth/            JWT issue/validate
 │   ├── awsutil/         Lambda detection, Secrets Manager
 │   ├── config/          environment-variable configuration
@@ -136,7 +131,6 @@ Emissary/
 │   ├── handler/         HTTP API + embedded frontend server
 │   ├── metadata/        read/flag state: memory, file, DynamoDB
 │   ├── sender/          outbound: AWS SES, log
-│   ├── server/          older HTTP server package, currently unused
 │   ├── storage/         inbound messages: S3, memory
 │   └── usermanager/     login backends: none, ddb*, s3*, ldap*
 ├── deploy/          AWS CDK app (three stacks)

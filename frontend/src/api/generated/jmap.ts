@@ -10,7 +10,7 @@
  * This document therefore models:
  *
  * - the Session resource (`/.well-known/jmap`);
- * - the batched API request/response envelope (`/api/`);
+ * - the batched API request/response envelope (`/api/jmap/`);
  * - binary upload/download (`uploadUrl`, `downloadUrl`);
  * - the EventSource push endpoint (`eventSourceUrl`);
  * - the request and response arguments for every method required by a
@@ -157,7 +157,7 @@ export const getApiRequestUrl = () => {
 
 
 
-  return `/api`
+  return `/api/jmap/`
 }
 
 /**

@@ -82,39 +82,42 @@ func TestMemoryStorage_ListAccountEmails(t *testing.T) {
 	}
 }
 
-func TestMemoryStorage_ListAllEmails(t *testing.T) {
+func TestMemoryStorage_ListAccountEmailsSortsByDate(t *testing.T) {
 	s := NewMemoryStorage()
 
 	now := time.Now()
 	s.Add(&email.UserEmail{
-		ID:      "1",
-		From:    email.Address{Address: "a@example.com"},
-		Subject: "First",
-		Date:    now.Add(-time.Hour),
-		Text:    "Body 1",
+		ID:        "1",
+		AccountID: "user@example.com",
+		From:      email.Address{Address: "a@example.com"},
+		Subject:   "First",
+		Date:      now.Add(-time.Hour),
+		Text:      "Body 1",
 	})
 	s.Add(&email.UserEmail{
-		ID:      "2",
-		From:    email.Address{Address: "b@example.com"},
-		Subject: "Second",
-		Date:    now,
-		Text:    "Body 2",
+		ID:        "2",
+		AccountID: "user@example.com",
+		From:      email.Address{Address: "b@example.com"},
+		Subject:   "Second",
+		Date:      now,
+		Text:      "Body 2",
 	})
 	s.Add(&email.UserEmail{
-		ID:      "3",
-		From:    email.Address{Address: "c@example.com"},
-		Subject: "Third",
-		Date:    now.Add(-2 * time.Hour),
-		Text:    "Body 3",
+		ID:        "3",
+		AccountID: "user@example.com",
+		From:      email.Address{Address: "c@example.com"},
+		Subject:   "Third",
+		Date:      now.Add(-2 * time.Hour),
+		Text:      "Body 3",
 	})
 
-	emails, err := s.ListAllEmails(context.Background())
+	emails, err := s.ListAccountEmails(context.Background(), "user@example.com", "")
 	if err != nil {
-		t.Fatalf("ListAllEmails() error = %v", err)
+		t.Fatalf("ListAccountEmails() error = %v", err)
 	}
 
 	if len(emails) != 3 {
-		t.Fatalf("ListAllEmails() returned %d emails, want 3", len(emails))
+		t.Fatalf("ListAccountEmails() returned %d emails, want 3", len(emails))
 	}
 
 	// Should be sorted by date descending (newest first)
@@ -129,17 +132,17 @@ func TestMemoryStorage_ListAllEmails(t *testing.T) {
 	}
 }
 
-func TestMemoryStorage_ListAllEmails_SameDateSortByID(t *testing.T) {
+func TestMemoryStorage_ListAccountEmailsSameDateSortByID(t *testing.T) {
 	s := NewMemoryStorage()
 
 	now := time.Now()
-	s.Add(&email.UserEmail{ID: "a", From: email.Address{Address: "a@example.com"}, Subject: "A", Date: now, Text: "A"})
-	s.Add(&email.UserEmail{ID: "b", From: email.Address{Address: "b@example.com"}, Subject: "B", Date: now, Text: "B"})
-	s.Add(&email.UserEmail{ID: "c", From: email.Address{Address: "c@example.com"}, Subject: "C", Date: now, Text: "C"})
+	s.Add(&email.UserEmail{ID: "a", AccountID: "user@example.com", From: email.Address{Address: "a@example.com"}, Subject: "A", Date: now, Text: "A"})
+	s.Add(&email.UserEmail{ID: "b", AccountID: "user@example.com", From: email.Address{Address: "b@example.com"}, Subject: "B", Date: now, Text: "B"})
+	s.Add(&email.UserEmail{ID: "c", AccountID: "user@example.com", From: email.Address{Address: "c@example.com"}, Subject: "C", Date: now, Text: "C"})
 
-	emails, err := s.ListAllEmails(context.Background())
+	emails, err := s.ListAccountEmails(context.Background(), "user@example.com", "")
 	if err != nil {
-		t.Fatalf("ListAllEmails() error = %v", err)
+		t.Fatalf("ListAccountEmails() error = %v", err)
 	}
 
 	// When dates are equal, sort by ID descending
@@ -169,7 +172,7 @@ func TestMemoryStorage_ConcurrentAccess(t *testing.T) {
 	// List emails concurrently
 	for i := 0; i < 50; i++ {
 		go func() {
-			s.ListAllEmails(context.Background())
+			s.ListAccountEmails(context.Background(), "user@example.com", "")
 			done <- true
 		}()
 	}
@@ -186,9 +189,9 @@ func TestMemoryStorage_AddNilOrEmptyID(t *testing.T) {
 	s.Add(nil)
 	s.Add(&email.UserEmail{ID: "", Subject: "Empty ID"})
 
-	emails, _ := s.ListAllEmails(context.Background())
+	emails, _ := s.ListAccountEmails(context.Background(), "user@example.com", "")
 	if len(emails) != 0 {
-		t.Errorf("ListAllEmails() returned %d emails, want 0", len(emails))
+		t.Errorf("ListAccountEmails() returned %d emails, want 0", len(emails))
 	}
 }
 
@@ -235,12 +238,12 @@ func TestMemoryStorage_DeleteEmail(t *testing.T) {
 	if _, err := s.GetEmail(context.Background(), "test-1"); err != ErrNotFound {
 		t.Errorf("GetEmail() after delete error = %v, want ErrNotFound", err)
 	}
-	emails, err := s.ListAllEmails(context.Background())
+	emails, err := s.ListAccountEmails(context.Background(), "user@example.com", "")
 	if err != nil {
-		t.Fatalf("ListAllEmails() error = %v", err)
+		t.Fatalf("ListAccountEmails() error = %v", err)
 	}
 	if len(emails) != 0 {
-		t.Errorf("ListAllEmails() after delete returned %d emails, want 0", len(emails))
+		t.Errorf("ListAccountEmails() after delete returned %d emails, want 0", len(emails))
 	}
 
 	// Deleting an absent email is reported, and deleting twice does not resurrect it.

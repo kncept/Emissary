@@ -19,7 +19,7 @@ var _ Handler = UnimplementedHandler{}
 // and `Response` objects. Method failures are returned inside `methodResponses` as `error`
 // invocations; only request-level failures use an HTTP error status.
 //
-// POST /api
+// POST /api/jmap/
 func (UnimplementedHandler) ApiRequest(ctx context.Context, req *JmapRequest) (r ApiRequestRes, _ error) {
 	return r, ht.ErrNotImplemented
 }

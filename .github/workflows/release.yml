@@ -40,6 +40,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: emissary-binaries
-          path: |
-            .build/frontend
-            .build/sns-receiver
+          path: .build/frontend

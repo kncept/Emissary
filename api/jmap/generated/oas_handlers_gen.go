@@ -39,14 +39,14 @@ func (c *codeRecorder) Unwrap() http.ResponseWriter {
 // and `Response` objects. Method failures are returned inside `methodResponses` as `error`
 // invocations; only request-level failures use an HTTP error status.
 //
-// POST /api
+// POST /api/jmap/
 func (s *Server) handleApiRequestRequest(args [0]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
 	statusWriter := &codeRecorder{ResponseWriter: w}
 	w = statusWriter
 	otelAttrs := []attribute.KeyValue{
 		otelogen.OperationID("apiRequest"),
 		semconv.HTTPRequestMethodKey.String("POST"),
-		semconv.HTTPRouteKey.String("/api"),
+		semconv.HTTPRouteKey.String("/api/jmap/"),
 	}
 	// Add attributes from config.
 	otelAttrs = append(otelAttrs, s.cfg.Attributes...)

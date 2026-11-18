@@ -14,7 +14,7 @@ type Handler interface {
 	// and `Response` objects. Method failures are returned inside `methodResponses` as `error`
 	// invocations; only request-level failures use an HTTP error status.
 	//
-	// POST /api
+	// POST /api/jmap/
 	ApiRequest(ctx context.Context, req *JmapRequest) (ApiRequestRes, error)
 	// DownloadBinary implements downloadBinary operation.
 	//
