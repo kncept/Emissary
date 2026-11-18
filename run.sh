@@ -220,6 +220,8 @@ deploy_in() {
 deploy_client() {
 	deploy_show_env
 	deploy_init
+	build_frontend
+	build_lambda
 	(
 		cd deploy
 		npm run cdk -- deploy emissary-client-*
