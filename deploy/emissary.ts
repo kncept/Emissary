@@ -357,6 +357,7 @@ async function emailClientStack(
     const sessionTable = new dynamodb.Table(stack, 'emissary-sessions', {
       tableName: sessionTableName,
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'userEmail', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     })

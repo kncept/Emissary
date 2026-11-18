@@ -81,7 +81,8 @@ func (m *MemorySessionStore) Delete(ctx context.Context, id string) error {
 
 func (m *MemorySessionStore) Name() string { return "memory" }
 
-// DdbSessionStore is a DynamoDB-backed session store.
+// DdbSessionStore is a DynamoDB-backed session store using a composite key:
+// PK = session id (id), SK = user id (userEmail).
 type DdbSessionStore struct {
 	client    *dynamodb.Client
 	tableName string
@@ -99,28 +100,35 @@ func NewDdbSessionStore(tableName, region string) (*DdbSessionStore, error) {
 }
 
 func (d *DdbSessionStore) Get(ctx context.Context, id string) (*Session, error) {
-	output, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(d.tableName),
-		Key: map[string]types.AttributeValue{
-			"id": &types.AttributeValueMemberS{Value: id},
+	// Query by PK (id) since SK (userEmail) is not known at lookup time.
+	// A session id is unique, so there will be at most one item.
+	output, err := d.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              aws.String(d.tableName),
+		KeyConditionExpression: aws.String("#id = :id"),
+		ExpressionAttributeNames: map[string]string{
+			"#id": "id",
 		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":id": &types.AttributeValueMemberS{Value: id},
+		},
+		Limit: aws.Int32(1),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session: %w", err)
 	}
 
-	if output.Item == nil {
+	if len(output.Items) == 0 {
 		return nil, ErrSessionNotFound
 	}
 
 	var session Session
-	if err := attributevalue.UnmarshalMap(output.Item, &session); err != nil {
+	if err := attributevalue.UnmarshalMap(output.Items[0], &session); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal session: %w", err)
 	}
 
 	if time.Now().After(session.ExpiresAt) {
-		// Clean up expired session
-		d.Delete(ctx, id)
+		// Clean up expired session using both keys
+		d.deleteWithKeys(ctx, id, session.UserEmail)
 		return nil, ErrSessionNotFound
 	}
 
@@ -141,10 +149,17 @@ func (d *DdbSessionStore) Create(ctx context.Context, s *Session) error {
 }
 
 func (d *DdbSessionStore) UpdateIssue(ctx context.Context, id string, expectedIssue, newIssue int) error {
-	_, err := d.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+	// First get the session to obtain the userEmail (SK)
+	session, err := d.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	_, err = d.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: aws.String(d.tableName),
 		Key: map[string]types.AttributeValue{
-			"id": &types.AttributeValueMemberS{Value: id},
+			"id":        &types.AttributeValueMemberS{Value: id},
+			"userEmail": &types.AttributeValueMemberS{Value: session.UserEmail},
 		},
 		ConditionExpression: aws.String("issue = :expected"),
 		UpdateExpression:    aws.String("SET issue = :newIssue"),
@@ -165,10 +180,24 @@ func (d *DdbSessionStore) UpdateIssue(ctx context.Context, id string, expectedIs
 }
 
 func (d *DdbSessionStore) Delete(ctx context.Context, id string) error {
+	// First get the session to obtain the userEmail (SK)
+	session, err := d.Get(ctx, id)
+	if err != nil {
+		if errors.Is(err, ErrSessionNotFound) {
+			return nil // Idempotent: deleting non-existent session is not an error
+		}
+		return err
+	}
+	return d.deleteWithKeys(ctx, id, session.UserEmail)
+}
+
+// deleteWithKeys deletes a session using both PK (id) and SK (userEmail).
+func (d *DdbSessionStore) deleteWithKeys(ctx context.Context, id, userEmail string) error {
 	_, err := d.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(d.tableName),
 		Key: map[string]types.AttributeValue{
-			"id": &types.AttributeValueMemberS{Value: id},
+			"id":        &types.AttributeValueMemberS{Value: id},
+			"userEmail": &types.AttributeValueMemberS{Value: userEmail},
 		},
 	})
 	if err != nil {

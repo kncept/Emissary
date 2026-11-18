@@ -104,11 +104,9 @@ Skipped (with a warning) unless `mailer/cmd/frontend/bootstrap` exists.
   to the inbound bucket, `ses:SendEmail`/`ses:SendRawEmail` on the
   account's identities, read/write on the metadata table, and read on
   the JWT secret.
-- DynamoDB tables for application state (partition key `id`,
-  pay-per-request), named from `TABLE_PREFIX` the same way as the
+- DynamoDB tables for application state (pay-per-request), named from `TABLE_PREFIX` the same way as the
   household project (default prefix `emissary-`): `metadata` for
-  per-message metadata (JMAP keywords and `receivedAt`; always created), and `sessions`/`users` when the
-  corresponding `SESSION`/`USER_MANAGER` backend is `ddb`.
+  per-message metadata (JMAP keywords and `receivedAt`; partition key `id`, sort key `userId`; always created), `sessions` for refresh tokens (partition key `id`, sort key `userEmail`; created when `SESSION=ddb`), and `users` for the `ddb` user manager (partition key `id`; created when `USER_MANAGER=ddb`).
 - Secrets Manager secret `emissary/<domain>/jwt-secret` — generated
   when `JWT_SECRET` is not supplied, otherwise seeded with the given
   value via a custom resource. The app resolves the ARN at runtime.
