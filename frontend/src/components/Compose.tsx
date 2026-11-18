@@ -192,9 +192,8 @@ export default function Compose({ systemManager = false, currentUser }: ComposeP
               disabled={sending}
             />
           </div>
-          <div className="form-group">
-            <div className="body-heading">
-              <label id="body-label">Body</label>
+          <div className="compose-body">
+            <div className="compose-body-toolbar">
               <div className="format-toggle" role="group" aria-label="Body format">
                 <button
                   type="button"
@@ -219,6 +218,7 @@ export default function Compose({ systemManager = false, currentUser }: ComposeP
             {format === 'plain' ? (
               <textarea
                 id="body"
+                aria-label="Body"
                 value={plainBody}
                 onChange={(e) => setPlainBody(e.target.value)}
                 placeholder="Write your email here..."
@@ -231,7 +231,7 @@ export default function Compose({ systemManager = false, currentUser }: ComposeP
                   value={htmlBody}
                   onChange={(e) => setHtmlBody(e.target.value)}
                   placeholder="Write your email here..."
-                  aria-labelledby="body-label"
+                  aria-label="Body"
                   disabled={sending}
                 >
                   <Toolbar>
