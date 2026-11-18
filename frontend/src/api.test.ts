@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const TOKEN_KEY = 'emissary_token';
 const REFRESH_TOKEN_KEY = 'emissary_refresh_token';
+const MASQUERADE_KEY = 'masquerade_as';
 
 function createMockResponse(data: unknown, options: { status?: number; ok?: boolean } = {}) {
   const status = options.status ?? 200;
@@ -206,6 +207,66 @@ describe('auth api', () => {
       expect(result.error).toBe('invalid credentials');
       expect(window.localStorage.getItem(TOKEN_KEY)).toBeNull();
       expect(window.localStorage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
+    });
+
+    it('clears a leftover masquerade target on successful login', async () => {
+      const { login } = await importApi();
+      window.localStorage.setItem(MASQUERADE_KEY, 'other@example.com');
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === '/api/auth/login') {
+          return createMockResponse({
+            accessToken: makeJwt({ sub: 'admin@example.com' }),
+            refreshToken: 'refresh-token',
+            tokenType: 'Bearer',
+            expiresAt: '9999999999',
+          });
+        }
+        throw new Error(`Unexpected fetch: ${String(input)}`);
+      }));
+
+      const result = await login('admin@example.com', 'password');
+
+      expect(result.token).toBeDefined();
+      expect(window.localStorage.getItem(MASQUERADE_KEY)).toBeNull();
+    });
+
+    it('requests emails for the logged-in account, not a stale masquerade target', async () => {
+      const { login, getEmails } = await importApi();
+      window.localStorage.setItem(MASQUERADE_KEY, 'other@example.com');
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/api/auth/login') {
+          return createMockResponse({
+            accessToken: makeJwt({ sub: 'admin@example.com' }),
+            refreshToken: 'refresh-token',
+            tokenType: 'Bearer',
+            expiresAt: '9999999999',
+          });
+        }
+        if (url === '/.well-known/jmap') {
+          return createMockResponse({
+            username: 'admin@example.com',
+            apiUrl: '/api/',
+            primaryAccounts: { 'urn:ietf:params:jmap:mail': 'admin@example.com' },
+          });
+        }
+        if (url === '/api/') {
+          return createMockResponse({
+            methodResponses: [['Email/get', { list: [] }, 'get1']],
+            sessionState: '1',
+          });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await login('admin@example.com', 'password');
+      await getEmails();
+
+      const apiCall = fetchMock.mock.calls.find((call) => call[0] === '/api/');
+      expect(apiCall).toBeDefined();
+      const body = JSON.parse(String(apiCall?.[1]?.body));
+      expect(body.methodCalls[0][1].accountId).toBe('admin@example.com');
     });
   });
 });

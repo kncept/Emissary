@@ -8,6 +8,7 @@ import type {
   ProcessEmailResponse,
 } from './api/generated/schemas/support/index.ts';
 import {
+  MASQUERADE_AS_KEY,
   getEmails,
   getEmail,
   markRead,
@@ -253,6 +254,11 @@ export async function login(username: string, password: string): Promise<LoginRe
 
   const tokens = response.data as TokenResponse;
   setTokens(tokens.accessToken, tokens.refreshToken);
+
+  // A masquerade target left over from a previous session would be used as
+  // the accountId for the first JMAP email requests after navigating home.
+  // Clear it before the app can make any of those requests.
+  window.localStorage.removeItem(MASQUERADE_AS_KEY);
 
   // Parse username from access token (JWT)
   let usernameFromToken = username;
