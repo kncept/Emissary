@@ -229,8 +229,8 @@ func (r *Receiver) extractRecipients(parsedEmail *email.UserEmail) []string {
 
 // deliverToRecipient copies the raw message to the recipient's mailbox in S3.
 func (r *Receiver) deliverToRecipient(ctx context.Context, originalKey string, rawMessage []byte, recipient string, timestamp time.Time) error {
-	// Format timestamp as ISO 8601 UTC (e.g., 2026-11-17T10:30:45Z)
-	ts := timestamp.UTC().Format(time.RFC3339)
+	// Format timestamp as ISO 8601 basic ("compressed") UTC, e.g. 20240308T143000
+	ts := email.FormatDeliveredTimestamp(timestamp)
 
 	// SES message ID is the original key (staging object key)
 	sesMessageID := originalKey

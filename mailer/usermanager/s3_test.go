@@ -189,7 +189,7 @@ func TestS3Manager_MailboxWithoutUserJSONIsNotAUser(t *testing.T) {
 	ctx := context.Background()
 
 	// A delivered mailbox for bob@example.com, but no user.json record.
-	fake.put("users/bob@example.com/inbox/2026-11-17T10:30:45Z_msg-1.eml", []byte("From: a@b\n\nhi"))
+	fake.put("users/bob@example.com/inbox/20261117T103045_msg-1.eml", []byte("From: a@b\n\nhi"))
 
 	if _, err := m.Get(ctx, "bob@example.com"); !errors.Is(err, ErrUserNotFound) {
 		t.Errorf("Get() error = %v, want ErrUserNotFound", err)
@@ -317,7 +317,7 @@ func TestS3Manager_Delete(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 	// Deleting the user must not touch the user's mail.
-	fake.put("users/alice@example.com/inbox/2026-11-17T10:30:45Z_msg-1.eml", []byte("From: a@b\n\nhi"))
+	fake.put("users/alice@example.com/inbox/20261117T103045_msg-1.eml", []byte("From: a@b\n\nhi"))
 
 	if err := m.Delete(ctx, "alice@example.com"); err != nil {
 		t.Fatalf("Delete() error = %v", err)
@@ -328,7 +328,7 @@ func TestS3Manager_Delete(t *testing.T) {
 	if err := m.Delete(ctx, "alice@example.com"); !errors.Is(err, ErrUserNotFound) {
 		t.Errorf("Delete(again) error = %v, want ErrUserNotFound", err)
 	}
-	if _, ok := fake.blob["users/alice@example.com/inbox/2026-11-17T10:30:45Z_msg-1.eml"]; !ok {
+	if _, ok := fake.blob["users/alice@example.com/inbox/20261117T103045_msg-1.eml"]; !ok {
 		t.Error("Delete() removed the user's mail, want only user.json")
 	}
 }
@@ -345,7 +345,7 @@ func TestS3Manager_ListPagination(t *testing.T) {
 		}
 	}
 	for i := 0; i < 150; i++ {
-		fake.put("users/alice@example.com/inbox/2026-11-17T10:30:45Z_msg-"+string(rune('A'+i/26))+string(rune('a'+i%26))+".eml", []byte("x"))
+		fake.put("users/alice@example.com/inbox/20261117T103045_msg-"+string(rune('A'+i/26))+string(rune('a'+i%26))+".eml", []byte("x"))
 	}
 
 	seen := make(map[string]int, 3)

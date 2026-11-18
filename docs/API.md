@@ -287,8 +287,8 @@ Example response:
       "accountId": "user@example.com",
       "queryState": "state123",
       "ids": [
-        "users/user@example.com/inbox/2026-11-17T10:30:45Z_01000192a3b4c5d6.eml",
-        "users/user@example.com/inbox/2026-11-17T09:12:00Z_01000192abcdef.eml"
+        "users/user@example.com/inbox/20240308T143000_01000192a3b4c5d6.eml",
+        "users/user@example.com/inbox/20240308T091200_01000192abcdef.eml"
       ],
       "total": 2
     }, "query1"],
@@ -304,7 +304,8 @@ Example response:
 ```
 
 Email IDs are the full delivered object keys, including the received
-timestamp and `.eml` suffix. They contain `/`, so clients must URL-encode
+timestamp (ISO 8601 basic UTC, e.g. `20240308T143000`) and `.eml` suffix.
+They contain `/`, so clients must URL-encode
 them when placing an ID in a route. The `mailboxIds` returned by
 `Email/get` reflect the mailbox the message is actually stored in.
 

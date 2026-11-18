@@ -191,9 +191,9 @@ func TestHandler_EmailQueryScopesToAccountAndMailbox(t *testing.T) {
 	ctx := context.Background()
 	memStorage := storage.NewMemoryStorage()
 	const (
-		aliceInbox = "users/alice@example.com/inbox/20261117T120000Z_a.eml"
-		aliceSent  = "users/alice@example.com/sent/20261117T130000Z_s.eml"
-		bobInbox   = "users/bob@example.com/inbox/20261117T140000Z_b.eml"
+		aliceInbox = "users/alice@example.com/inbox/20261117T120000_a.eml"
+		aliceSent  = "users/alice@example.com/sent/20261117T130000_s.eml"
+		bobInbox   = "users/bob@example.com/inbox/20261117T140000_b.eml"
 	)
 	receivedAt := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
 	for _, msg := range []*email.UserEmail{

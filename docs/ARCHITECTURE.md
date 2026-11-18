@@ -103,7 +103,7 @@ instantiated in `handler.New`:
 4. A consumer process (Lambda or scheduled job) reads from the staging area,
    validates recipients, and delivers each message to the appropriate user mailboxes:
    - For each valid recipient, the message is copied to `users/<recipient-email>/inbox/<timestamp>_<ses-message-id>.eml`
-   - The timestamp is derived from the message's `Date` header or `Received` headers (ISO 8601 UTC)
+   - The timestamp is derived from the message's `Date` header (falling back to the current time) and formatted as ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`)
    - The staging object is deleted after successful delivery to all recipients
 5. When a JMAP call lists or opens mail, `storage.S3Storage` paginates
    `ListObjectsV2` over the prefix for the call's `accountId`:
@@ -118,7 +118,7 @@ instantiated in `handler.New`:
    cross-account email listing API.
 
 The email ID used throughout the JMAP API is the full delivered S3 object key
-(e.g., `users/alice@example.com/inbox/2026-11-17T10:30:45Z_01000192a3b4c5d6.eml`),
+(e.g., `users/alice@example.com/inbox/20240308T143000_01000192a3b4c5d6.eml`),
 including the timestamp and `.eml` suffix. It encodes the account, JMAP
 mailbox, received time and SES message ID.
 
@@ -152,7 +152,7 @@ validation and delivery process applies:
      log).
 
 4. **Deliver to valid recipients** — For each valid recipient:
-   - Extract the received timestamp from the message headers
+   - Extract the received timestamp from the message's `Date` header (or use the current time) and format it as ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`)
    - Copy the raw message to `users/<recipient-email>/inbox/<timestamp>_<ses-message-id>.eml`
    - Each recipient gets their own copy in their `inbox` mailbox
 

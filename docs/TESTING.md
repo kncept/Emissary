@@ -136,6 +136,7 @@ it. When renaming tests, keep this table in sync.
 | Deleting an email also removes its metadata | `handler` `TestDeleteEmailAlsoDeletesMetadata` |
 | Expired, future and wrong-audience/issuer tokens are rejected | `auth` `TestAuthenticator_Validate_*` |
 | Delivered ids are full object keys (timestamp + `.eml`) and account/mailbox are derived from them | `email` `TestMailboxFromID`, `TestParse_DerivesAccountAndMailboxFromDeliveredKey`, `storage` `TestS3StorageListAccountEmails*` |
+| Delivered keys use ISO 8601 basic UTC timestamps (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`), including when the `Date` header is missing | `email` `TestFormatDeliveredTimestamp`, `receiver` `TestProcessMessageSavesWithISO8601BasicTimestamp`, `TestProcessMessageFallbackTimestampUsesISO8601BasicFormat` |
 | S3 `ListAccountEmails` is limited to the account/mailbox prefix and skips non-`.eml` system files; legacy SES staging keys still resolve by exact key without an `.eml` suffix | `storage` `TestS3StorageListAccountEmails*`, `TestS3StorageGetEmailReadsSESMessageKey` |
 | Unknown selector values and missing companion variables fail at startup | `config` `TestLoad_Unknown*`, `TestLoad_*Requires*` |
 | Frontend uses no native browser dialogs; destructive actions require an in-app confirmation | `.oxlintrc.json` `no-alert` (CI via `run.sh test`), throwing stubs in `src/test-setup.ts`, `ConfirmDialog` and `DeleteConfirmation` tests |

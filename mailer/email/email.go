@@ -13,6 +13,16 @@ const maxPartSize = 10 << 20 // 10 MiB per MIME part
 // MailboxKeyRoot is the S3 key prefix that holds per-user mailboxes.
 const MailboxKeyRoot = "users/"
 
+// DeliveredTimestampFormat is the ISO 8601 basic ("compressed") layout used in
+// delivered email object keys: YYYYMMDDTHHMMSS in UTC, e.g. 20240308T143000.
+const DeliveredTimestampFormat = "20060102T150405"
+
+// FormatDeliveredTimestamp formats t as an ISO 8601 basic UTC timestamp for use
+// in a delivered email object key (e.g. 20240308T143000).
+func FormatDeliveredTimestamp(t time.Time) string {
+	return t.UTC().Format(DeliveredTimestampFormat)
+}
+
 // Address is a mail address with an optional display name.
 type Address struct {
 	Name    string `json:"name,omitempty"`

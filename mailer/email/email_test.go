@@ -38,6 +38,14 @@ func TestDecodeID_Invalid(t *testing.T) {
 	}
 }
 
+func TestFormatDeliveredTimestamp(t *testing.T) {
+	// A non-UTC offset must be converted to UTC before formatting.
+	input := time.Date(2024, time.March, 8, 15, 30, 0, 0, time.FixedZone("UTC+1", 3600))
+	if got := FormatDeliveredTimestamp(input); got != "20240308T143000" {
+		t.Errorf("FormatDeliveredTimestamp(%v) = %q, want %q", input, got, "20240308T143000")
+	}
+}
+
 func TestMailboxKeyPrefix(t *testing.T) {
 	tests := []struct {
 		accountID string
@@ -63,7 +71,7 @@ func TestMailboxFromID(t *testing.T) {
 		wantMailbox string
 		wantOK      bool
 	}{
-		{"users/alice@example.com/inbox/20261117T120000Z_ses-id.eml", "alice@example.com", "inbox", true},
+		{"users/alice@example.com/inbox/20261117T120000_ses-id.eml", "alice@example.com", "inbox", true},
 		{"emails/users/bob@example.com/sent/20261117_ses-id.eml", "bob@example.com", "sent", true},
 		{"users/carol@example.com/inbox/", "", "", false},
 		{"ses-staging-message-id", "", "", false},
@@ -82,7 +90,7 @@ func TestIsDeliveredMessageKey(t *testing.T) {
 		key  string
 		want bool
 	}{
-		{"users/alice@example.com/inbox/20261117T120000Z_ses-id.eml", true},
+		{"users/alice@example.com/inbox/20261117T120000_ses-id.eml", true},
 		{"emails/users/bob@example.com/sent/20261117_ses-id.eml", true},
 		{"users/alice@example.com/inbox/MESSAGE.EML", true},
 		{"users/alice@example.com/user.json", false},
@@ -100,7 +108,7 @@ func TestIsDeliveredMessageKey(t *testing.T) {
 }
 
 func TestParse_DerivesAccountAndMailboxFromDeliveredKey(t *testing.T) {
-	const key = "users/alice@example.com/inbox/20261117T120000Z_ses-id.eml"
+	const key = "users/alice@example.com/inbox/20261117T120000_ses-id.eml"
 	raw := "From: sender@example.com\r\nSubject: Hello\r\nDate: Mon, 1 Jan 2024 12:00:00 +0000\r\n\r\nBody\r\n"
 
 	msg, err := Parse(key, strings.NewReader(raw))

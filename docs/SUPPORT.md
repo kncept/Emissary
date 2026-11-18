@@ -151,7 +151,8 @@ The `id` is the `key` reported by `GET /api/support/bucket/root`. Processing:
 1. Parses the raw message and extracts recipients from `To`, `Cc` and `Bcc`.
 2. Validates each recipient with the configured user manager.
 3. Copies the message into each valid recipient's inbox at
-   `users/<recipient>/inbox/<timestamp>_<ses-message-id>.eml`.
+   `users/<recipient>/inbox/<timestamp>_<ses-message-id>.eml`, where
+   `<timestamp>` is ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`).
 4. Sends bounces for recipients that do not exist.
 5. Deletes the staging object.
 

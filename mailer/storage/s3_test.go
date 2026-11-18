@@ -144,7 +144,7 @@ func TestS3StorageObjectExists(t *testing.T) {
 }
 
 func TestS3StorageListAccountEmailsUsesMailboxPrefixAndFullKey(t *testing.T) {
-	const aliceKey = "users/alice@example.com/inbox/20261117T120000Z_ses-id.eml"
+	const aliceKey = "users/alice@example.com/inbox/20261117T120000_ses-id.eml"
 	fake := newFakeS3(map[string]string{
 		"ses-staging-id": testMessage,
 		aliceKey:         testMessage,
@@ -196,7 +196,7 @@ func TestS3StorageListAccountEmailsRequiresAccount(t *testing.T) {
 }
 
 func TestS3StorageListAccountEmailsSkipsSystemFilesAndNonEmlObjects(t *testing.T) {
-	const aliceKey = "users/alice@example.com/inbox/20261117T120000Z_ses-id.eml"
+	const aliceKey = "users/alice@example.com/inbox/20261117T120000_ses-id.eml"
 	fake := newFakeS3(map[string]string{
 		aliceKey: testMessage,
 		// System records and objects that are not delivered messages must be
