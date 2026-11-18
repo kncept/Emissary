@@ -263,10 +263,41 @@ func (c *Config) UserTableName() string {
 // Pass a context for secret resolution (e.g., from AWS Secrets Manager).
 func Load(ctx context.Context) (*Config, error) {
 	awsRegion := firstEnv(ctx, "AWS_REGION", "AWS_DEFAULT_REGION")
-	filesystemDir, err := fsutil.ExpandDir(firstEnvDefault(ctx, "~/.emissary", "FILESYSTEM_DIR"))
-	if err != nil {
-		return nil, fmt.Errorf("invalid FILESYSTEM_DIR: %w", err)
+
+	// Read FILESYSTEM_DIR early to check if it's explicitly set.
+	// If explicitly set (even with ~), we expand it.
+	// If not set, we only apply the default ~/.emissary and expand it
+	// when filesystem-backed stores are actually needed.
+	// This avoids requiring $HOME in environments like AWS Lambda where
+	// it's not defined, unless filesystem mode is used or explicitly configured.
+	explicitFilesystemDir := firstEnv(ctx, "FILESYSTEM_DIR")
+
+	// Determine if filesystem-backed stores are needed.
+	storageType := strings.ToLower(strings.TrimSpace(firstEnv(ctx, "STORAGE")))
+	userManagerType := strings.ToLower(strings.TrimSpace(firstEnv(ctx, "USER_MANAGER")))
+	metadataType := strings.ToLower(strings.TrimSpace(firstEnv(ctx, "METADATA")))
+
+	needsFilesystem := storageType == "filesystem" ||
+		userManagerType == "filesystem" ||
+		metadataType == "file"
+
+	var filesystemDir string
+	if explicitFilesystemDir != "" {
+		// Explicitly set: expand it (handles ~)
+		var err error
+		filesystemDir, err = fsutil.ExpandDir(explicitFilesystemDir)
+		if err != nil {
+			return nil, fmt.Errorf("invalid FILESYSTEM_DIR: %w", err)
+		}
+	} else if needsFilesystem {
+		// Not explicitly set but filesystem mode needed: apply default and expand
+		var err error
+		filesystemDir, err = fsutil.ExpandDir(firstEnvDefault(ctx, "~/.emissary", "FILESYSTEM_DIR"))
+		if err != nil {
+			return nil, fmt.Errorf("invalid FILESYSTEM_DIR: %w", err)
+		}
 	}
+	// If not explicitly set and filesystem not needed, filesystemDir stays empty
 
 	cfg := &Config{
 		Server: ServerConfig{
