@@ -20,11 +20,11 @@ var (
 
 // Session represents a user session for refresh token management.
 type Session struct {
-	ID        string    `dynamodbav:"id"`         // session ID (sid)
-	UserEmail string    `dynamodbav:"userEmail"`  // user's email (sub)
-	Issue     int       `dynamodbav:"issue"`      // current issue number
-	CreatedAt time.Time `dynamodbav:"createdAt"`  // when session was created
-	ExpiresAt time.Time `dynamodbav:"expiresAt"`  // when refresh token expires
+	ID        string    `dynamodbav:"id"`        // session ID (sid)
+	UserEmail string    `dynamodbav:"userEmail"` // user's email (sub)
+	Issue     int       `dynamodbav:"issue"`     // current issue number
+	CreatedAt time.Time `dynamodbav:"createdAt"` // when session was created
+	ExpiresAt time.Time `dynamodbav:"expiresAt"` // when refresh token expires
 }
 
 // SessionStore defines the interface for session storage.
@@ -81,12 +81,25 @@ func (m *MemorySessionStore) Delete(ctx context.Context, id string) error {
 
 func (m *MemorySessionStore) Name() string { return "memory" }
 
+// ddbClient is the subset of the DynamoDB client used by DdbSessionStore. It
+// is an interface so the store can be tested without AWS.
+type ddbClient interface {
+	Query(ctx context.Context, params *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)
+	PutItem(ctx context.Context, params *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
+	UpdateItem(ctx context.Context, params *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
+	DeleteItem(ctx context.Context, params *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
+}
+
 // DdbSessionStore is a DynamoDB-backed session store using a composite key:
-// PK = session id (id), SK = user id (userEmail).
+// PK = session id (id), SK = user id (userEmail). Get only has the session id,
+// so it queries the partition rather than using GetItem; every other operation
+// includes both key attributes.
 type DdbSessionStore struct {
-	client    *dynamodb.Client
+	client    ddbClient
 	tableName string
 }
+
+var _ SessionStore = (*DdbSessionStore)(nil)
 
 func NewDdbSessionStore(tableName, region string) (*DdbSessionStore, error) {
 	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(region))
@@ -111,7 +124,8 @@ func (d *DdbSessionStore) Get(ctx context.Context, id string) (*Session, error) 
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":id": &types.AttributeValueMemberS{Value: id},
 		},
-		Limit: aws.Int32(1),
+		ConsistentRead: aws.Bool(true),
+		Limit:          aws.Int32(1),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session: %w", err)
@@ -136,6 +150,16 @@ func (d *DdbSessionStore) Get(ctx context.Context, id string) (*Session, error) 
 }
 
 func (d *DdbSessionStore) Create(ctx context.Context, s *Session) error {
+	if s == nil {
+		return errors.New("session is required")
+	}
+	if s.ID == "" {
+		return errors.New("session id is required")
+	}
+	if s.UserEmail == "" {
+		return errors.New("session user email is required")
+	}
+
 	item, err := attributevalue.MarshalMap(s)
 	if err != nil {
 		return fmt.Errorf("failed to marshal session: %w", err)

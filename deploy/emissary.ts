@@ -347,6 +347,14 @@ async function emailClientStack(
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     })
+    // List by user cannot query the base table (userId is its sort key);
+    // this index supports the per-user metadata listing.
+    metadataTable.addGlobalSecondaryIndex({
+      indexName: 'userId-index',
+      partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    })
     metadataTable.grantReadWriteData(role)
   }
 

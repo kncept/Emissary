@@ -56,7 +56,7 @@ authenticate to the MX host and uses STARTTLS when the server advertises it.
 | --- | --- | --- |
 | `METADATA` | `memory` | `memory`, `file` or `ddb` (alias `dynamodb`). |
 | `METADATA_FILE` | `<FILESYSTEM_DIR>/metadata` | File or directory used when `METADATA=file`. By default each record is a separate `<email id>.json` file under `<FILESYSTEM_DIR>/metadata` (normally `~/.emissary/metadata`); an explicit path ending in `.json` keeps the older single-file layout. |
-| `DDB_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for per-message metadata (keywords and `receivedAt`). When unset, the name is derived from `TABLE_PREFIX` (`metadata` table). |
+| `DDB_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for per-message metadata (keywords and `receivedAt`). When unset, the name is derived from `TABLE_PREFIX` (`metadata` table). The table uses partition key `id` (message id), sort key `userId` (user id), and a `userId-index` GSI (`userId`, then `id`) for per-user listing. |
 | `METADATA_REGION` | AWS region | Region of the DynamoDB table. |
 
 These settings are shared by the frontend API and the `s3-receiver` delivery
@@ -72,7 +72,7 @@ and no stored receive time (JMAP falls back to the message `Date` header).
 | Variable | Default | Description |
 | --- | --- | --- |
 | `SESSION` | `memory` | `memory`, `ddb` or `dynamodb`. |
-| `SESSION_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for sessions. When unset, the name is derived from `TABLE_PREFIX` (`sessions` table). |
+| `SESSION_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for sessions. When unset, the name is derived from `TABLE_PREFIX` (`sessions` table). The table uses partition key `id` (session id) and sort key `userEmail` (user id). |
 | `SESSION_REGION` | AWS region | Region of the DynamoDB sessions table. |
 
 ## User manager (login for ordinary users)

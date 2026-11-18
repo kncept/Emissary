@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -11,10 +12,30 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
+// metadataUserIndex is the global secondary index that supports List by user.
+// The base table is keyed by message id (partition) and user id (sort), so a
+// per-user listing cannot query the base table directly.
+const metadataUserIndex = "userId-index"
+
+// ddbClient is the subset of the DynamoDB client used by DdbMetadata. It is an
+// interface so the store can be tested without AWS.
+type ddbClient interface {
+	GetItem(ctx context.Context, params *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
+	PutItem(ctx context.Context, params *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
+	DeleteItem(ctx context.Context, params *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
+	Query(ctx context.Context, params *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)
+}
+
+// DdbMetadata is a MetadataStore backed by a DynamoDB table with a composite
+// key: partition key = message id (id), sort key = user id (userId). Keeping
+// the owner in the key means a lookup for the wrong user cannot return another
+// user's metadata.
 type DdbMetadata struct {
-	client    *dynamodb.Client
+	client    ddbClient
 	tableName string
 }
+
+var _ MetadataStore = (*DdbMetadata)(nil)
 
 func NewDdbMetadata(tableName, region string) (*DdbMetadata, error) {
 	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(region))
@@ -27,13 +48,19 @@ func NewDdbMetadata(tableName, region string) (*DdbMetadata, error) {
 	}, nil
 }
 
+// metadataKey returns the composite primary key for a user's mail record.
+func metadataKey(userID, mailID string) map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{
+		"id":     &types.AttributeValueMemberS{Value: mailID},
+		"userId": &types.AttributeValueMemberS{Value: userID},
+	}
+}
+
 func (d *DdbMetadata) Get(ctx context.Context, userID, mailID string) (EmailMetadata, error) {
 	output, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(d.tableName),
-		Key: map[string]types.AttributeValue{
-			"userId": &types.AttributeValueMemberS{Value: userID},
-			"id":     &types.AttributeValueMemberS{Value: mailID},
-		},
+		TableName:      aws.String(d.tableName),
+		Key:            metadataKey(userID, mailID),
+		ConsistentRead: aws.Bool(true),
 	})
 	if err != nil {
 		return EmailMetadata{}, fmt.Errorf("failed to get item: %w", err)
@@ -58,6 +85,12 @@ func (d *DdbMetadata) Get(ctx context.Context, userID, mailID string) (EmailMeta
 }
 
 func (d *DdbMetadata) Save(ctx context.Context, metadata EmailMetadata) error {
+	if metadata.UserID == "" {
+		return errors.New("metadata userId is required")
+	}
+	if metadata.ID == "" {
+		return errors.New("metadata id is required")
+	}
 	return d.put(ctx, metadata)
 }
 
@@ -66,10 +99,7 @@ func (d *DdbMetadata) Save(ctx context.Context, metadata EmailMetadata) error {
 func (d *DdbMetadata) Delete(ctx context.Context, userID, mailID string) error {
 	_, err := d.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(d.tableName),
-		Key: map[string]types.AttributeValue{
-			"userId": &types.AttributeValueMemberS{Value: userID},
-			"id":     &types.AttributeValueMemberS{Value: mailID},
-		},
+		Key:       metadataKey(userID, mailID),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to delete item: %w", err)
@@ -87,12 +117,18 @@ func (d *DdbMetadata) put(ctx context.Context, metadata EmailMetadata) error {
 		TableName: aws.String(d.tableName),
 		Item:      item,
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to save item: %w", err)
+	}
+	return nil
 }
 
+// List returns every metadata record owned by userID. The base table is keyed
+// by message id, so this queries the userId-index global secondary index.
 func (d *DdbMetadata) List(ctx context.Context, userID string) ([]EmailMetadata, error) {
 	input := &dynamodb.QueryInput{
 		TableName:              aws.String(d.tableName),
+		IndexName:              aws.String(metadataUserIndex),
 		KeyConditionExpression: aws.String("#userId = :userId"),
 		ExpressionAttributeNames: map[string]string{
 			"#userId": "userId",
@@ -102,7 +138,7 @@ func (d *DdbMetadata) List(ctx context.Context, userID string) ([]EmailMetadata,
 		},
 	}
 
-	var result []EmailMetadata
+	result := make([]EmailMetadata, 0)
 	for {
 		output, err := d.client.Query(ctx, input)
 		if err != nil {
@@ -126,9 +162,6 @@ func (d *DdbMetadata) List(ctx context.Context, userID string) ([]EmailMetadata,
 		input.ExclusiveStartKey = output.LastEvaluatedKey
 	}
 
-	if result == nil {
-		result = []EmailMetadata{}
-	}
 	return result, nil
 }
 

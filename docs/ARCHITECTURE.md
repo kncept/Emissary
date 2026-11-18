@@ -88,7 +88,7 @@ instantiated in `handler.New`:
 | --- | --- | --- | --- | --- |
 | Inbound messages | `storage.Storage` | `STORAGE` | `s3`, `memory` | `s3` needs `S3_BUCKET`. Defaults to `memory`. |
 | Outbound mail | `sender.Sender` | `SENDER` | `aws-ses`, `mta`, `log` | Defaults to `log`. The From address comes from the submitting user (or masquerade target), not from configuration. |
-| Message state | `metadata.MetadataStore` | `METADATA` | `memory` (default), `file`, `ddb` | Stores JMAP keywords and the server-owned `receivedAt` timestamp, keyed by email id. `ddb` uses `DDB_TABLE` or the `metadata` table derived from `TABLE_PREFIX`. Both `handler.New` and the `s3-receiver` build this store with `metadata.NewStore`. |
+| Message state | `metadata.MetadataStore` | `METADATA` | `memory` (default), `file`, `ddb` | Stores JMAP keywords and the server-owned `receivedAt` timestamp, keyed by email id and owning user id. `ddb` uses `DDB_TABLE` or the `metadata` table derived from `TABLE_PREFIX`; its table has partition key `id`, sort key `userId`, and a `userId-index` GSI for `List`. Both `handler.New` and the `s3-receiver` build this store with `metadata.NewStore`. |
 | Users | `usermanager.Manager` | `USER_MANAGER` | `none`, `ddb`, `s3`, `ldap` | Auto-selects `s3` when storage is S3, else `none`. `ddb` uses `USER_TABLE` or the `users` table derived from `TABLE_PREFIX`; `s3` stores each user as `users/<email>/user.json` in the mail bucket. Both are Emissary-mastered. `ldap` is unimplemented. |
 
 ## Inbound mail flow

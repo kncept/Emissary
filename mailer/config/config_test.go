@@ -213,14 +213,17 @@ func TestLoad_UserManagerAutoSelect(t *testing.T) {
 	}
 }
 
-func TestLoad_MissingUsername(t *testing.T) {
+func TestLoad_MissingUsernameAllowed(t *testing.T) {
 	os.Unsetenv("USERNAME")
 	os.Setenv("PASSWORD", "pass")
 	defer cleanupEnv()
 
-	_, err := Load(context.Background())
-	if err == nil {
-		t.Error("Load() should error when username is missing")
+	cfg, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Server.Username != "" {
+		t.Errorf("Server.Username = %q, want empty", cfg.Server.Username)
 	}
 }
 
@@ -412,9 +415,9 @@ func TestServerConfig_Validate(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid", ServerConfig{Username: "u", Password: "p"}, false},
-		{"missing username", ServerConfig{Password: "p"}, true},
+		{"missing username", ServerConfig{Password: "p"}, false},
 		{"blank password", ServerConfig{Username: "u"}, false},
-		{"missing both", ServerConfig{}, true},
+		{"missing both", ServerConfig{}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -426,17 +429,10 @@ func TestServerConfig_Validate(t *testing.T) {
 	}
 }
 
-func TestServerConfig_Validate_MultipleErrors(t *testing.T) {
+func TestServerConfig_Validate_CredentialsOptional(t *testing.T) {
 	cfg := ServerConfig{}
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("Validate() should return error for missing username")
-	}
-	if !strings.Contains(err.Error(), "username") {
-		t.Errorf("error should mention username, got: %v", err)
-	}
-	if strings.Contains(err.Error(), "password") {
-		t.Errorf("blank passwords should be allowed, got: %v", err)
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() error = %v, want nil (credentials are optional)", err)
 	}
 }
 
@@ -589,7 +585,7 @@ func TestMetadataConfig_Validate(t *testing.T) {
 
 func TestConfig_Validate_CompositeError(t *testing.T) {
 	cfg := &Config{
-		Server:      ServerConfig{}, // missing username
+		Server:      ServerConfig{}, // credentials are optional
 		Storage:     StorageConfig{Type: "bad"},
 		Sender:      SenderConfig{Type: "bad"},
 		Metadata:    MetadataConfig{Type: "redis"},
@@ -603,9 +599,6 @@ func TestConfig_Validate_CompositeError(t *testing.T) {
 
 	// Verify all sub-config errors are present
 	msg := err.Error()
-	if !strings.Contains(msg, "username") {
-		t.Errorf("composite error should mention username, got: %v", msg)
-	}
 	if !strings.Contains(msg, "storage type") {
 		t.Errorf("composite error should mention storage type, got: %v", msg)
 	}
