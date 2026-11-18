@@ -239,7 +239,10 @@ func (m *DdbManager) Create(ctx context.Context, user *EmissaryUser) error {
 	}
 	user.Email = id
 
-	if user.SaltedPassword != "" && user.Salt == "" {
+	if user.SaltedPassword == "" {
+		// No password: never persist a salt or verifier for this account.
+		user.Salt = ""
+	} else if user.Salt == "" {
 		// Plaintext password provided, hash it with default (bcrypt)
 		salt, hashed, err := hashPassword(user.SaltedPassword)
 		if err != nil {
@@ -283,6 +286,10 @@ func (m *DdbManager) Save(ctx context.Context, user *EmissaryUser) error {
 		return errors.New("user email is required")
 	}
 	user.Email = id
+	if user.SaltedPassword == "" {
+		// A blank password must never be persisted with a salt.
+		user.Salt = ""
+	}
 
 	item, err := attributevalue.MarshalMap(ddbUserFrom(user))
 	if err != nil {
@@ -490,8 +497,13 @@ func hashPassword(password string) (salt, hash string, err error) {
 }
 
 // checkPassword verifies a password against the stored hash using the
-// salt prefix to determine the algorithm.
+// salt prefix to determine the algorithm. Accounts created without a
+// password have an empty verifier and can never authenticate, including
+// with an empty password.
 func checkPassword(salt, stored, password string) bool {
+	if password == "" || stored == "" {
+		return false
+	}
 	switch {
 	case salt == "":
 		// Plaintext comparison (insecure, for migration/testing only)

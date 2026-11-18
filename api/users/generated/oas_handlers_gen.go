@@ -248,8 +248,9 @@ func (s *Server) handleChangePasswordRequest(args [1]string, argsEscaped bool, w
 
 // handleCreateUserRequest handles createUser operation.
 //
-// Creates a new user account. The email address is the user's stable identifier and login name. The
-// password will be salted and stored.
+// Creates a new user account. The email address is the user's stable identifier and login name. When a
+// password is supplied it is salted and stored. Omit the password (or send an empty string) to create
+// an account that cannot log in; no password salt is stored for that user.
 //
 // POST /api/user/
 func (s *Server) handleCreateUserRequest(args [0]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {

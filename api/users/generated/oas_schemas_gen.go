@@ -109,8 +109,9 @@ func (*CreateUserForbidden) createUserRes() {}
 type CreateUserRequest struct {
 	// The user's email address (login name).
 	Email string `json:"email"`
-	// The user's initial password (will be salted and stored).
-	Password string `json:"password"`
+	// The user's initial password (will be salted and stored). Omit or leave blank to create a user that
+	// cannot log in; no salt is stored in that case.
+	Password OptString `json:"password"`
 	// Whether the user can log in.
 	Enabled OptBool `json:"enabled"`
 	// Whether the user has system management privileges.
@@ -127,7 +128,7 @@ func (s *CreateUserRequest) GetEmail() string {
 }
 
 // GetPassword returns the value of Password.
-func (s *CreateUserRequest) GetPassword() string {
+func (s *CreateUserRequest) GetPassword() OptString {
 	return s.Password
 }
 
@@ -157,7 +158,7 @@ func (s *CreateUserRequest) SetEmail(val string) {
 }
 
 // SetPassword sets the value of Password.
-func (s *CreateUserRequest) SetPassword(val string) {
+func (s *CreateUserRequest) SetPassword(val OptString) {
 	s.Password = val
 }
 

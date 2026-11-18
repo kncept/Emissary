@@ -76,6 +76,12 @@ account is removed only after **Delete** is clicked, and clicking the
 backdrop cancels. No browser dialog is used (see
 [DESIGN.md](DESIGN.md#frontend-ui-conventions)).
 
+The Create User form has a **No password** checkbox. When checked, the
+password field is disabled and reads *cannot log in*; the account is
+created with no password verifier and no salt, and no password (not even
+an empty one) can authenticate it. A system manager can assign a password
+later with the Change Password endpoint.
+
 ## Change Password
 
 Any authenticated user can change their own password via `POST /api/user/{email}/password`. The endpoint requires the current password (for verification) and the new password.
@@ -155,7 +161,7 @@ The prefix of the salt value identifies the algorithm:
 | `a2-` | Argon2id | |
 | `p2-` | PBKDF2-SHA256 | Legacy; used by existing `ddb` records |
 
-When hashing a new password (on create or password change), the default is **bcrypt** (`b-` prefix).
+When hashing a new password (on create or password change), the default is **bcrypt** (`b-` prefix). If the supplied password is blank, both `SaltedPassword` and `Salt` are stored empty: the user has no password and cannot log in.
 
 Verification works by inspecting the salt prefix:
 - No prefix → plaintext comparison

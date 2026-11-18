@@ -89,9 +89,9 @@ func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserR
 	if req.Email == "" {
 		return &usersapi.CreateUserBadRequest{Error: "email is required"}, nil
 	}
-	if req.Password == "" {
-		return &usersapi.CreateUserBadRequest{Error: "password is required"}, nil
-	}
+
+	// An omitted or blank password creates an account that cannot log in.
+	password := req.Password.Or("")
 
 	enabled := true
 	if req.Enabled.IsSet() {
@@ -114,7 +114,7 @@ func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserR
 			SystemManager: systemManager,
 		},
 		Enabled:        enabled,
-		SaltedPassword: req.Password,
+		SaltedPassword: password,
 		Rules:          rules,
 		UserManager:    userManager,
 	}

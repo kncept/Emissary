@@ -24,10 +24,11 @@ export interface CreateUserRequest {
   /** The user's email address (login name) */
   email: string;
   /**
-     * The user's initial password (will be salted and stored)
-     * @minLength 1
+     * The user's initial password (will be salted and stored). Omit or
+     * leave blank to create a user that cannot log in; no salt is
+     * stored in that case.
      */
-  password: string;
+  password?: string;
   /** Whether the user can log in */
   enabled?: boolean;
   /** Whether the user has system management privileges */

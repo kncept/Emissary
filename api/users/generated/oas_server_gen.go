@@ -27,8 +27,9 @@ type Handler interface {
 	ChangePassword(ctx context.Context, req *ChangePasswordRequest, params ChangePasswordParams) (ChangePasswordRes, error)
 	// CreateUser implements createUser operation.
 	//
-	// Creates a new user account. The email address is the user's stable identifier and login name. The
-	// password will be salted and stored.
+	// Creates a new user account. The email address is the user's stable identifier and login name. When a
+	// password is supplied it is salted and stored. Omit the password (or send an empty string) to create
+	// an account that cannot log in; no password salt is stored for that user.
 	//
 	// POST /api/user/
 	CreateUser(ctx context.Context, req *CreateUserRequest) (CreateUserRes, error)

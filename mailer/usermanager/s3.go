@@ -289,7 +289,10 @@ func (m *S3Manager) Create(ctx context.Context, user *EmissaryUser) error {
 		user.SchemaVersion = "1.0.0"
 	}
 
-	if user.SaltedPassword != "" && user.Salt == "" {
+	if user.SaltedPassword == "" {
+		// No password: never persist a salt or verifier for this account.
+		user.Salt = ""
+	} else if user.Salt == "" {
 		// Plaintext password provided, hash it with default (bcrypt)
 		salt, hashed, err := hashPassword(user.SaltedPassword)
 		if err != nil {
@@ -339,6 +342,10 @@ func (m *S3Manager) Save(ctx context.Context, user *EmissaryUser) error {
 		return errors.New("user email is required")
 	}
 	user.Email = id
+	if user.SaltedPassword == "" {
+		// A blank password must never be persisted with a salt.
+		user.Salt = ""
+	}
 
 	body, err := json.Marshal(user)
 	if err != nil {

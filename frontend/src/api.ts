@@ -129,7 +129,7 @@ export async function getUser(email: string) {
   return data as { email: string; enabled: boolean; systemManager: boolean; userManager: boolean; rules: string[] };
 }
 
-export async function createUser(body: { email: string; password: string; enabled?: boolean; systemManager?: boolean; userManager?: boolean; rules?: string[] }) {
+export async function createUser(body: { email: string; password?: string; enabled?: boolean; systemManager?: boolean; userManager?: boolean; rules?: string[] }) {
   const response = await authenticatedFetch(`${API_BASE}/user/`, {
     method: 'POST',
     body: JSON.stringify(body),

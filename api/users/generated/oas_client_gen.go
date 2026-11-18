@@ -48,8 +48,9 @@ type Invoker interface {
 	ChangePassword(ctx context.Context, request *ChangePasswordRequest, params ChangePasswordParams) (ChangePasswordRes, error)
 	// CreateUser invokes createUser operation.
 	//
-	// Creates a new user account. The email address is the user's stable identifier and login name. The
-	// password will be salted and stored.
+	// Creates a new user account. The email address is the user's stable identifier and login name. When a
+	// password is supplied it is salted and stored. Omit the password (or send an empty string) to create
+	// an account that cannot log in; no password salt is stored for that user.
 	//
 	// POST /api/user/
 	CreateUser(ctx context.Context, request *CreateUserRequest) (CreateUserRes, error)
@@ -272,8 +273,9 @@ func (c *Client) sendChangePassword(ctx context.Context, request *ChangePassword
 
 // CreateUser invokes createUser operation.
 //
-// Creates a new user account. The email address is the user's stable identifier and login name. The
-// password will be salted and stored.
+// Creates a new user account. The email address is the user's stable identifier and login name. When a
+// password is supplied it is salted and stored. Omit the password (or send an empty string) to create
+// an account that cannot log in; no password salt is stored for that user.
 //
 // POST /api/user/
 func (c *Client) CreateUser(ctx context.Context, request *CreateUserRequest) (CreateUserRes, error) {

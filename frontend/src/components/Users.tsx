@@ -20,6 +20,7 @@ export default function Users() {
   const [showCreate, setShowCreate] = useState(false);
   const [createEmail, setCreateEmail] = useState('');
   const [createPassword, setCreatePassword] = useState('');
+  const [createNoPassword, setCreateNoPassword] = useState(false);
   const [createEnabled, setCreateEnabled] = useState(true);
   const [createSystemManager, setCreateSystemManager] = useState(false);
   const [createUserManager, setCreateUserManager] = useState(false);
@@ -70,7 +71,7 @@ export default function Users() {
     try {
       await createUser({
         email: createEmail.trim(),
-        password: createPassword,
+        password: createNoPassword ? '' : createPassword,
         enabled: createEnabled,
         systemManager: createSystemManager,
         userManager: createUserManager,
@@ -79,6 +80,7 @@ export default function Users() {
       setShowCreate(false);
       setCreateEmail('');
       setCreatePassword('');
+      setCreateNoPassword(false);
       setCreateEnabled(true);
       setCreateSystemManager(false);
       setCreateUserManager(false);
@@ -168,7 +170,7 @@ export default function Users() {
     <div className="users-page">
       <div className="email-list-header">
         <h2>User Management</h2>
-        <button className="btn btn-primary" onClick={() => { setShowCreate((v) => !v); setMessage(''); setError(''); }}>
+        <button className="btn btn-primary" onClick={() => { setShowCreate((v) => !v); setCreateNoPassword(false); setMessage(''); setError(''); }}>
           {showCreate ? 'Close' : 'Create User'}
         </button>
       </div>
@@ -185,9 +187,30 @@ export default function Users() {
           </div>
           <div className="form-group">
             <label htmlFor="create-password">Password</label>
-            <input id="create-password" type="password" value={createPassword} onChange={(e) => setCreatePassword(e.target.value)} required disabled={busy} />
+            <input
+              id="create-password"
+              type={createNoPassword ? 'text' : 'password'}
+              value={createNoPassword ? 'cannot log in' : createPassword}
+              onChange={(e) => setCreatePassword(e.target.value)}
+              required={!createNoPassword}
+              placeholder={createNoPassword ? 'cannot log in' : undefined}
+              disabled={busy || createNoPassword}
+            />
+            {createNoPassword && <small style={{ color: 'var(--color-text-muted)' }}>cannot log in</small>}
           </div>
           <div className="form-group" style={{ flexDirection: 'row', gap: '1.5rem', alignItems: 'center' }}>
+            <label>
+              <input
+                type="checkbox"
+                checked={createNoPassword}
+                onChange={(e) => {
+                  setCreateNoPassword(e.target.checked);
+                  if (e.target.checked) setCreatePassword('');
+                }}
+                disabled={busy}
+              />
+              No password
+            </label>
             <label><input type="checkbox" checked={createEnabled} onChange={(e) => setCreateEnabled(e.target.checked)} disabled={busy} /> Enabled</label>
             <label><input type="checkbox" checked={createSystemManager} onChange={(e) => setCreateSystemManager(e.target.checked)} disabled={busy} /> System Manager</label>
             <label><input type="checkbox" checked={createUserManager} onChange={(e) => setCreateUserManager(e.target.checked)} disabled={busy} /> User Manager</label>

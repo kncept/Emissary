@@ -161,7 +161,9 @@ export const getCreateUserUrl = () => {
 
 /**
  * Creates a new user account. The email address is the user's stable
- * identifier and login name. The password will be salted and stored.
+ * identifier and login name. When a password is supplied it is salted
+ * and stored. Omit the password (or send an empty string) to create an
+ * account that cannot log in; no password salt is stored for that user.
  * @summary Create a new user
  */
 export const createUser = async (createUserRequest: CreateUserRequest, options?: RequestInit): Promise<createUserResponse> => {
