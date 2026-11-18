@@ -166,6 +166,38 @@ describe('auth api', () => {
     });
   });
 
+  describe('getRawEmail', () => {
+    it('requests the raw message with the stored token and returns its text', async () => {
+      const { getRawEmail } = await importApi();
+      window.localStorage.setItem(TOKEN_KEY, 'abc123');
+      const fetchMock = vi.fn(async () => createMockResponse('From: a@example.com\r\n\r\nBody\r\n', {
+        status: 200,
+        ok: true,
+      }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await getRawEmail('users/alice@example.com/inbox/e1.eml');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe('/api/email/raw?id=users%2Falice%40example.com%2Finbox%2Fe1.eml');
+      const headers = options.headers as Headers;
+      expect(headers.get('Authorization')).toBe('Bearer abc123');
+      expect(result).toBe('From: a@example.com\r\n\r\nBody\r\n');
+    });
+
+    it('surfaces the server error message', async () => {
+      const { getRawEmail } = await importApi();
+      window.localStorage.setItem(TOKEN_KEY, 'abc123');
+      vi.stubGlobal('fetch', vi.fn(async () => createMockResponse({ error: 'email not found' }, {
+        status: 404,
+        ok: false,
+      })));
+
+      await expect(getRawEmail('missing.eml')).rejects.toThrow('email not found');
+    });
+  });
+
   describe('login', () => {
     it('stores the returned tokens and reports success to the caller', async () => {
       const { login } = await importApi();

@@ -101,6 +101,21 @@ func (s *MemoryStorage) GetEmail(_ context.Context, id string) (*email.UserEmail
 	return clone(e), nil
 }
 
+// GetEmailRaw implements the Storage interface. The in-memory store holds only
+// parsed messages, so it renders a minimal RFC 5322 message from the stored
+// fields. This is useful for local development; production stores such as S3
+// return the original delivered bytes instead.
+func (s *MemoryStorage) GetEmailRaw(_ context.Context, id string) ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	e, ok := s.emails[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return email.RawFromUserEmail(e), nil
+}
+
 // DeleteEmail implements the Storage interface.
 func (s *MemoryStorage) DeleteEmail(_ context.Context, id string) error {
 	s.mu.Lock()

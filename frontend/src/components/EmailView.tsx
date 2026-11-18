@@ -1,9 +1,26 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { parseISO, format } from 'date-fns';
-import { getEmail, markRead, markFlagged, deleteEmail } from '../api.ts';
+import { getEmail, getRawEmail, markRead, markFlagged, deleteEmail } from '../api.ts';
 import type { Email } from '../types.ts';
 import ConfirmDialog from './ConfirmDialog.tsx';
+
+// Save the raw message as a .eml file using a temporary object URL. A normal
+// link cannot set the Authorization header required by the raw endpoint.
+function downloadRawMime(raw: string, id: string): void {
+  const basename = id.split('/').pop() || 'email.eml';
+  const safeName = basename.replace(/[^A-Za-z0-9._-]/g, '_');
+  const filename = safeName.toLowerCase().endsWith('.eml') ? safeName : `${safeName}.eml`;
+  const blob = new Blob([raw], { type: 'message/rfc822' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 
 export default function EmailView() {
   const { id } = useParams<{ id: string }>();
@@ -13,6 +30,10 @@ export default function EmailView() {
   const [error, setError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
+  const [rawCache, setRawCache] = useState<{ id: string; mime: string } | null>(null);
+  const [rawLoading, setRawLoading] = useState(false);
+  const [rawError, setRawError] = useState('');
 
   // Delivered ids are full object keys such as
   // users/alice@example.com/inbox/<timestamp>_<ses-id>.eml. Links encode
@@ -33,6 +54,15 @@ export default function EmailView() {
       loadEmail();
     }
   }, [emailID]);
+
+  useEffect(() => {
+    if (!showRaw) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowRaw(false);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [showRaw]);
 
   const loadEmail = async () => {
     try {
@@ -78,6 +108,32 @@ export default function EmailView() {
     } finally {
       setDeleting(false);
     }
+  };
+
+  const loadRawMime = async (): Promise<string> => {
+    if (rawCache?.id === email!.id) return rawCache.mime;
+    setRawLoading(true);
+    setRawError('');
+    try {
+      const raw = await getRawEmail(email!.id);
+      setRawCache({ id: email!.id, mime: raw });
+      return raw;
+    } catch {
+      setRawError('Failed to load raw email MIME');
+      return '';
+    } finally {
+      setRawLoading(false);
+    }
+  };
+
+  const handleViewRaw = async () => {
+    setShowRaw(true);
+    await loadRawMime();
+  };
+
+  const handleDownloadRaw = async () => {
+    const raw = await loadRawMime();
+    if (raw) downloadRawMime(raw, email!.id);
   };
 
   const formatDate = (dateStr: string) => {
@@ -140,6 +196,22 @@ export default function EmailView() {
           <Link to={`/compose/${encodeURIComponent(email.id)}`} className="btn btn-secondary">
             Reply
           </Link>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => void handleViewRaw()}
+            disabled={rawLoading}
+          >
+            View MIME
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => void handleDownloadRaw()}
+            disabled={rawLoading}
+          >
+            Download
+          </button>
           <button className="btn btn-danger" onClick={() => setConfirmDelete(true)}>
             Delete
           </button>
@@ -159,6 +231,43 @@ export default function EmailView() {
         onConfirm={handleDelete}
         onCancel={() => setConfirmDelete(false)}
       />
+      {showRaw && (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setShowRaw(false);
+          }}
+        >
+          <div className="modal-card modal-wide" role="dialog" aria-modal="true" aria-label="Raw email MIME">
+            <div className="modal-header">
+              <h3>Raw email MIME</h3>
+            </div>
+            <div className="modal-body">
+              {rawLoading ? (
+                <div className="spinner small"></div>
+              ) : rawError ? (
+                <p className="confirm-message">{rawError}</p>
+              ) : (
+                <pre className="raw-mime-content">{rawCache?.id === email.id ? rawCache.mime : ''}</pre>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => void handleDownloadRaw()}
+                disabled={rawLoading}
+              >
+                Download
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowRaw(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </article>
   );
 }

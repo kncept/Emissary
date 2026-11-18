@@ -96,6 +96,7 @@ not generated from `users.yaml`: it is served directly by the configured
 | `POST` | `/api/jmap/` | Bearer | JMAP batch API endpoint for all mail operations. |
 | `POST` | `/upload/{accountId}` | Bearer | Upload binary data (attachments). |
 | `GET` | `/download/{accountId}/{blobId}/{name}` | Bearer | Download binary data. |
+| `GET` | `/api/email/raw` | Bearer | Get the original RFC 5322 message for one email id. |
 | `GET` | `/eventsource/` | Bearer | EventSource push connection. |
 
 \* Requires `EmissaryUserManagement` JWT claim and Emissary-mastered user manager (the `ddb` backend).
@@ -136,6 +137,24 @@ in that account's mailbox (masquerade); this applies to `Email/query`,
 
 ### Delete Email
 - `Email/set` with destroy containing the email ID
+
+### View/Download raw MIME
+
+`GET /api/email/raw?id=<email-id>` returns the original RFC 5322 bytes of a
+message (all headers, MIME parts and transfer encodings) with a
+`message/rfc822` content type. The JMAP `Email/get` representation is parsed
+and intentionally drops non-text parts, so it cannot be used to reconstruct
+the wire format. Delivered ids contain slashes, which is why the id is passed
+as a query parameter instead of a URL path segment.
+
+The account that owns the message is derived from its delivered object key (or
+from the parsed record for storage backends with opaque ids). Users may only
+read raw messages from their own account; callers with `EmissaryUserManagement`
+may read any account, matching JMAP masquerade behavior. Missing messages
+return `404`, and malformed or unauthorized ids return `400`/`403`.
+
+The web UI uses this endpoint for both the "View MIME" modal and the
+"Download" button.
 
 ### Send Email
 - `Email/set` create to store the email in the `drafts` mailbox. With a JWT

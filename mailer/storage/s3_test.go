@@ -286,6 +286,50 @@ func TestS3StorageGetEmailReturnsErrNotFound(t *testing.T) {
 	}
 }
 
+func TestS3StorageGetEmailRawReturnsExactBytes(t *testing.T) {
+	const key = "users/alice@example.com/inbox/20261109T100000_ses-id.eml"
+	const raw = "From: =?utf-8?B?QWxpY2U=?= <alice@example.com>\r\n" +
+		"MIME-Version: 1.0\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n" +
+		"Content-Transfer-Encoding: base64\r\n" +
+		"\r\n" +
+		"SGVsbG8gd29ybGQ=\r\n"
+	fake := newFakeS3(map[string]string{key: raw})
+	store := &S3Storage{client: fake, bucket: "mail-bucket"}
+
+	got, err := store.GetEmailRaw(context.Background(), key)
+	if err != nil {
+		t.Fatalf("GetEmailRaw() error = %v", err)
+	}
+	if string(got) != raw {
+		t.Errorf("GetEmailRaw() = %q, want exact raw bytes %q", got, raw)
+	}
+	if len(fake.requested) != 1 || fake.requested[0] != key {
+		t.Errorf("requested keys = %v, want only [%s]", fake.requested, key)
+	}
+}
+
+func TestS3StorageGetEmailRawHonorsPrefix(t *testing.T) {
+	fake := newFakeS3(map[string]string{"emails/one": testMessage})
+	store := &S3Storage{client: fake, bucket: "mail-bucket", prefix: "emails"}
+
+	got, err := store.GetEmailRaw(context.Background(), "one")
+	if err != nil {
+		t.Fatalf("GetEmailRaw() error = %v", err)
+	}
+	if string(got) != testMessage {
+		t.Errorf("GetEmailRaw() = %q, want %q", got, testMessage)
+	}
+}
+
+func TestS3StorageGetEmailRawReturnsErrNotFound(t *testing.T) {
+	store := &S3Storage{client: newFakeS3(nil), bucket: "mail-bucket"}
+
+	if _, err := store.GetEmailRaw(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetEmailRaw() error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestS3StorageDeleteEmailRemovesObject(t *testing.T) {
 	const key = "4s5k9q1abc-amazon-ses-message-id"
 	fake := newFakeS3(map[string]string{key: testMessage})

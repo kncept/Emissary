@@ -219,6 +219,21 @@ func (s *S3Storage) GetEmail(ctx context.Context, id string) (*email.UserEmail, 
 }
 
 func (s *S3Storage) getEmailByKey(ctx context.Context, key string) (*email.UserEmail, error) {
+	body, err := s.getRawByKey(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	parsedEmail, err := email.Parse(key, strings.NewReader(string(body)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse email %q: %w", key, err)
+	}
+	return parsedEmail, nil
+}
+
+// getRawByKey reads the exact bytes of an S3 object. Storage-level prefixes
+// are handled by the caller via emailKeyCandidates.
+func (s *S3Storage) getRawByKey(ctx context.Context, key string) ([]byte, error) {
 	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
@@ -232,12 +247,23 @@ func (s *S3Storage) getEmailByKey(ctx context.Context, key string) (*email.UserE
 	if err != nil {
 		return nil, fmt.Errorf("failed to read object %q: %w", key, err)
 	}
+	return body, nil
+}
 
-	parsedEmail, err := email.Parse(key, strings.NewReader(string(body)))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse email %q: %w", key, err)
+// GetEmailRaw implements the Storage interface. It returns the delivered .eml
+// bytes verbatim (including MIME headers and encodings) rather than a parsed
+// or reconstructed message.
+func (s *S3Storage) GetEmailRaw(ctx context.Context, id string) ([]byte, error) {
+	for _, key := range s.emailKeyCandidates(id) {
+		raw, err := s.getRawByKey(ctx, key)
+		if err == nil {
+			return raw, nil
+		}
+		if !isObjectNotFound(err) {
+			return nil, err
+		}
 	}
-	return parsedEmail, nil
+	return nil, ErrNotFound
 }
 
 func isObjectNotFound(err error) bool {

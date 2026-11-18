@@ -1,6 +1,7 @@
 package email
 
 import (
+	"bytes"
 	"encoding/base64"
 	"io"
 	"net/mail"
@@ -126,6 +127,45 @@ func DecodeID(id string) (string, error) {
 		return "", err
 	}
 	return string(decoded), nil
+}
+
+// RawFromUserEmail builds a minimal RFC 5322 message from a parsed email. It
+// is intended for stores that do not retain the original delivered bytes (for
+// example the in-memory development store). It is a best-effort rendering, not
+// a byte-exact copy of the original wire format.
+func RawFromUserEmail(e *UserEmail) []byte {
+	if e == nil {
+		return nil
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString("From: ")
+	buf.WriteString(addressString(e.From))
+	buf.WriteString("\r\nTo: ")
+	recipients := make([]string, 0, len(e.To))
+	for _, addr := range e.To {
+		recipients = append(recipients, addressString(addr))
+	}
+	buf.WriteString(strings.Join(recipients, ", "))
+	buf.WriteString("\r\nSubject: ")
+	buf.WriteString(e.Subject)
+	if !e.Date.IsZero() {
+		buf.WriteString("\r\nDate: ")
+		buf.WriteString(e.Date.UTC().Format(time.RFC1123Z))
+	}
+	buf.WriteString("\r\n\r\n")
+	buf.WriteString(e.Text)
+	if !strings.HasSuffix(e.Text, "\r\n") {
+		buf.WriteString("\r\n")
+	}
+	return buf.Bytes()
+}
+
+func addressString(a Address) string {
+	if strings.TrimSpace(a.Name) == "" {
+		return a.Address
+	}
+	return (&mail.Address{Name: a.Name, Address: a.Address}).String()
 }
 
 // Parse reads a raw RFC 5322 message and returns a UserEmail.

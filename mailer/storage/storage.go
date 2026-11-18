@@ -44,6 +44,10 @@ type Storage interface {
 	// account's own storage.
 	ListAccountEmails(ctx context.Context, accountID, mailboxID string) ([]*email.UserEmail, error)
 	GetEmail(ctx context.Context, id string) (*email.UserEmail, error)
+	// GetEmailRaw returns the original RFC 5322 message bytes for id, without
+	// parsing them. It returns ErrNotFound when no such message exists. Stores
+	// that only keep a parsed representation return a best-effort rendering.
+	GetEmailRaw(ctx context.Context, id string) ([]byte, error)
 	// AddEmail adds a new email to the store. Returns ErrNotFound if
 	// an email with the same ID already exists.
 	AddEmail(ctx context.Context, email *email.UserEmail) error

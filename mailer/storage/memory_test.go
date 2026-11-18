@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +44,31 @@ func TestMemoryStorage_GetNotFound(t *testing.T) {
 	}
 	if err != ErrNotFound {
 		t.Errorf("GetEmail() error = %v, want %v", err, ErrNotFound)
+	}
+}
+
+func TestMemoryStorage_GetEmailRawRendersMessage(t *testing.T) {
+	s := NewMemoryStorage()
+	s.Add(&email.UserEmail{
+		ID:      "test-1",
+		From:    email.Address{Name: "Alice", Address: "alice@example.com"},
+		To:      []email.Address{{Address: "bob@example.com"}},
+		Subject: "Hello",
+		Text:    "Body",
+	})
+
+	raw, err := s.GetEmailRaw(context.Background(), "test-1")
+	if err != nil {
+		t.Fatalf("GetEmailRaw() error = %v", err)
+	}
+	message := string(raw)
+	for _, want := range []string{"From: \"Alice\" <alice@example.com>", "To: bob@example.com", "Subject: Hello", "\r\n\r\nBody"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("GetEmailRaw() = %q, want it to contain %q", message, want)
+		}
+	}
+	if _, err := s.GetEmailRaw(context.Background(), "missing"); err != ErrNotFound {
+		t.Errorf("GetEmailRaw() error = %v, want ErrNotFound", err)
 	}
 }
 

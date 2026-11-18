@@ -295,5 +295,17 @@ export async function logout(): Promise<void> {
   }
 }
 
+// Raw RFC 5322 bytes come from a dedicated authenticated endpoint rather than
+// JMAP: delivered ids contain slashes and the wire format is not JSON-safe.
+export async function getRawEmail(id: string): Promise<string> {
+  const params = new URLSearchParams({ id });
+  const response = await authenticatedFetch(`${API_BASE}/email/raw?${params.toString()}`);
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error((data as { error?: string }).error || 'Failed to load raw email MIME');
+  }
+  return response.text();
+}
+
 // Re-export email functions from JMAP client
 export { getEmails, getEmail, markRead, markFlagged, deleteEmail, jmapSendEmail as sendEmail };

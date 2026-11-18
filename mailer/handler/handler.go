@@ -16,6 +16,7 @@ import (
 	supportapi "github.com/kncept/Emissary/api/support/generated"
 	usersapi "github.com/kncept/Emissary/api/users/generated"
 	"github.com/kncept/Emissary/mailer/auth"
+	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/gui"
 	"github.com/kncept/Emissary/mailer/jmap"
 	"github.com/kncept/Emissary/mailer/metadata"
@@ -265,6 +266,10 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 	mux.Handle("POST /upload/", requireAuth(authenticator, http.HandlerFunc(handleJMAPUpload)))
 	mux.Handle("GET /download/", requireAuth(authenticator, http.HandlerFunc(handleJMAPDownload)))
 	mux.Handle("GET /eventsource/", requireAuth(authenticator, http.HandlerFunc(handleJMAPPush)))
+
+	mux.Handle("GET /api/email/raw", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleRawEmail(w, r, emailStore)
+	})))
 
 	mux.Handle("GET /api/user/autocomplete", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims := currentClaims(r)
@@ -568,6 +573,72 @@ func handleJMAPUpload(w http.ResponseWriter, r *http.Request) {
 
 func handleJMAPDownload(w http.ResponseWriter, r *http.Request) {
 	writeJMAPError(w, "unimplemented", "Binary download not implemented")
+}
+
+// handleRawEmail serves the original RFC 5322 message for a single email. The
+// id is passed as a query parameter because delivered ids contain slashes and
+// would otherwise be ambiguous in a URL path.
+func handleRawEmail(w http.ResponseWriter, r *http.Request, store storage.Storage) {
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+
+	accountID, err := rawEmailAccount(r.Context(), store, id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "email not found")
+			return
+		}
+		logRequestError(r, "resolve raw email account", err)
+		writeError(w, http.StatusInternalServerError, "failed to load email")
+		return
+	}
+	if accountID == "" {
+		writeError(w, http.StatusBadRequest, "invalid email id")
+		return
+	}
+
+	claims := currentClaims(r)
+	if claims == nil || (!claims.EmissaryUserManagement && !strings.EqualFold(accountID, claims.Subject)) {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
+	raw, err := store.GetEmailRaw(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "email not found")
+			return
+		}
+		logRequestError(r, "load raw email", err)
+		writeError(w, http.StatusInternalServerError, "failed to load raw email")
+		return
+	}
+
+	w.Header().Set("Content-Type", "message/rfc822")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(raw); err != nil {
+		logRequestError(r, "write raw email", err)
+	}
+}
+
+// rawEmailAccount determines which account owns an email id. Delivered ids
+// encode the account in the object key, so the common case needs no storage
+// lookup. The fallback supports stores with opaque ids, such as the in-memory
+// development store.
+func rawEmailAccount(ctx context.Context, store storage.Storage, id string) (string, error) {
+	if accountID, _, ok := email.MailboxFromID(id); ok && accountID != "" {
+		return accountID, nil
+	}
+	msg, err := store.GetEmail(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	return msg.AccountID, nil
 }
 
 func handleJMAPPush(w http.ResponseWriter, r *http.Request) {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -1261,4 +1262,68 @@ func TestJMAPAccountIdValidationAdmin(t *testing.T) {
 	if call[0] != "Email/query" {
 		t.Errorf("expected Email/query response, got %v", call[0])
 	}
+}
+
+func TestRawEmailEndpoint(t *testing.T) {
+	h, store, _ := newHandlerForTest(t, "secret")
+	const id = "users/alice@example.com/inbox/20261109T100000_ses-id.eml"
+	addEmail(store, id, "sender@example.com", "alice@example.com")
+	rawURL := "/api/email/raw?id=" + url.QueryEscape(id)
+
+	t.Run("requires authentication", func(t *testing.T) {
+		w := request(t, h, http.MethodGet, rawURL, "", "")
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401", w.Code)
+		}
+	})
+
+	t.Run("returns the raw message to the owning account", func(t *testing.T) {
+		_, token, _ := login(t, h, "alice@example.com", "")
+		w := request(t, h, http.MethodGet, rawURL, "", token)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+		}
+		if got := w.Header().Get("Content-Type"); got != "message/rfc822" {
+			t.Errorf("Content-Type = %q, want message/rfc822", got)
+		}
+		body := w.Body.String()
+		for _, want := range []string{"From: sender@example.com", "To: alice@example.com", "Subject: subject " + id, "body " + id} {
+			if !strings.Contains(body, want) {
+				t.Errorf("raw body = %q, want it to contain %q", body, want)
+			}
+		}
+	})
+
+	t.Run("rejects another account", func(t *testing.T) {
+		_, token, _ := login(t, h, "bob@example.com", "")
+		w := request(t, h, http.MethodGet, rawURL, "", token)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("status = %d, want 403 (body %s)", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("allows a user manager", func(t *testing.T) {
+		_, token, _ := login(t, h, "admin", "secret")
+		w := request(t, h, http.MethodGet, rawURL, "", token)
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("returns 404 for a missing message", func(t *testing.T) {
+		_, token, _ := login(t, h, "alice@example.com", "")
+		missing := "/api/email/raw?id=" + url.QueryEscape("users/alice@example.com/inbox/missing.eml")
+		w := request(t, h, http.MethodGet, missing, "", token)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404 (body %s)", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("requires an id", func(t *testing.T) {
+		_, token, _ := login(t, h, "alice@example.com", "")
+		w := request(t, h, http.MethodGet, "/api/email/raw", "", token)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400 (body %s)", w.Code, w.Body.String())
+		}
+	})
 }
