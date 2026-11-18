@@ -100,11 +100,11 @@ func (masteredUserManager) ChangePassword(context.Context, string, string, strin
 
 func TestAuthenticator_EmissaryUserManagementClaim(t *testing.T) {
 	for _, tc := range []struct {
-		name           string
-		userManager    bool
-		systemManager  bool
-		wantMgmt       bool
-		wantSysMgmt    bool
+		name          string
+		userManager   bool
+		systemManager bool
+		wantMgmt      bool
+		wantSysMgmt   bool
 	}{
 		{"user manager only", true, false, true, false},
 		{"system manager only", false, true, false, true},
@@ -114,11 +114,10 @@ func TestAuthenticator_EmissaryUserManagementClaim(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := NewWithUserManager(masteredUserManager{user: &usermanager.EmissaryUser{
 				User: usermanager.User{
-					ID:    "user@example.com",
-					Email: "user@example.com",
+					Email:         "user@example.com",
+					SystemManager: tc.systemManager,
 				},
-				UserManager:   tc.userManager,
-				SystemManager: tc.systemManager,
+				UserManager: tc.userManager,
 			}}, nil, "secret", time.Hour, "", "", "admin@example.com")
 
 			result, err := a.Login(context.Background(), "user@example.com", "password")
@@ -144,7 +143,7 @@ func TestAuthenticator_BuiltInAdminClaims(t *testing.T) {
 
 	t.Run("mastered backend", func(t *testing.T) {
 		a := NewWithUserManager(masteredUserManager{user: &usermanager.EmissaryUser{
-			User: usermanager.User{ID: admin, Email: admin, Admin: true},
+			User: usermanager.User{Email: admin, SystemManager: true},
 		}}, nil, "secret", time.Hour, "", "", admin)
 
 		result, err := a.Login(context.Background(), admin, "password")

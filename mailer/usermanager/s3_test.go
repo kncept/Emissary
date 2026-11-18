@@ -147,7 +147,7 @@ func TestS3Manager_CreateStoresUserJSON(t *testing.T) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		t.Fatalf("stored object is not JSON: %v", err)
 	}
-	wantKeys := []string{"ID", "Username", "Email", "Admin", "Enabled", "SaltedPassword", "Salt", "Rules", "UserManager", "SystemManager", "SchemaVersion"}
+	wantKeys := []string{"Email", "Enabled", "SaltedPassword", "Salt", "Rules", "UserManager", "SystemManager", "SchemaVersion"}
 	for _, k := range wantKeys {
 		if _, ok := raw[k]; !ok {
 			t.Errorf("stored object missing field %q: %v", k, raw)
@@ -167,10 +167,9 @@ func TestS3Manager_CreateStoresUserJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	// Like the ddb backend, Create normalises ID and Email but keeps the
-	// username as supplied.
-	if got.ID != "alice@example.com" || got.Email != "alice@example.com" || got.Username != "Alice@Example.com" {
-		t.Errorf("Get() = %+v, want ID/Email normalised, username as supplied", got)
+	// Like the ddb backend, Create normalises the email address.
+	if got.Email != "alice@example.com" {
+		t.Errorf("Get() = %+v, want normalised email", got)
 	}
 	if !got.Enabled {
 		t.Error("Get() Enabled = false, want true")
@@ -222,7 +221,7 @@ func TestS3Manager_Authenticate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Authenticate() error = %v", err)
 	}
-	if got.ID != "alice@example.com" || got.Admin {
+	if got.Email != "alice@example.com" || got.SystemManager {
 		t.Errorf("Authenticate() = %+v, want ordinary user alice@example.com", got)
 	}
 
@@ -251,8 +250,8 @@ func TestS3Manager_Authenticate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Authenticate(admin) error = %v", err)
 	}
-	if !admin.Admin {
-		t.Error("Authenticate(admin) should return the administrator")
+	if !admin.SystemManager {
+		t.Error("Authenticate(admin) should return a System Manager")
 	}
 }
 

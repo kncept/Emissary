@@ -56,11 +56,11 @@ func (h *usersHandler) ListUsers(ctx context.Context, params usersapi.ListUsersP
 	}
 	for _, u := range users {
 		response.Users = append(response.Users, usersapi.User{
-			Email:          u.Email,
-			Enabled:        u.Enabled,
-			SystemManager:  u.SystemManager,
-			Rules:          u.Rules,
-			UserManager:    u.UserManager,
+			Email:         u.Email,
+			Enabled:       u.Enabled,
+			SystemManager: u.SystemManager,
+			Rules:         u.Rules,
+			UserManager:   u.UserManager,
 		})
 	}
 
@@ -109,15 +109,15 @@ func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserR
 	}
 
 	user := &EmissaryUser{
+		User: usermanager.User{
+			Email:         req.Email,
+			SystemManager: systemManager,
+		},
 		Enabled:        enabled,
 		SaltedPassword: req.Password,
 		Rules:          rules,
 		UserManager:    userManager,
-		SystemManager:  systemManager,
 	}
-	user.ID = req.Email
-	user.Username = req.Email
-	user.Email = req.Email
 
 	if err := h.manager.Create(ctx, user); err != nil {
 		log.Printf("create user: %v", err)
@@ -128,11 +128,11 @@ func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserR
 	}
 
 	return &usersapi.UserResponse{
-		Email:          user.Email,
-		Enabled:        user.Enabled,
-		SystemManager:  user.SystemManager,
-		UserManager:    user.UserManager,
-		Rules:          user.Rules,
+		Email:         user.Email,
+		Enabled:       user.Enabled,
+		SystemManager: user.SystemManager,
+		UserManager:   user.UserManager,
+		Rules:         user.Rules,
 	}, nil
 }
 
@@ -149,11 +149,11 @@ func (h *usersHandler) GetUser(ctx context.Context, params usersapi.GetUserParam
 	}
 
 	return &usersapi.UserResponse{
-		Email:          user.Email,
-		Enabled:        user.Enabled,
-		SystemManager:  user.SystemManager,
-		UserManager:    user.UserManager,
-		Rules:          user.Rules,
+		Email:         user.Email,
+		Enabled:       user.Enabled,
+		SystemManager: user.SystemManager,
+		UserManager:   user.UserManager,
+		Rules:         user.Rules,
 	}, nil
 }
 
@@ -196,11 +196,11 @@ func (h *usersHandler) UpdateUser(ctx context.Context, req *usersapi.UpdateUserR
 	}
 
 	return &usersapi.UserResponse{
-		Email:          user.Email,
-		Enabled:        user.Enabled,
-		SystemManager:  user.SystemManager,
-		UserManager:    user.UserManager,
-		Rules:          user.Rules,
+		Email:         user.Email,
+		Enabled:       user.Enabled,
+		SystemManager: user.SystemManager,
+		UserManager:   user.UserManager,
+		Rules:         user.Rules,
 	}, nil
 }
 

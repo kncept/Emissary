@@ -910,7 +910,7 @@ func (h *Handler) IdentityGet(ctx context.Context, accountID string, args json.R
 
 	identity := Identity{
 		ID:            "primary",
-		Name:          user.Username,
+		Name:          user.Email,
 		Email:         user.Email,
 		TextSignature: "",
 		HTMLSignature: "",
@@ -1000,10 +1000,11 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 		return nil, err
 	}
 
-	// Check if the user is the built-in administrator of the target account.
-	isAdmin := false
+	// Check whether the user has system management privileges for the
+	// target account.
+	isSystemManager := false
 	if user, err := h.userMgr.Lookup(ctx, accountID); err == nil {
-		isAdmin = user.Admin
+		isSystemManager = user.SystemManager
 	}
 
 	created := make(map[string]interface{})
@@ -1021,8 +1022,8 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 
 		// Determine from address
 		var from string
-		if isAdmin {
-			// Admins can use custom from address from envelope
+		if isSystemManager {
+			// System Managers can use a custom from address from the envelope.
 			if submission.Envelope != nil && submission.Envelope.MailFrom.Email != "" {
 				from = submission.Envelope.MailFrom.Email
 			} else if emailMsg.From.Address != "" {

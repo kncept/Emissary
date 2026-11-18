@@ -132,7 +132,7 @@ it. When renaming tests, keep this table in sync.
 | Users with `EmissaryUserManagement` masquerade by supplying the target `accountId`; `systemManager` alone is not enough | `handler` `TestUserManagerMasqueradesViaAccountID`, `TestUserManagerClaimAllowsMasqueradeWithoutSystemManagerClaim` |
 | JWT `sub` is the user id (the user's email address); `systemManager: true` for the built-in admin and System Manager users; no `admin` claim | `handler` `TestJWTIncludesUserIDAndSystemManagerOnlyForAdmin`, `auth` tests |
 | Blank `PASSWORD` disables admin login without affecting other managers | `handler` `TestBlankAdminPasswordDisablesAdminLogin`, `usermanager` tests |
-| Ordinary users always send as themselves; the built-in administrator account may use a custom envelope sender; replies default to the original recipient | `handler` `TestSendEmailFromRules` |
+| Ordinary users always send as themselves; System Managers may use a custom envelope sender; replies default to the original recipient | `handler` `TestSendEmailFromRules` |
 | Deleting an email also removes its metadata | `handler` `TestDeleteEmailAlsoDeletesMetadata` |
 | Expired, future and wrong-audience/issuer tokens are rejected | `auth` `TestAuthenticator_Validate_*` |
 | Delivered ids are full object keys (timestamp + `.eml`) and account/mailbox are derived from them | `email` `TestMailboxFromID`, `TestParse_DerivesAccountAndMailboxFromDeliveredKey`, `storage` `TestS3StorageListAccountEmails*` |

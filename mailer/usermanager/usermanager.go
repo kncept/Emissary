@@ -33,28 +33,19 @@ var (
 	ErrUserDisabled = errors.New("user is disabled")
 )
 
-// User is an authenticated principal.
+// User is an authenticated principal. Its email address is the only user id
+// in the system, including in the JWT subject claim.
 type User struct {
-	// ID is the stable identifier written to the JWT subject claim. The user
-	// id is the user's email address.
-	ID string
-	// Username is the name presented at login.
-	Username string
 	// Email is the user's email address (the user id).
 	Email string
-	// Admin reports whether this is the single built-in administrator.
-	Admin bool
-}
-
-// IsAdmin returns whether this user is an administrator.
-func (u *User) IsAdmin() bool {
-	return u.Admin
+	// SystemManager reports whether the user has system management privileges.
+	SystemManager bool
 }
 
 // EmissaryUser is a user owned by an Emissary-mastered user manager. It embeds
 // User, so it can be used anywhere a *User is expected.
 type EmissaryUser struct {
-	User // ID, Username, Email, Admin
+	User // Email, SystemManager
 
 	// Enabled reports whether the user may log in. A disabled user is kept
 	// but rejected at login.
@@ -75,10 +66,6 @@ type EmissaryUser struct {
 	// UserManager reports whether the user has user management privileges
 	// (can create, update, delete users via the API).
 	UserManager bool
-
-	// SystemManager reports whether the user has system management privileges
-	// (can access support endpoints).
-	SystemManager bool
 
 	// SchemaVersion tracks the data schema version for migrations.
 	// Defaults to "1.0.0" when creating new users. Empty string means legacy (pre-schema versioning).
@@ -178,6 +165,16 @@ func newAdminAuth(cfg Config) adminAuth {
 	}
 }
 
+// user builds the principal for the built-in administrator. Its email is the
+// configured username (the id used as the JWT subject) and it has system
+// management privileges.
+func (a adminAuth) user() *User {
+	return &User{
+		Email:         strings.ToLower(a.username),
+		SystemManager: true,
+	}
+}
+
 // authenticate returns (user, true, nil) when username is the administrator and
 // the password is correct. When username is the administrator but the password
 // is wrong (or no admin password is configured) it returns (nil, true, err) so
@@ -190,15 +187,7 @@ func (a adminAuth) authenticate(username, password string) (*User, bool, error) 
 	if a.password == "" || !equal(password, a.password) {
 		return nil, true, ErrInvalidCredentials
 	}
-	user := &User{
-		ID:       a.username,
-		Username: a.username,
-		Admin:    true,
-	}
-	if isEmail(a.username) {
-		user.Email = strings.ToLower(a.username)
-	}
-	return user, true, nil
+	return a.user(), true, nil
 }
 
 func (a adminAuth) isAdmin(username string) bool {
@@ -230,18 +219,10 @@ func (m *NoneManager) Authenticate(_ context.Context, username, password string)
 
 func (m *NoneManager) Lookup(_ context.Context, username string) (*User, error) {
 	if m.admin.isAdmin(username) {
-		return &User{
-			ID:       m.admin.username,
-			Username: m.admin.username,
-			Admin:    true,
-		}, nil
+		return m.admin.user(), nil
 	}
-	// Return a stub user for any username (non-admin)
-	return &User{
-		ID:       username,
-		Username: username,
-		Admin:    false,
-	}, nil
+	// Return a stub user for any username (non-admin).
+	return &User{Email: username}, nil
 }
 
 func (m *NoneManager) Autocomplete(_ context.Context, q string) ([]string, error) {
@@ -277,11 +258,7 @@ func (m *LdapManager) Authenticate(_ context.Context, username, password string)
 
 func (m *LdapManager) Lookup(_ context.Context, username string) (*User, error) {
 	if m.admin.isAdmin(username) {
-		return &User{
-			ID:       m.admin.username,
-			Username: m.admin.username,
-			Admin:    true,
-		}, nil
+		return m.admin.user(), nil
 	}
 	panic("unimplemented")
 }
@@ -300,11 +277,6 @@ func normalizeAddress(value string) (string, bool) {
 		return "", false
 	}
 	return strings.ToLower(parsed.Address), true
-}
-
-func isEmail(value string) bool {
-	_, ok := normalizeAddress(value)
-	return ok
 }
 
 func equal(left, right string) bool {

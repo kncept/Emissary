@@ -124,15 +124,7 @@ func (m *S3Manager) Authenticate(ctx context.Context, username, password string)
 
 func (m *S3Manager) Lookup(ctx context.Context, username string) (*User, error) {
 	if m.admin.isAdmin(username) {
-		user := &User{
-			ID:       m.admin.username,
-			Username: m.admin.username,
-			Admin:    true,
-		}
-		if isEmail(m.admin.username) {
-			user.Email = strings.ToLower(m.admin.username)
-		}
-		return user, nil
+		return m.admin.user(), nil
 	}
 
 	address, ok := normalizeAddress(username)
@@ -284,26 +276,14 @@ func (m *S3Manager) Create(ctx context.Context, user *EmissaryUser) error {
 		return errors.New("user is required")
 	}
 
-	id := normalizeUserID(user.ID)
+	id := normalizeUserID(user.Email)
 	if id == "" {
-		id = normalizeUserID(user.Email)
-	}
-	if id == "" {
-		return errors.New("user id is required")
+		return errors.New("user email is required")
 	}
 	if _, ok := normalizeAddress(id); !ok {
-		return errors.New("user id must be an email address")
+		return errors.New("user email must be a valid address")
 	}
-
-	user.ID = id
-	user.Email = normalizeUserID(user.Email)
-	if user.Email == "" {
-		user.Email = id
-	}
-	user.Username = strings.TrimSpace(user.Username)
-	if user.Username == "" {
-		user.Username = id
-	}
+	user.Email = id
 
 	if user.SchemaVersion == "" {
 		user.SchemaVersion = "1.0.0"
@@ -354,22 +334,11 @@ func (m *S3Manager) Save(ctx context.Context, user *EmissaryUser) error {
 		return errors.New("user is required")
 	}
 
-	id := normalizeUserID(user.ID)
+	id := normalizeUserID(user.Email)
 	if id == "" {
-		id = normalizeUserID(user.Email)
+		return errors.New("user email is required")
 	}
-	if id == "" {
-		return errors.New("user id is required")
-	}
-	user.ID = id
-	user.Email = normalizeUserID(user.Email)
-	if user.Email == "" {
-		user.Email = id
-	}
-	user.Username = strings.TrimSpace(user.Username)
-	if user.Username == "" {
-		user.Username = id
-	}
+	user.Email = id
 
 	body, err := json.Marshal(user)
 	if err != nil {
@@ -479,7 +448,7 @@ func (m *S3Manager) Delete(ctx context.Context, email string) error {
 // ChangePassword verifies oldPassword when it is non-empty, then replaces the
 // stored password with a salted hash of newPassword. An empty oldPassword
 // skips verification; callers must have authorized the change themselves (for
-// example an administrator resetting another user's password).
+// example a System Manager resetting another user's password).
 func (m *S3Manager) ChangePassword(ctx context.Context, email, oldPassword, newPassword string) error {
 	if strings.TrimSpace(newPassword) == "" {
 		return errors.New("new password is required")

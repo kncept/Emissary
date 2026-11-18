@@ -50,7 +50,7 @@ application.
 | Email id | The full S3 object key of a delivered message: `users/<accountId>/<mailboxId>/<timestamp>_<ses-message-id>.eml`. The id encodes the account, JMAP mailbox, received time and SES message id; the timestamp is part of the id and uses ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`). |
 | Account | A JMAP account, identified by the user's email address. Storage reads are scoped to this account's prefix; `accountId` on a JMAP call selects it. |
 | Mailbox | A JMAP mailbox inside an account (`inbox`, `sent`, `drafts`, ...). `Email/query` can restrict the read with `filter.inMailbox`. |
-| Administrator | The single built-in user defined by `USERNAME`/`PASSWORD`. With `EmissaryUserManagement` it can read another account's mailbox by passing that account's `accountId` (masquerade); the built-in administrator account can send from any address. |
+| Administrator | The single built-in user defined by `USERNAME`/`PASSWORD`. With `EmissaryUserManagement` it can read another account's mailbox by passing that account's `accountId` (masquerade); like other System Managers it can send from any address. |
 | Ordinary user | Any user accepted by the configured user manager. Reads only their own account/mailboxes and always sends as themselves. |
 | Metadata | Small per-message state that is not part of the RFC 5322 message: read and flagged flags. Stored separately from S3. |
 
@@ -88,7 +88,7 @@ storage boundary:
 | Inbound transport | SES receipt rules → S3 | No server to run; raw messages are durable and cheap; the receipt rule's S3 action needs no consumer Lambda. |
 | Outbound transport | SES `SendEmail` (v2 API) | Same verified identity as inbound; no SMTP client to maintain. |
 | Message state | DynamoDB | Read/flag state must survive Lambda cold starts; a one-column table is the cheapest AWS answer. Local alternatives: memory or a JSON file. |
-| Auth | Hand-rolled HS256 JWT | No external dependency; the claim set is small (`sub`, `admin`, `iat`, `exp`, optional `aud`/`iss`). |
+| Auth | Hand-rolled HS256 JWT | No external dependency; the claim set is small (`sub`, `sid`, `systemManager`, `EmissaryUserManagement`, `iat`, `exp`, optional `aud`/`iss`). |
 | Infrastructure | AWS CDK (TypeScript) in `deploy/` | The stack is mostly DNS records + SES configuration, which is awkward to hand-manage; CDK also activates the receipt rule set via a custom resource. |
 
 ## Frontend UI conventions

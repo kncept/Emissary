@@ -77,7 +77,7 @@ func (m *testUserManager) Autocomplete(_ context.Context, q string) ([]string, e
 }
 
 func (m *testUserManager) adminUser() *usermanager.User {
-	return &usermanager.User{ID: m.adminUsername, Username: m.adminUsername, Admin: true}
+	return &usermanager.User{Email: strings.ToLower(m.adminUsername), SystemManager: true}
 }
 
 func (m *testUserManager) user(username string) (*usermanager.User, error) {
@@ -85,7 +85,7 @@ func (m *testUserManager) user(username string) (*usermanager.User, error) {
 	if address == "" || strings.Count(address, "@") != 1 || !strings.HasSuffix(address, "@"+m.domain) {
 		return nil, usermanager.ErrInvalidCredentials
 	}
-	return &usermanager.User{ID: address, Username: address, Email: address}, nil
+	return &usermanager.User{Email: address}, nil
 }
 
 func newHandlerForTest(t *testing.T, adminPassword string) (http.Handler, *storage.MemoryStorage, *captureSender) {

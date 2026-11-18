@@ -13,8 +13,8 @@ func TestNoneManager_AdminOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("admin login failed: %v", err)
 	}
-	if !user.Admin || user.ID != "admin" {
-		t.Fatalf("admin user = %+v, want admin id", user)
+	if !user.SystemManager || user.Email != "admin" {
+		t.Fatalf("admin user = %+v, want admin email and SystemManager", user)
 	}
 
 	if _, err := m.Authenticate(context.Background(), "admin", "wrong"); !errors.Is(err, ErrInvalidCredentials) {

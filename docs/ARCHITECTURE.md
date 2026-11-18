@@ -47,7 +47,7 @@ listens with `net/http` and uses the memory/log implementations.
    `awsutil`) — that is how the deployed Lambda receives its JWT
    secret as an ARN.
 2. `handler.New` builds the pluggable components:
-   - a `usermanager.Manager` (the built-in administrator plus the
+   - a `usermanager.UserManager` (the built-in administrator plus the
      selected backend),
    - an `auth.Authenticator` (HS256 JWT) over that manager,
    - a `storage.Storage` (S3 or memory),
@@ -70,7 +70,7 @@ listens with `net/http` and uses the memory/log implementations.
 | `config` | Loads and validates environment configuration. |
 | `envutil` | Cached environment lookups; resolves `arn:aws:` values via Secrets Manager. |
 | `awsutil` | Lambda detection and Secrets Manager access. |
-| `auth` | JWT issue/validate (`Claims`: `sub`, `sid`, `admin`, `iat`, `exp`, optional `aud`/`iss`). |
+| `auth` | JWT issue/validate (`Claims`: `sub`, `sid`, `systemManager`, `EmissaryUserManagement`, `iat`, `exp`, optional `aud`/`iss`). |
 | `usermanager` | Pluggable login backends; every backend also knows the built-in admin. |
 | `storage` | Mail source: `ListAccountEmails` (scoped by JMAP `accountId`/`mailboxId`), plus `GetEmail`, `DeleteEmail`, and support-only bucket operations. |
 | `sender` | Write side of mail: `Send`. |
@@ -171,9 +171,8 @@ enabling independent management (move, delete, flag) per user.
 1. The client creates a draft with `Email/set` and submits it with
    `EmailSubmission/set`, both on the JMAP batch endpoint.
 2. The handler verifies the submitted email belongs to the request's
-   `accountId`, then resolves the From address: the built-in administrator
-   account may specify one (defaulting, on a reply, to the original
-   recipient);
+   `accountId`, then resolves the From address: System Managers may specify
+   one (defaulting, on a reply, to the original recipient);
    ordinary users always send as their own address; otherwise the
    sender's configured `From` (`SES_FROM`) is used.
 3. The message is handed to the sender — in production the SES v2

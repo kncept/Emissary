@@ -100,26 +100,28 @@ Response (`200`):
 Errors:
 - `400` — Missing or invalid fields
 - `401` — Authentication required
-- `403` — Insufficient permissions (not the account owner, not an admin with EmissaryUserManagement, or backend doesn't support password change)
+- `403` — Insufficient permissions (not the account owner, no EmissaryUserManagement permission, or backend doesn't support password change)
 - `404` — User not found
 - `409` — Old password is incorrect
 
 ## The user
 
 `EmissaryUser` is a superstruct of `User`: it embeds `User` (whose
-`ID` is the user's email address — the stable identifier and login name
-— and whose `Email` holds the same address), so it is a `User` as well:
-it promotes `User`'s fields and methods, and its embedded `User` can be
-handed anywhere a `User` (or `*User`) is expected. The fields it adds:
+`Email` is the user's email address — the only user id in the system, also
+used as the JWT subject — and whose `SystemManager` flag marks users with
+system management privileges), so it is a `User` as well: it promotes
+`User`'s fields and methods, and its embedded `User` can be handed anywhere
+a `User` (or `*User`) is expected. The fields it adds:
 
 ```go
 type EmissaryUser struct {
-	User // ID, Username, Email, Admin
+	User // Email, SystemManager
 
 	Enabled        bool     // kept, but cannot log in when false
 	SaltedPassword string   // the user's stored, salted password
 	Salt           string   // The salt for the users password
 	Rules          []string // system rules, see below
+	UserManager    bool     // can manage users via the API
 }
 ```
 
@@ -129,6 +131,7 @@ type EmissaryUser struct {
 | `SaltedPassword` | The user's stored, salted password; verified at login. |
 | `Salt` | The users salt. Note that this has usage rules |
 | `Rules` | A string array of rules applied to mail for the user (below). |
+| `UserManager` | Whether the user may create, update, and delete users via the API. |
 
 ### System rules
 

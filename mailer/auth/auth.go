@@ -34,7 +34,8 @@ type jwtHeader struct {
 	Type      string `json:"typ"`
 }
 
-// Claims is the verified content of an Emissary JWT. Subject is the user id.
+// Claims is the verified content of an Emissary JWT. Subject is the user id,
+// which is the user's email address.
 // SystemManager indicates the user has system management privileges (support
 // tools). EmissaryUserManagement indicates the user can manage other users and
 // masquerade as them (requires an Emissary-mastered backend).
@@ -214,12 +215,12 @@ func (a *Authenticator) issueTokens(ctx context.Context, user *usermanager.User)
 	//   privileges, regardless of the configured user manager backend.
 	// - Other users get both flags from their Emissary-mastered record (when
 	//   one is configured).
-	isBuiltInAdmin := a.adminUsername != "" && strings.EqualFold(user.ID, a.adminUsername)
+	isBuiltInAdmin := a.adminUsername != "" && strings.EqualFold(user.Email, a.adminUsername)
 	systemManager := isBuiltInAdmin
 	emissaryUserMgmt := isBuiltInAdmin
 
 	if em, ok := a.users.(usermanager.EmissaryAuthManager); ok && !isBuiltInAdmin {
-		if eu, err := em.Get(ctx, user.ID); err == nil && eu != nil {
+		if eu, err := em.Get(ctx, user.Email); err == nil && eu != nil {
 			emissaryUserMgmt = eu.UserManager
 			systemManager = eu.SystemManager
 		}
@@ -228,7 +229,7 @@ func (a *Authenticator) issueTokens(ctx context.Context, user *usermanager.User)
 	// Create or update session
 	sess := &session.Session{
 		ID:        sid,
-		UserEmail: user.ID,
+		UserEmail: user.Email,
 		Issue:     1,
 		CreatedAt: now,
 		ExpiresAt: now.Add(refreshTokenTTL),
@@ -240,7 +241,7 @@ func (a *Authenticator) issueTokens(ctx context.Context, user *usermanager.User)
 	// Issue access token (9 hours)
 	accessExpiresAt := now.Add(accessTokenTTL)
 	accessToken, err := a.signToken(Claims{
-		Subject:                user.ID,
+		Subject:                user.Email,
 		SID:                    sid,
 		SystemManager:          systemManager,
 		EmissaryUserManagement: emissaryUserMgmt,
@@ -256,7 +257,7 @@ func (a *Authenticator) issueTokens(ctx context.Context, user *usermanager.User)
 	// Issue refresh token (30 days) with issue number
 	refreshExpiresAt := now.Add(refreshTokenTTL)
 	refreshToken, err := a.signToken(Claims{
-		Subject:   user.ID,
+		Subject:   user.Email,
 		SID:       sid,
 		Issue:     1,
 		IssuedAt:  now.Unix(),

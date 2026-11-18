@@ -124,15 +124,12 @@ func newDdbTestManager() (*DdbManager, *fakeDdb) {
 }
 
 func testUser(email, password string, enabled bool) *EmissaryUser {
-	user := &EmissaryUser{
+	return &EmissaryUser{
+		User:           User{Email: email},
 		Enabled:        enabled,
 		SaltedPassword: password,
 		Rules:          []string{},
 	}
-	user.ID = email
-	user.Username = email
-	user.Email = email
-	return user
 }
 
 func TestDdbManager_Authenticate(t *testing.T) {
@@ -143,12 +140,12 @@ func TestDdbManager_Authenticate(t *testing.T) {
 	if err := m.Create(ctx, user); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if user.ID != "alice@example.com" {
-		t.Fatalf("Create() id = %q, want normalized address", user.ID)
+	if user.Email != "alice@example.com" {
+		t.Fatalf("Create() email = %q, want normalized address", user.Email)
 	}
 
-	storedHash := fake.items[user.ID]["saltedPassword"].(*types.AttributeValueMemberS).Value
-	storedSalt := fake.items[user.ID]["salt"].(*types.AttributeValueMemberS).Value
+	storedHash := fake.items[user.Email]["saltedPassword"].(*types.AttributeValueMemberS).Value
+	storedSalt := fake.items[user.Email]["salt"].(*types.AttributeValueMemberS).Value
 	if storedHash == "hunter2" || !strings.HasPrefix(storedHash, "$2") {
 		t.Errorf("stored password hash = %q, want bcrypt hash", storedHash)
 	}
@@ -160,11 +157,11 @@ func TestDdbManager_Authenticate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Authenticate() error = %v", err)
 	}
-	if got.ID != "alice@example.com" || got.Email != "alice@example.com" {
+	if got.Email != "alice@example.com" {
 		t.Errorf("Authenticate() user = %+v, want normalized address", got)
 	}
-	if got.Admin {
-		t.Error("ordinary user must not be admin")
+	if got.SystemManager {
+		t.Error("ordinary user must not be a System Manager")
 	}
 
 	if _, err := m.Authenticate(ctx, "alice@example.com", "wrong"); !errors.Is(err, ErrInvalidCredentials) {
@@ -189,8 +186,8 @@ func TestDdbManager_Authenticate(t *testing.T) {
 	}
 
 	admin, err := m.Authenticate(ctx, "admin", "secret")
-	if err != nil || !admin.Admin {
-		t.Errorf("admin login = (%+v, %v), want admin", admin, err)
+	if err != nil || !admin.SystemManager {
+		t.Errorf("admin login = (%+v, %v), want SystemManager", admin, err)
 	}
 	if _, err := m.Authenticate(ctx, "admin", "wrong"); !errors.Is(err, ErrInvalidCredentials) {
 		t.Errorf("wrong admin password error = %v, want ErrInvalidCredentials", err)
@@ -308,7 +305,7 @@ func TestDdbManager_DeleteAndLookup(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 	user, err := m.Lookup(ctx, "Alice@Example.com")
-	if err != nil || user.ID != "alice@example.com" {
+	if err != nil || user.Email != "alice@example.com" {
 		t.Errorf("Lookup() = (%+v, %v), want alice", user, err)
 	}
 	if _, err := m.Lookup(ctx, "missing@example.com"); !errors.Is(err, ErrInvalidCredentials) {

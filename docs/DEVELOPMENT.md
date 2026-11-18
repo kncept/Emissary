@@ -143,8 +143,8 @@ add a new implementation, three places change:
    - `sender.Sender` — `Name`, `From`, `Send` (`mailer/sender`)
    - `metadata.MetadataStore` — `Get`, `SetRead`, `SetFlagged`, `Delete`,
      `List` (`mailer/metadata`)
-   - `usermanager.Manager` — `Name`, `Authenticate`, `IsAdmin`
-     (`mailer/usermanager`)
+   - `usermanager.UserManager` — `Name`, `Authenticate`, `Lookup`,
+     `Autocomplete` (`mailer/usermanager`)
 2. Register it in the `switch` that builds that component
    (`handler.New` for storage/metadata/sender; `usermanager.New` for
    user managers).

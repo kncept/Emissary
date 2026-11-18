@@ -63,12 +63,11 @@ type DdbManager struct {
 
 var _ EmissaryAuthManager = (*DdbManager)(nil)
 
-// ddbUser is the DynamoDB representation of an EmissaryUser.
+// ddbUser is the DynamoDB representation of an EmissaryUser. The "id"
+// partition key holds the user's email address; there is no other user id.
 type ddbUser struct {
 	ID             string   `dynamodbav:"id"`
-	Username       string   `dynamodbav:"username"`
 	Email          string   `dynamodbav:"email"`
-	Admin          bool     `dynamodbav:"admin"`
 	Enabled        bool     `dynamodbav:"enabled"`
 	SaltedPassword string   `dynamodbav:"saltedPassword"`
 	Salt           string   `dynamodbav:"salt"`
@@ -122,15 +121,7 @@ func (m *DdbManager) Authenticate(ctx context.Context, username, password string
 
 func (m *DdbManager) Lookup(ctx context.Context, username string) (*User, error) {
 	if m.admin.isAdmin(username) {
-		user := &User{
-			ID:       m.admin.username,
-			Username: m.admin.username,
-			Admin:    true,
-		}
-		if isEmail(m.admin.username) {
-			user.Email = strings.ToLower(m.admin.username)
-		}
-		return user, nil
+		return m.admin.user(), nil
 	}
 
 	address, ok := normalizeAddress(username)
@@ -239,26 +230,14 @@ func (m *DdbManager) Create(ctx context.Context, user *EmissaryUser) error {
 		return errors.New("user is required")
 	}
 
-	id := normalizeUserID(user.ID)
+	id := normalizeUserID(user.Email)
 	if id == "" {
-		id = normalizeUserID(user.Email)
-	}
-	if id == "" {
-		return errors.New("user id is required")
+		return errors.New("user email is required")
 	}
 	if _, ok := normalizeAddress(id); !ok {
-		return errors.New("user id must be an email address")
+		return errors.New("user email must be a valid address")
 	}
-
-	user.ID = id
-	user.Email = normalizeUserID(user.Email)
-	if user.Email == "" {
-		user.Email = id
-	}
-	user.Username = strings.TrimSpace(user.Username)
-	if user.Username == "" {
-		user.Username = id
-	}
+	user.Email = id
 
 	if user.SaltedPassword != "" && user.Salt == "" {
 		// Plaintext password provided, hash it with default (bcrypt)
@@ -299,22 +278,11 @@ func (m *DdbManager) Save(ctx context.Context, user *EmissaryUser) error {
 		return errors.New("user is required")
 	}
 
-	id := normalizeUserID(user.ID)
+	id := normalizeUserID(user.Email)
 	if id == "" {
-		id = normalizeUserID(user.Email)
+		return errors.New("user email is required")
 	}
-	if id == "" {
-		return errors.New("user id is required")
-	}
-	user.ID = id
-	user.Email = normalizeUserID(user.Email)
-	if user.Email == "" {
-		user.Email = id
-	}
-	user.Username = strings.TrimSpace(user.Username)
-	if user.Username == "" {
-		user.Username = id
-	}
+	user.Email = id
 
 	item, err := attributevalue.MarshalMap(ddbUserFrom(user))
 	if err != nil {
@@ -396,7 +364,7 @@ func (m *DdbManager) Delete(ctx context.Context, email string) error {
 // ChangePassword verifies oldPassword when it is non-empty, then replaces the
 // stored password with a salted hash of newPassword. An empty oldPassword
 // skips verification; callers must have authorized the change themselves (for
-// example an administrator resetting another user's password).
+// example a System Manager resetting another user's password).
 func (m *DdbManager) ChangePassword(ctx context.Context, email, oldPassword, newPassword string) error {
 	if strings.TrimSpace(newPassword) == "" {
 		return errors.New("new password is required")
@@ -474,10 +442,8 @@ func ddbUserFrom(user *EmissaryUser) ddbUser {
 		schemaVersion = "1.0.0"
 	}
 	return ddbUser{
-		ID:             user.ID,
-		Username:       user.Username,
+		ID:             user.Email,
 		Email:          user.Email,
-		Admin:          user.Admin,
 		Enabled:        user.Enabled,
 		SaltedPassword: user.SaltedPassword,
 		Salt:           user.Salt,
@@ -493,19 +459,21 @@ func (u ddbUser) emissaryUser() *EmissaryUser {
 	if rules == nil {
 		rules = []string{}
 	}
+	// Older records may only carry the partition key, which is the email.
+	address := u.Email
+	if address == "" {
+		address = u.ID
+	}
 	return &EmissaryUser{
 		User: User{
-			ID:       u.ID,
-			Username: u.Username,
-			Email:    u.Email,
-			Admin:    u.Admin,
+			Email:         address,
+			SystemManager: u.SystemManager,
 		},
 		Enabled:        u.Enabled,
 		SaltedPassword: u.SaltedPassword,
 		Salt:           u.Salt,
 		Rules:          rules,
 		UserManager:    u.UserManager,
-		SystemManager:  u.SystemManager,
 		SchemaVersion:  u.SchemaVersion,
 	}
 }

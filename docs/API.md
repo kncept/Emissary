@@ -165,7 +165,8 @@ Response (`200`):
 `401 invalid credentials` on failure. The administrator is checked
 first, then the configured user manager backend. The access token carries the
 user id (the user's email address) in `sub`, the session id in `sid`,
-`admin` only when true, `iat`, `exp`, and the configured `aud`/`iss`.
+`systemManager` and `EmissaryUserManagement` when true, `iat`, `exp`, and
+the configured `aud`/`iss`.
 
 ## `POST /api/auth/logout`
 

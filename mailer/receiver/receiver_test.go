@@ -50,7 +50,7 @@ func (fakeUserManager) Authenticate(context.Context, string, string) (*usermanag
 	return nil, usermanager.ErrInvalidCredentials
 }
 func (fakeUserManager) Lookup(_ context.Context, username string) (*usermanager.User, error) {
-	return &usermanager.User{ID: username, Email: username}, nil
+	return &usermanager.User{Email: username}, nil
 }
 func (fakeUserManager) Autocomplete(context.Context, string) ([]string, error) { return nil, nil }
 
