@@ -266,7 +266,7 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 
 	mux.Handle("GET /api/user/autocomplete", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims := currentClaims(r)
-		if claims == nil || !claims.SystemManager {
+		if claims == nil || !claims.EmissaryUserManagement {
 			writeError(w, http.StatusForbidden, "insufficient permissions")
 			return
 		}

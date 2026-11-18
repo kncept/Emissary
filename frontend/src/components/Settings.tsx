@@ -54,7 +54,7 @@ export default function Settings({ auth }: SettingsProps) {
           </div>
         )}
 
-        {auth.systemManager && auth.emissaryUserManagement && (
+        {auth.emissaryUserManagement && (
           <div className="settings-field">
             <label>Emissary User Management</label>
             <div className="settings-value admin-badge">

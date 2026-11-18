@@ -77,7 +77,7 @@ type EmissaryUser struct {
 	UserManager bool
 
 	// SystemManager reports whether the user has system management privileges
-	// (can access support endpoints, masquerade as other users, etc.).
+	// (can access support endpoints).
 	SystemManager bool
 
 	// SchemaVersion tracks the data schema version for migrations.

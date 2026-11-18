@@ -108,8 +108,8 @@ instantiated in `handler.New`:
 5. When a JMAP call lists or opens mail, `storage.S3Storage` paginates
    `ListObjectsV2` over the prefix for the call's `accountId`:
    `users/<accountId>/<mailboxId>/`. The account comes from the JWT
-   `sub`, or from the target account supplied by a System Manager
-   (masquerade). An `inMailbox` filter narrows the read to one JMAP
+   `sub`, or from the target account supplied by a user with
+   `EmissaryUserManagement` (masquerade). An `inMailbox` filter narrows the read to one JMAP
    mailbox; without it every mailbox in the account is searched.
    `GetObject`s each message, and parses it with `email.Parse`.
    Unparseable objects are logged and skipped, not fatal.
@@ -171,8 +171,9 @@ enabling independent management (move, delete, flag) per user.
 1. The client creates a draft with `Email/set` and submits it with
    `EmailSubmission/set`, both on the JMAP batch endpoint.
 2. The handler verifies the submitted email belongs to the request's
-   `accountId`, then resolves the From address: System Managers may
-   specify one (defaulting, on a reply, to the original recipient);
+   `accountId`, then resolves the From address: the built-in administrator
+   account may specify one (defaulting, on a reply, to the original
+   recipient);
    ordinary users always send as their own address; otherwise the
    sender's configured `From` (`SES_FROM`) is used.
 3. The message is handed to the sender — in production the SES v2
@@ -189,9 +190,8 @@ enabling independent management (move, delete, flag) per user.
 - `requireAuth` middleware validates the signature, expiry, audience
   and issuer, then stashes the claims in the request context.
 - The JMAP dispatcher uses the JWT `sub` as the default `accountId` and
-  rejects a different one for users without System Manager permission. A
-  System Manager may supply any
-  `accountId` to masquerade.
+  rejects a different one for users without `EmissaryUserManagement`. A
+  user with that claim may supply any `accountId` to masquerade.
 - `Email/query`, `Email/get`, `Email/set` and `EmailSubmission/set` are
   scoped to that account. Storage uses a mailbox-key prefix rather than a
   header-based `canAccessEmail` filter; messages outside the account are
@@ -231,7 +231,7 @@ enabling independent management (move, delete, flag) per user.
   `localStorage` under `emissary_token`, attaches the Bearer header,
   and redirects to `/login` on a `401`. JMAP calls use the masquerade
   target from `localStorage['masquerade_as']` as their `accountId` when
-  a System Manager has selected one.
+  a user with `EmissaryUserManagement` has selected one.
 - Vite builds into `mailer/gui/frontend/dist`, which `mailer/gui`
   embeds; the Go binary serves the SPA from the same origin and port
   as the API, so there are no CORS concerns.

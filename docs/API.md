@@ -116,10 +116,10 @@ JMAP mailbox such as `inbox`, `sent`, `drafts`, `trash`, `archive` or
 ### Account selection and masquerade
 
 The default `accountId` is the authenticated JWT `sub`. A call without
-System Manager permission that supplies a different `accountId` is rejected.
-A System Manager may supply any `accountId` to read or act in that account's
-mailbox (masquerade); this applies to `Email/query`, `Email/get`, `Email/set`
-and `EmailSubmission/set`.
+User Manager permission that supplies a different `accountId` is rejected.
+A user with `EmissaryUserManagement` may supply any `accountId` to read or act
+in that account's mailbox (masquerade); this applies to `Email/query`,
+`Email/get`, `Email/set` and `EmailSubmission/set`.
 
 ### List Emails
 - `Email/query` with filter `inMailbox: "inbox"`, sort by `receivedAt` descending
@@ -175,9 +175,9 @@ exists as a stable hook for future revocation. Returns
 
 ## `GET /api/user/autocomplete`
 
-Searches user IDs (email addresses) for System Manager masquerade. The
+Searches user IDs (email addresses) for User Manager masquerade. The
 endpoint is backed by `UserManager.Autocomplete`, not by the generated
-management server, and is available to System Managers.
+management server, and is available to users with `EmissaryUserManagement`.
 
 Query parameter `q` is required and must be at least 3 characters.
 

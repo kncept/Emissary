@@ -162,12 +162,13 @@ Verification works by inspecting the salt prefix:
 
 ## Admin Masquerade
 
-System Managers can **masquerade as another user** to view and act in that
-user's JMAP account/mailboxes for support and administration purposes.
-Selecting a target requires the `EmissaryUserManagement` claim (the
-autocomplete endpoint) in addition to `systemManager`, and the JMAP dispatcher
-accepts the target `accountId` only when the access token has the
-`systemManager` claim.
+Users with the User Manager permission can **masquerade as another user** to
+view and act in that user's JMAP account/mailboxes for support and
+administration purposes. Selecting a target uses the
+`EmissaryUserManagement` claim (the autocomplete endpoint), and the JMAP
+dispatcher accepts the target `accountId` only when the access token has the
+`EmissaryUserManagement` claim. The `systemManager` claim is not required for
+masquerade; it governs the support tools instead.
 
 ### Frontend UI
 
@@ -182,7 +183,7 @@ accepts the target `accountId` only when the access token has the
   - The UI **always displays the latest valid results** for the current query (subject to the debounce delay); stale responses never override newer ones.
   - Up to **10 matches** are shown; clicking a result selects that full user ID (email address).
   - When a search completes with no matches, an **empty state** is displayed.
-- The frontend restricts the masquerade UI to users with `EmissaryUserManagement`, but **security is enforced server-side** (the API returns `403` without `systemManager`).
+- The frontend restricts the masquerade UI to users with `EmissaryUserManagement`, and **security is enforced server-side** (the API returns `403` without that claim).
 
 ### API Endpoint (Autocomplete)
 
@@ -221,7 +222,7 @@ After selecting a user from autocomplete, the SPA stores the address in
 method call's `accountId`, which is the effective mailbox context for
 listing, getting, deleting and submitting mail. The JWT is unchanged and
 still identifies the caller; the JMAP dispatcher authorizes the
-masquerade by checking the `systemManager` claim.
+masquerade by checking the `EmissaryUserManagement` claim.
 
 - **Exit masquerade:** Clear `masquerade_as` from localStorage; JMAP calls
   revert to the JWT `sub` as `accountId`.

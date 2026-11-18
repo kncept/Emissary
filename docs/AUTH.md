@@ -73,14 +73,15 @@ The following claims must always be present:
 In addition to standard claims, the JWT MAY have the following
 attributes: `Subscribed` (boolean), `systemManager` (boolean),
 `EmissaryUserManagement` (boolean). The user manager decides which apply
-to the authenticated user. The built-in administrator and users with the
-System Manager role receive `systemManager: true`; the obsolete `admin`
-claim is no longer issued or honored.
+to the authenticated user. The built-in administrator receives both
+privilege claims; an Emissary-managed user receives them from their
+System Manager and User Manager roles. The obsolete `admin` claim is no
+longer issued or honored.
 
 The `sub` claim is also the default JMAP `accountId`: mail operations are
-scoped to that account's mailbox prefix. A user without System Manager
-permission cannot override it; a token with `systemManager: true` may supply
-another `accountId` on a JMAP method call to masquerade
+scoped to that account's mailbox prefix. A user without User Manager
+permission cannot override it; a token with `EmissaryUserManagement: true`
+may supply another `accountId` on a JMAP method call to masquerade
 (see [USERS.md](USERS.md#admin-masquerade)).
 
 ### Refresh token

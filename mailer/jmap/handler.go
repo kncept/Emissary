@@ -452,8 +452,9 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 		return nil, err
 	}
 
-	// Email/get must only expose messages in the requested account. When an
-	// admin masquerades, accountID is the target account supplied in the call.
+	// Email/get must only expose messages in the requested account. When a
+	// user with EmissaryUserManagement masquerades, accountID is the target
+	// account supplied in the call.
 	emails, err := h.storage.ListAccountEmails(ctx, accountID, "")
 	if err != nil {
 		return nil, err
@@ -750,9 +751,9 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 	}
 
 	// Read only from the requested account's mailbox. The accountId is the
-	// authenticated user's id, or the target account when an admin is
-	// masquerading. An inMailbox filter is pushed into storage so only that
-	// JMAP mailbox is listed.
+	// authenticated user's id, or the target account when a user with
+	// EmissaryUserManagement is masquerading. An inMailbox filter is pushed into
+	// storage so only that JMAP mailbox is listed.
 	mailboxID := ""
 	if req.Filter != nil && req.Filter.InMailbox != nil {
 		mailboxID = *req.Filter.InMailbox
@@ -999,9 +1000,11 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 		return nil, err
 	}
 
-	// System Managers may supply a custom envelope sender. Ordinary users
-	// must send as the account they are acting for.
-	isSystemManager := systemManagerFromContext(ctx)
+	// Check if the user is the built-in administrator of the target account.
+	isAdmin := false
+	if user, err := h.userMgr.Lookup(ctx, accountID); err == nil {
+		isAdmin = user.Admin
+	}
 
 	created := make(map[string]interface{})
 	notCreated := make(map[string]interface{})
@@ -1009,7 +1012,7 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 	// For each submission to create
 	for createID, submission := range req.Create {
 		// Get the email to send. Only an email in the requested account may be
-		// submitted, even when an admin is masquerading as that account.
+		// submitted, even when masquerading as that account.
 		emailMsg, err := h.storage.GetEmail(ctx, submission.EmailID)
 		if err != nil || !strings.EqualFold(emailMsg.AccountID, accountID) {
 			notCreated[createID] = map[string]string{"type": "notFound", "description": "Email not found"}
@@ -1018,8 +1021,8 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 
 		// Determine from address
 		var from string
-		if isSystemManager {
-			// System Managers can use a custom from address from the envelope
+		if isAdmin {
+			// Admins can use custom from address from envelope
 			if submission.Envelope != nil && submission.Envelope.MailFrom.Email != "" {
 				from = submission.Envelope.MailFrom.Email
 			} else if emailMsg.From.Address != "" {
@@ -1199,7 +1202,7 @@ func (h *Handler) PushSubscriptionChanges(ctx context.Context, accountID string,
 
 func (h *Handler) getMailboxes(ctx context.Context, accountID string) []Mailbox {
 	// Return standard JMAP mailboxes. Counts are scoped to the requested
-	// account so a masquerading admin sees the target user's mailbox state.
+	// account so a masquerading user sees the target user's mailbox state.
 
 	count := func(mailboxID string) int { return h.countEmailsInMailbox(ctx, accountID, mailboxID) }
 	unread := func(mailboxID string) int { return h.countUnreadInMailbox(ctx, accountID, mailboxID) }

@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/storage"
@@ -373,26 +372,16 @@ func TestUserReadsOnlyOwnMailbox(t *testing.T) {
 	}
 }
 
-func TestSystemManagerMasqueradesViaAccountID(t *testing.T) {
+func TestUserManagerMasqueradesViaAccountID(t *testing.T) {
 	h, store, _ := newHandlerForTest(t, "secret")
 	addEmail(store, "received", "alice@example.com", "bob@example.com")
 	addEmail(store, "sent", "bob@example.com", "carol@example.com")
 	addEmail(store, "unrelated", "carol@example.com", "dave@example.com")
 
-	status, token, _ := login(t, h, "admin", "secret")
-	if status != http.StatusOK {
-		t.Fatalf("admin login status = %d, want %d", status, http.StatusOK)
-	}
-
-	// Verify the token has the System Manager claim.
-	authenticator := auth.New("admin", "secret", "secret", time.Hour, "", "")
-	claims, err := authenticator.ValidateClaims(token)
-	if err != nil {
-		t.Fatalf("validate admin token: %v", err)
-	}
-	if !claims.SystemManager {
-		t.Errorf("systemManager = %v, want true", claims.SystemManager)
-	}
+	token := signedSupportToken(t, map[string]any{
+		"sub":                    "admin",
+		"EmissaryUserManagement": true,
+	})
 
 	cases := map[string]string{
 		"bob@example.com":   "received",
@@ -418,17 +407,26 @@ func TestSystemManagerMasqueradesViaAccountID(t *testing.T) {
 	}
 }
 
-func TestSystemManagerClaimAllowsMasqueradeWithoutAdminClaim(t *testing.T) {
+func TestUserManagerClaimAllowsMasqueradeWithoutSystemManagerClaim(t *testing.T) {
 	h, store, _ := newHandlerForTest(t, "secret")
 	addEmail(store, "received", "alice@example.com", "bob@example.com")
+
+	userManagerToken := signedSupportToken(t, map[string]any{
+		"sub":                    "manager@example.com",
+		"EmissaryUserManagement": true,
+	})
+	emails := getEmailsJMAP(t, h, userManagerToken, "bob@example.com")
+	if len(emails) != 1 || emails[0].ID != "received" {
+		t.Errorf("User Manager masquerade emails = %v, want bob's received email", emails)
+	}
 
 	systemManagerToken := signedSupportToken(t, map[string]any{
 		"sub":           "manager@example.com",
 		"systemManager": true,
 	})
-	emails := getEmailsJMAP(t, h, systemManagerToken, "bob@example.com")
-	if len(emails) != 1 || emails[0].ID != "received" {
-		t.Errorf("System Manager masquerade emails = %v, want bob's received email", emails)
+	emails = getEmailsJMAP(t, h, systemManagerToken, "bob@example.com")
+	if len(emails) != 0 {
+		t.Errorf("System Manager without User Manager could masquerade: emails = %v", emails)
 	}
 
 	legacyAdminToken := signedSupportToken(t, map[string]any{
@@ -441,12 +439,17 @@ func TestSystemManagerClaimAllowsMasqueradeWithoutAdminClaim(t *testing.T) {
 	}
 }
 
-func TestAutocompleteRequiresSystemManagerClaim(t *testing.T) {
+func TestAutocompleteRequiresUserManagerClaim(t *testing.T) {
 	h, _, _ := newHandlerForTest(t, "secret")
 
+	userManagerToken := signedSupportToken(t, map[string]any{"EmissaryUserManagement": true})
+	if w := request(t, h, http.MethodGet, "/api/user/autocomplete?q=alice", "", userManagerToken); w.Code != http.StatusOK {
+		t.Errorf("User Manager autocomplete status = %d, want %d", w.Code, http.StatusOK)
+	}
+
 	systemManagerToken := signedSupportToken(t, map[string]any{"systemManager": true})
-	if w := request(t, h, http.MethodGet, "/api/user/autocomplete?q=alice", "", systemManagerToken); w.Code != http.StatusOK {
-		t.Errorf("System Manager autocomplete status = %d, want %d", w.Code, http.StatusOK)
+	if w := request(t, h, http.MethodGet, "/api/user/autocomplete?q=alice", "", systemManagerToken); w.Code != http.StatusForbidden {
+		t.Errorf("System Manager without User Manager autocomplete status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 
 	legacyAdminToken := signedSupportToken(t, map[string]any{"admin": true})

@@ -62,7 +62,7 @@ function App() {
               <Layout
                 onLogout={handleLogout}
                 canManageUsers={auth.emissaryUserManagement}
-                canMasquerade={auth.systemManager}
+                canMasquerade={auth.emissaryUserManagement}
               >
                 <Routes>
                   <Route path="/" element={<EmailList />} />

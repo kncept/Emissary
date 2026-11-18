@@ -36,8 +36,8 @@ type jwtHeader struct {
 
 // Claims is the verified content of an Emissary JWT. Subject is the user id.
 // SystemManager indicates the user has system management privileges (support
-// tools, masquerading, etc.). EmissaryUserManagement indicates the user can
-// manage other users (requires an Emissary-mastered backend).
+// tools). EmissaryUserManagement indicates the user can manage other users and
+// masquerade as them (requires an Emissary-mastered backend).
 type Claims struct {
 	Subject                string `json:"sub"`
 	SID                    string `json:"sid,omitempty"`
@@ -210,19 +210,16 @@ func (a *Authenticator) issueTokens(ctx context.Context, user *usermanager.User)
 	sid := base64.RawURLEncoding.EncodeToString(sidBytes)
 
 	// Determine claims based on user type:
-	// - The built-in admin always has system management privileges, regardless
-	//   of the configured user manager backend.
-	// - EmissaryUserManagement additionally requires an Emissary-mastered
-	//   backend; the built-in admin gets it when one is configured.
-	// - Other users get both flags from their stored record.
+	// - The built-in admin always has system management and user management
+	//   privileges, regardless of the configured user manager backend.
+	// - Other users get both flags from their Emissary-mastered record (when
+	//   one is configured).
 	isBuiltInAdmin := a.adminUsername != "" && strings.EqualFold(user.ID, a.adminUsername)
 	systemManager := isBuiltInAdmin
-	var emissaryUserMgmt bool
+	emissaryUserMgmt := isBuiltInAdmin
 
-	if em, ok := a.users.(usermanager.EmissaryAuthManager); ok {
-		if isBuiltInAdmin {
-			emissaryUserMgmt = true
-		} else if eu, err := em.Get(ctx, user.ID); err == nil && eu != nil {
+	if em, ok := a.users.(usermanager.EmissaryAuthManager); ok && !isBuiltInAdmin {
+		if eu, err := em.Get(ctx, user.ID); err == nil && eu != nil {
 			emissaryUserMgmt = eu.UserManager
 			systemManager = eu.SystemManager
 		}

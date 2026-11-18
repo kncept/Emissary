@@ -50,23 +50,25 @@ application.
 | Email id | The full S3 object key of a delivered message: `users/<accountId>/<mailboxId>/<timestamp>_<ses-message-id>.eml`. The id encodes the account, JMAP mailbox, received time and SES message id; the timestamp is part of the id. |
 | Account | A JMAP account, identified by the user's email address. Storage reads are scoped to this account's prefix; `accountId` on a JMAP call selects it. |
 | Mailbox | A JMAP mailbox inside an account (`inbox`, `sent`, `drafts`, ...). `Email/query` can restrict the read with `filter.inMailbox`. |
-| Administrator | The single built-in user defined by `USERNAME`/`PASSWORD`. Can read another account's mailbox by passing that account's `accountId` (masquerade) and can send from any address. |
+| Administrator | The single built-in user defined by `USERNAME`/`PASSWORD`. With `EmissaryUserManagement` it can read another account's mailbox by passing that account's `accountId` (masquerade); the built-in administrator account can send from any address. |
 | Ordinary user | Any user accepted by the configured user manager. Reads only their own account/mailboxes and always sends as themselves. |
 | Metadata | Small per-message state that is not part of the RFC 5322 message: read and flagged flags. Stored separately from S3. |
 
 ## Visibility and authorization model
 
 Authentication produces a JWT (HS256, Bearer token) whose `sub` claim is
-the user id (the user's email address) and which carries
-`systemManager: true` for the built-in administrator and users with the
-System Manager role. Authorization is enforced at both the JMAP dispatcher
-and the storage boundary:
+the user id (the user's email address). It carries `systemManager: true` for
+the built-in administrator and users with the System Manager role (support
+tools), and `EmissaryUserManagement: true` for users who may manage accounts
+and masquerade. Authorization is enforced at both the JMAP dispatcher and the
+storage boundary:
 
 - The default `accountId` for a JMAP call is the authenticated `sub`.
-  Users without System Manager permission may not supply a different
+  Users without `EmissaryUserManagement` may not supply a different
   `accountId`; the dispatcher rejects the call.
-- System Managers may masquerade by supplying any `accountId`. Listing,
-  getting, deleting and submitting are all scoped to that account.
+- Users with `EmissaryUserManagement` may masquerade by supplying any
+  `accountId`. Listing, getting, deleting and submitting are all scoped to
+  that account.
 - `Email/query` reads only the selected account's mailbox prefix. An
   `inMailbox` filter narrows it to one JMAP mailbox; without the filter
   all of that account's mailboxes are searched.

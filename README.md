@@ -41,11 +41,12 @@ when `STORAGE=s3` and no backend is chosen):
 | `s3` | In-application user management in the mail storage bucket: each user is a `users/<email>/user.json` object next to the user's mailboxes. |
 | `ldap` | Reserved for proxying authentication to an LDAP server. |
 
-The JWT carries the user id (the user's email address) in the `sub` claim and
-includes `systemManager: true` for the built-in administrator and users with
-the System Manager role. Mail is exposed through JMAP as per-user **mailboxes**:
-ordinary users read only their own `accountId`, while a System Manager can pass
-another account's `accountId` on a JMAP method call to masquerade for support.
-System Managers can send with a custom envelope sender. See
+The JWT carries the user id (the user's email address) in the `sub` claim,
+`systemManager: true` for the built-in administrator and System Manager users,
+and `EmissaryUserManagement: true` for users who may manage accounts. Mail is
+exposed through JMAP as per-user **mailboxes**: ordinary users read only their
+own `accountId`, while a user with `EmissaryUserManagement` can pass another
+account's `accountId` on a JMAP method call to masquerade for support. The
+built-in administrator account can send with a custom envelope sender. See
 [API.md](docs/API.md#jmap-mail-operations) and [S3.md](docs/S3.md#bucket-layout)
 for details.

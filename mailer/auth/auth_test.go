@@ -180,8 +180,8 @@ func TestAuthenticator_BuiltInAdminClaims(t *testing.T) {
 		if !claims.SystemManager {
 			t.Error("SystemManager = false, want true for built-in admin")
 		}
-		if claims.EmissaryUserManagement {
-			t.Error("EmissaryUserManagement = true, want false when backend is not mastered")
+		if !claims.EmissaryUserManagement {
+			t.Error("EmissaryUserManagement = false, want true for built-in admin")
 		}
 	})
 }
@@ -398,8 +398,8 @@ func TestAuthenticator_IssueUser_SystemManagerClaim(t *testing.T) {
 		t.Errorf("Login() error = %v, want %v", err, ErrInvalidCredentials)
 	}
 
-	// The obsolete admin claim must not be emitted; System Manager is the
-	// single privilege claim for support and masquerade access.
+	// The obsolete admin claim must not be emitted; System Manager and User
+	// Manager are separate privilege claims.
 	parts := strings.Split(adminToken, ".")
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
