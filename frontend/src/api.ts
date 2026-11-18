@@ -14,6 +14,7 @@ import {
   markRead,
   markFlagged,
   deleteEmail,
+  parseAddressList,
   sendEmail as jmapSendEmail,
 } from './api/jmap-client.ts';
 
@@ -308,4 +309,13 @@ export async function getRawEmail(id: string): Promise<string> {
 }
 
 // Re-export email functions from JMAP client
-export { getEmails, getEmail, markRead, markFlagged, deleteEmail, jmapSendEmail as sendEmail };
+export {
+  MASQUERADE_AS_KEY,
+  getEmails,
+  getEmail,
+  markRead,
+  markFlagged,
+  deleteEmail,
+  parseAddressList,
+  jmapSendEmail as sendEmail,
+};

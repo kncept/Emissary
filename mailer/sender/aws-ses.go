@@ -14,7 +14,11 @@ import (
 
 var _ Sender = (*AwsSesSender)(nil)
 
-// AwsSesSender sends mail through the Amazon SES v2 SendEmail API.
+// AwsSesSender sends mail through the Amazon SES v2 SendRawEmail API. The
+// message is serialized with the shared wire builder so the headers match the
+// direct-MTA sender exactly (including In-Reply-To and References, which the
+// structured SendEmail API cannot express); the envelope recipients are passed
+// separately as Destinations.
 type AwsSesSender struct {
 	client *ses.Client
 }
@@ -37,32 +41,27 @@ func (s *AwsSesSender) Send(ctx context.Context, message *email.UserEmail) error
 		return errors.New("message has no From address")
 	}
 
-	body := &types.Body{}
-	if message.Text != "" {
-		body.Text = &types.Content{Data: aws.String(message.Text), Charset: aws.String("UTF-8")}
-	}
-	if message.HTML != "" {
-		body.Html = &types.Content{Data: aws.String(message.HTML), Charset: aws.String("UTF-8")}
-	}
-	if body.Text == nil && body.Html == nil {
-		body.Text = &types.Content{Data: aws.String(" "), Charset: aws.String("UTF-8")}
+	wire := BuildWireMessage(message, source, helloNameFromAddress(source))
+	if len(wire) == 0 {
+		return errors.New("failed to build wire message")
 	}
 
-	_, err := s.client.SendEmail(ctx, &ses.SendEmailInput{
-		Source:           aws.String(source),
-		ReplyToAddresses: addressStrings(message.ReplyTo),
-		Destination: &types.Destination{
-			ToAddresses:  addressStrings(message.To),
-			CcAddresses:  addressStrings(message.Cc),
-			BccAddresses: addressStrings(message.Bcc),
-		},
-		Message: &types.Message{
-			Subject: &types.Content{Data: aws.String(message.Subject), Charset: aws.String("UTF-8")},
-			Body:    body,
+	// The envelope carries every recipient, including Bcc (which never appears
+	// in the raw message headers).
+	var envelope []email.Address
+	for _, list := range [][]email.Address{message.To, message.Cc, message.Bcc} {
+		envelope = append(envelope, list...)
+	}
+
+	_, err := s.client.SendRawEmail(ctx, &ses.SendRawEmailInput{
+		Source:       aws.String(source),
+		Destinations: addressStrings(envelope),
+		RawMessage: &types.RawMessage{
+			Data: wire,
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("send email with SES: %w", err)
+		return fmt.Errorf("send raw email with SES: %w", err)
 	}
 	return nil
 }

@@ -53,6 +53,7 @@ type WireFormatEmail struct {
 	To          []Address
 	Cc          []Address
 	Bcc         []Address
+	ReplyTo     []Address
 	Subject     string
 	Date        time.Time
 	MessageID   string
@@ -254,6 +255,8 @@ func (wfe *WireFormatEmail) extractCommonHeaders() {
 			wfe.Cc = append(wfe.Cc, parseAddressList(h.Value)...)
 		case "bcc":
 			wfe.Bcc = append(wfe.Bcc, parseAddressList(h.Value)...)
+		case "reply-to":
+			wfe.ReplyTo = append(wfe.ReplyTo, parseAddressList(h.Value)...)
 		case "subject":
 			if wfe.Subject == "" {
 				wfe.Subject = decodeHeader(h.Value)
@@ -609,14 +612,18 @@ func parseDate(value string) time.Time {
 func (wfe *WireFormatEmail) ToUserEmail() *UserEmail {
 	text, html := wfe.extractTextAndHTML()
 	return &UserEmail{
-		From:    addressPtrToValue(wfe.From),
-		To:      wfe.To,
-		Cc:      wfe.Cc,
-		Bcc:     wfe.Bcc,
-		Subject: wfe.Subject,
-		Date:    wfe.Date,
-		Text:    strings.TrimSpace(text),
-		HTML:    strings.TrimSpace(html),
+		From:       addressPtrToValue(wfe.From),
+		To:         wfe.To,
+		Cc:         wfe.Cc,
+		Bcc:        wfe.Bcc,
+		ReplyTo:    wfe.ReplyTo,
+		Subject:    wfe.Subject,
+		Date:       wfe.Date,
+		Text:       strings.TrimSpace(text),
+		HTML:       strings.TrimSpace(html),
+		MessageID:  wfe.MessageID,
+		InReplyTo:  wfe.InReplyTo,
+		References: wfe.References,
 	}
 }
 

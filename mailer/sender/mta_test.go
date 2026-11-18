@@ -202,6 +202,65 @@ func TestMtaSender_SendGroupsRecipientsByDomain(t *testing.T) {
 	}
 }
 
+// TestMtaSender_ThreadHeadersAndMessageID checks that In-Reply-To and
+// References reach the wire format, that a stored Message-ID is reused, and
+// that a missing one is generated.
+func TestMtaSender_ThreadHeadersAndMessageID(t *testing.T) {
+	s := testMtaSender()
+	s.lookupMX = func(_ context.Context, _ string) ([]*net.MX, error) { return nil, nil }
+
+	var done <-chan smtpSession
+	s.dial = func(_ context.Context, _, _ string) (net.Conn, error) {
+		conn, sessionDone := startSMTPServer(t)
+		done = sessionDone
+		return conn, nil
+	}
+
+	err := s.Send(context.Background(), &email.UserEmail{
+		From:       email.Address{Address: "user@example.com"},
+		To:         []email.Address{{Address: "to@example.net"}},
+		Subject:    "RE: Hello",
+		Text:       "reply body",
+		MessageID:  "<reply-1@example.com>",
+		InReplyTo:  []string{"<original-1@example.com>"},
+		References: []string{"<first@example.com>", "<original-1@example.com>"},
+	})
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	session := <-done
+	if !strings.Contains(session.data, "Message-ID: <reply-1@example.com>\r\n") {
+		t.Errorf("stored Message-ID was not reused: %q", session.data)
+	}
+	if !strings.Contains(session.data, "In-Reply-To: <original-1@example.com>\r\n") {
+		t.Errorf("missing In-Reply-To header: %q", session.data)
+	}
+	if !strings.Contains(session.data, "References: <first@example.com> <original-1@example.com>\r\n") {
+		t.Errorf("missing References header: %q", session.data)
+	}
+}
+
+func TestBuildWireMessage_GeneratesMessageIDWhenAbsent(t *testing.T) {
+	message := &email.UserEmail{
+		From:    email.Address{Address: "user@example.com"},
+		To:      []email.Address{{Address: "to@example.net"}},
+		Subject: "Hello",
+		Text:    "body",
+	}
+	wire := string(BuildWireMessage(message, "user@example.com", "example.com"))
+	if !strings.Contains(wire, "Message-ID: <") {
+		t.Fatalf("missing Message-ID header: %q", wire)
+	}
+	id := wire[strings.Index(wire, "Message-ID: <")+len("Message-ID: <"):]
+	id = id[:strings.Index(id, ">")]
+	if !strings.HasSuffix(id, "@example.com") {
+		t.Errorf("generated Message-ID = %q, want domain example.com", id)
+	}
+	if strings.Contains(wire, "In-Reply-To:") || strings.Contains(wire, "References:") {
+		t.Errorf("thread headers written without values: %q", wire)
+	}
+}
+
 func TestMtaSender_MXFailoverAndLastResort(t *testing.T) {
 	s := testMtaSender()
 	s.lookupMX = func(_ context.Context, domain string) ([]*net.MX, error) {

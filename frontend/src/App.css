@@ -601,6 +601,36 @@ input, textarea {
   min-width: 0;
 }
 
+/* The From address is locked to the authenticated account (or the
+   masquerade target); the field is display-only. */
+.compose-form .compose-from-locked {
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+.compose-ccbcc-toggle {
+  margin: -0.25rem 0 0.75rem 5.25rem;
+}
+
+.ccbcc-toggle-btn {
+  border: 0;
+  background: none;
+  padding: 0.15rem 0;
+  font-size: 0.8125rem;
+  color: var(--color-primary);
+  cursor: pointer;
+}
+
+.ccbcc-toggle-btn:hover {
+  text-decoration: underline;
+}
+
+.ccbcc-toggle-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .compose-form .compose-body {
   margin-bottom: 1rem;
 }
@@ -716,6 +746,27 @@ input, textarea {
 
 .compose-form .rsw-ce a {
   color: var(--color-primary);
+}
+
+/* Top-posted original message in reply/forward drafts: a separator line and
+   the quoted text in a preformatted block. */
+.compose-form .rsw-ce .emissary-quote-separator {
+  color: var(--color-text-muted);
+  user-select: none;
+}
+
+.compose-form .rsw-ce .emissary-quote {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  background: var(--color-bg);
+  border-left: 3px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .compose-form .link-form {

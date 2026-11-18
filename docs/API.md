@@ -221,17 +221,77 @@ The web UI uses this endpoint for both the "View MIME" modal and the
   delivered-mail tree, so the flow works with `STORAGE=s3` in Lambda.
 - `EmailSubmission/set` create to submit the email for delivery. The submitted
   `emailId` may be the session-relative draft id returned by `Email/set`.
-- The resolved From address (envelope sender, draft From header, or reply
-  recipient) must be the authenticated user's own address; a caller with
-  `EmissaryUserManagement` may send with another address because it can
-  masquerade. Other senders get a `forbidden` submission error.
-- When masquerading (From differs from the caller's own address), Reply-To
-  must match From. It defaults to From when omitted; a conflicting Reply-To
-  is rejected with `invalidProperties`.
+
+**Locked From address.** The sender is always the authenticated user: a
+create or submission acts on the caller's own account (`JWT sub`) and sends
+as that address. A caller with `EmissaryUserManagement` may act on a
+different `accountId` (masquerade) and then sends as that account's address.
+The From address supplied by the client — the draft's `from` header in
+`Email/set` or the envelope `mailFrom` in `EmailSubmission/set` — is ignored;
+there is no way to send as any other address. An account address that is not
+a valid email address (no `@`) is rejected with `invalidProperties`.
+
+**Recipients.** `to`, `cc` and `bcc` each accept any number of addresses.
+If an envelope `rcptTo` is supplied, it must cover every To, Cc and Bcc
+address (otherwise a `forbidden` submission error); Bcc addresses appear only
+in the delivery envelope, never in the message headers.
+
+**Thread headers.** The draft's `inReplyTo` and `references` are carried into
+the delivered message as `In-Reply-To` and `References` headers. The message
+gets a `Message-ID` at `Email/set` create time; the sender reuses that id
+instead of generating a new one, so the stored and delivered copies agree.
+
+- When masquerading, Reply-To must match From. It defaults to From when
+  omitted; a conflicting Reply-To is rejected with `invalidProperties`.
 - The session draft and its metadata (keywords and `receivedAt`) are deleted
   after `EmailSubmission/set` sends successfully.
   `onSuccessUpdateEmail` and `onSuccessDestroyEmail` are accepted for JMAP
   compatibility but the server performs the cleanup itself.
+
+### Reply and Forward (web UI)
+
+The web UI's Reply and Forward flows build the outgoing message with these
+conventions; they are a client-side contract, not JMAP requirements.
+
+**Subject.** A reply is prefixed `RE: ` and a forward `FWD: `
+(`RE: <subject>`, `FWD: <subject>`). If the original subject already begins
+with the same prefix (case-insensitive, e.g. `Re:` or `re`), no second prefix
+is added. A reply to a forwarded message therefore reads `RE: FWD: <subject>`.
+
+**Body (top posting).** The user's new text is placed on top; underneath it
+comes the original message's text, separated by a plain-text separator line
+(`-----`). The layout of the delivered text body is:
+
+```
+<new text>
+<blank line>
+<blank line>
+<blank line>
+<blank line>
+<blank line>
+<blank line>
+-----
+<blank line>
+<original message text>
+```
+
+that is, exactly six blank lines above the separator and one blank line
+underneath it. In HTML mode the same layout is rendered with line breaks, a
+separator element and the quoted text in a `<pre>` block; the plain-text
+alternative carries the exact layout above. The quoted part is the original
+message's text body (an HTML-only original is quoted as its extracted text).
+
+**Thread headers.** Both replies and forwards set `In-Reply-To` to the
+original message's `Message-ID`, and `References` to the original's
+`References` list with the original's `Message-ID` appended (duplicates
+removed, order preserved). These headers are not shown in the UI.
+
+**Recipients.** A reply goes to the original's `Reply-To` address, or its
+`From` address when there is no `Reply-To`. A forward starts with no
+recipients; the user adds them. Both support multiple To, Cc and Bcc
+addresses (comma-separated in the UI). The From address is locked as
+described above — when masquerading, the reply or forward is sent as the
+masquerade target.
 
 ## `POST /api/auth/login`
 

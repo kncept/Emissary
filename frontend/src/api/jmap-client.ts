@@ -5,7 +5,7 @@ import type {
   Invocation,
 } from './generated/schemas/jmap';
 import { htmlToText } from '../html.ts';
-import type { EmailBodyFormat } from '../types.ts';
+import type { SendEmailRequest } from '../types.ts';
 
 const SESSION_URL = '/.well-known/jmap';
 export const MASQUERADE_AS_KEY = 'masquerade_as';
@@ -147,11 +147,18 @@ export interface Email {
   timestamp: string;
   read: boolean;
   flagged: boolean;
+  /** RFC 5322 Message-ID of the message (with angle brackets). */
+  messageId?: string;
+  /** Original References header values, oldest first. */
+  references?: string[];
+  /** Reply-To addresses; replies go here when present, otherwise to From. */
+  replyTo?: string[];
 }
 
 function convertJmapEmail(jmapEmail: Record<string, unknown>): Email {
   const fromArray = jmapEmail.from as Array<{ name?: string; email: string }> | undefined;
   const toArray = jmapEmail.to as Array<{ name?: string; email: string }> | undefined;
+  const replyToArray = jmapEmail.replyTo as Array<{ name?: string; email: string }> | undefined;
   const keywords = jmapEmail.keywords as Record<string, boolean> | undefined;
 
   return {
@@ -163,7 +170,24 @@ function convertJmapEmail(jmapEmail: Record<string, unknown>): Email {
     timestamp: (jmapEmail.receivedAt as string) || new Date().toISOString(),
     read: keywords?.$seen === true,
     flagged: keywords?.$flagged === true,
+    messageId: (jmapEmail.messageId as string[] | undefined)?.[0] || undefined,
+    references: (jmapEmail.references as string[] | undefined) || undefined,
+    replyTo:
+      replyToArray && replyToArray.length > 0
+        ? replyToArray.map((address) => address.email)
+        : undefined,
   };
+}
+
+/**
+ * Parses a comma-separated recipient field ("a@example.com, b@example.com")
+ * into a clean address list, dropping empties and trimming whitespace.
+ */
+export function parseAddressList(input: string): string[] {
+  return input
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
 }
 
 export async function getEmails(_userFilter?: string): Promise<Email[]> {
@@ -220,6 +244,10 @@ export async function getEmail(id: string): Promise<Email> {
           'id',
           'from',
           'to',
+          'replyTo',
+          'messageId',
+          'inReplyTo',
+          'references',
           'subject',
           'preview',
           'receivedAt',
@@ -350,14 +378,7 @@ export async function deleteEmail(id: string): Promise<void> {
   }
 }
 
-export async function sendEmail(data: {
-  from?: string;
-  to: string;
-  subject: string;
-  body: string;
-  format: EmailBodyFormat;
-  replyToId?: string;
-}): Promise<{ success: boolean; message?: string }> {
+export async function sendEmail(data: SendEmailRequest): Promise<{ success: boolean; message?: string }> {
   const createId = 'create1';
   const submissionId = 'submission1';
   const isHtml = data.format === 'html';
@@ -366,17 +387,35 @@ export async function sendEmail(data: {
   const plainText = isHtml ? htmlToText(data.body) : data.body;
   const textSize = new TextEncoder().encode(plainText).length;
 
+  const to = parseAddressList(data.to);
+  const cc = parseAddressList(data.cc || '');
+  const bcc = parseAddressList(data.bcc || '');
+
+  // The server locks the From address to the authenticated account (or the
+  // masquerade target), so no From is supplied here.
   const createArgs: Record<string, unknown> = {
     mailboxIds: { drafts: true },
     keywords: { $draft: true },
-    from: [{ email: data.from || '', name: '' }],
-    to: [{ email: data.to, name: '' }],
+    to: to.map((email) => ({ email, name: '' })),
     subject: data.subject,
     textBody: [{ partId: 'text1', type: 'text/plain', size: textSize }],
     bodyValues: {
       text1: { value: plainText, isEncodingProblem: false, isTruncated: false },
     },
   };
+
+  if (cc.length > 0) {
+    createArgs.cc = cc.map((email) => ({ email, name: '' }));
+  }
+  if (bcc.length > 0) {
+    createArgs.bcc = bcc.map((email) => ({ email, name: '' }));
+  }
+  if (data.inReplyTo && data.inReplyTo.length > 0) {
+    createArgs.inReplyTo = data.inReplyTo;
+  }
+  if (data.references && data.references.length > 0) {
+    createArgs.references = data.references;
+  }
 
   if (isHtml) {
     createArgs.htmlBody = [{
@@ -395,13 +434,17 @@ export async function sendEmail(data: {
     create: { [createId]: createArgs },
   };
 
-  if (data.replyToId) {
-    const originalEmail = await getEmail(data.replyToId);
-    if (originalEmail) {
-      const createArgs = (emailCreateArgs.create as Record<string, Record<string, unknown>>)[createId];
-      createArgs.inReplyTo = [originalEmail.id];
-      createArgs.references = [originalEmail.id];
-    }
+  // The envelope covers every recipient; Bcc appears only here, never in the
+  // message headers. mailFrom is never sent - the server owns the sender.
+  const envelopeRecipients = [...to, ...cc, ...bcc];
+  const submission: Record<string, unknown> = {
+    identityId: 'primary',
+    emailId: `#${createId}`,
+  };
+  if (envelopeRecipients.length > 0) {
+    submission.envelope = {
+      rcptTo: envelopeRecipients.map((email) => ({ email })),
+    };
   }
 
   const responses = await jmapRequest(['urn:ietf:params:jmap:mail', 'urn:ietf:params:jmap:submission'], [
@@ -413,16 +456,7 @@ export async function sendEmail(data: {
     {
       method: 'EmailSubmission/set',
       args: {
-        create: {
-          [submissionId]: {
-            identityId: 'primary',
-            emailId: `#${createId}`,
-            envelope: data.from ? {
-              mailFrom: { email: data.from },
-              rcptTo: [{ email: data.to }],
-            } : undefined,
-          },
-        },
+        create: { [submissionId]: submission },
         onSuccessUpdateEmail: {
           [`#${submissionId}`]: {
             'keywords/$draft': null,

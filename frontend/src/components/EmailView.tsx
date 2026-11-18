@@ -202,6 +202,9 @@ export default function EmailView() {
           <Link to={`/compose/${encodeURIComponent(email.id)}`} className="btn btn-secondary">
             Reply
           </Link>
+          <Link to={`/compose/forward/${encodeURIComponent(email.id)}`} className="btn btn-secondary">
+            Forward
+          </Link>
           <button
             type="button"
             className="btn btn-secondary"

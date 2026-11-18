@@ -2,7 +2,9 @@ package email
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/mail"
 	"strings"
@@ -65,8 +67,23 @@ type UserEmail struct {
 	HTML       string    `json:"html,omitempty"`
 	Read       bool      `json:"read"`
 	Size       int64     `json:"size,omitempty"`
+	MessageID  string    `json:"messageId,omitempty"`
 	InReplyTo  []string  `json:"inReplyTo,omitempty"`
 	References []string  `json:"references,omitempty"`
+}
+
+// GenerateMessageID returns a globally unique RFC 5322 Message-ID value of the
+// form <token@domain>. An empty domain renders as "emissary.local".
+func GenerateMessageID(domain string) string {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "" {
+		domain = "emissary.local"
+	}
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("%d@%s", time.Now().UnixNano(), domain)
+	}
+	return fmt.Sprintf("<%x@%s>", buf, domain)
 }
 
 // MailboxKeyPrefix returns the object-key prefix that holds the messages in a
@@ -175,6 +192,27 @@ func RawFromUserEmail(e *UserEmail) []byte {
 		buf.WriteString("\r\nDate: ")
 		buf.WriteString(e.Date.UTC().Format(time.RFC1123Z))
 	}
+	if cc := addressListString(e.Cc); cc != "" {
+		buf.WriteString("\r\nCc: ")
+		buf.WriteString(cc)
+	}
+	if replyTo := addressListString(e.ReplyTo); replyTo != "" {
+		buf.WriteString("\r\nReply-To: ")
+		buf.WriteString(replyTo)
+	}
+	// Bcc is envelope-only and never written into the rendered headers.
+	if messageID := strings.TrimSpace(e.MessageID); messageID != "" {
+		buf.WriteString("\r\nMessage-ID: ")
+		buf.WriteString(messageID)
+	}
+	if len(e.InReplyTo) > 0 {
+		buf.WriteString("\r\nIn-Reply-To: ")
+		buf.WriteString(strings.Join(e.InReplyTo, " "))
+	}
+	if len(e.References) > 0 {
+		buf.WriteString("\r\nReferences: ")
+		buf.WriteString(strings.Join(e.References, " "))
+	}
 	buf.WriteString("\r\n\r\n")
 	buf.WriteString(e.Text)
 	if !strings.HasSuffix(e.Text, "\r\n") {
@@ -188,6 +226,16 @@ func addressString(a Address) string {
 		return a.Address
 	}
 	return (&mail.Address{Name: a.Name, Address: a.Address}).String()
+}
+
+func addressListString(addresses []Address) string {
+	values := make([]string, 0, len(addresses))
+	for _, addr := range addresses {
+		if value := addressString(addr); value != "" {
+			values = append(values, value)
+		}
+	}
+	return strings.Join(values, ", ")
 }
 
 // Parse reads a raw RFC 5322 message and returns its content as a UserEmail.

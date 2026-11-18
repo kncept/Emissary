@@ -206,19 +206,22 @@ enabling independent management (move, delete, flag) per user.
    support). `EmailSubmission/set` reads that draft first and falls back to
    delivered mail.
 2. The handler verifies the submitted email belongs to the request's
-   `accountId`, then resolves the From address from the envelope sender, the
-   draft's From header, or (on a reply) the original recipient, falling back
-   to the account address (the user's id). There is no configured From
-   address.
-3. The From address must match the authenticated user's account, unless the
-   caller has `EmissaryUserManagement` and may masquerade as another user.
-   A mismatched From is rejected with a `forbidden` submission error. When
-   masquerading, Reply-To must match From (it defaults to From when omitted).
+   `accountId`, then locks the From address to the authenticated user: the
+   submission sends as the caller's own account, or as the target account
+   when a caller with `EmissaryUserManagement` masquerades as another
+   `accountId`. There is no configured From address, and a From supplied by
+   the client (envelope sender or draft header) is ignored.
+3. When masquerading, Reply-To must match From (it defaults to From when
+   omitted); a conflicting Reply-To is rejected with `invalidProperties`.
 4. The message is handed to the configured `sender.Sender` implementation.
-   `aws-ses` uses the SES v2 `SendEmail` API (including Reply-To addresses);
-   `mta` resolves the recipient domains' MX records and delivers directly over
-   SMTP on port 25, after a DMARC/SPF alignment warning check; `log` writes a
-   line to the process log.
+   Both wire senders serialize the message once with a shared builder that
+   writes the RFC 5322 headers (including `In-Reply-To` and `References` when
+   the draft carries them, and the message's stored `Message-ID`) and the
+   MIME body. `aws-ses` sends that raw message with the SES v2
+   `SendRawEmail` API, with the envelope recipients passed separately;
+   `mta` resolves the recipient domains' MX records and delivers the same
+   bytes directly over SMTP on port 25, after a DMARC/SPF alignment warning
+   check; `log` writes a line to the process log.
 5. On success, the session draft is deleted; on failure it is kept so the
    client can retry without re-entering the message.
 

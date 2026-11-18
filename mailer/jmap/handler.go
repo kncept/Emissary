@@ -382,6 +382,44 @@ func (h *Handler) ThreadChanges(ctx context.Context, accountID string, args json
 // Email methods
 // ============================================================================
 
+// lockedFrom returns the From address that mail created or submitted for
+// accountID must use: the authenticated user's own address (the JWT sub), or
+// the target account when a caller with EmissaryUserManagement masquerades as
+// a different account. masquerading reports whether the target account
+// differs from the caller's own. There is no configured From address and a
+// client-supplied From is never honoured.
+func lockedFrom(ctx context.Context, accountID string) (from string, masquerading bool) {
+	claims := ClaimsFromContext(ctx)
+	userAccount := accountID
+	if claims != nil && claims.Subject != "" {
+		userAccount = claims.Subject
+	}
+	masquerading = claims != nil && claims.EmissaryUserManagement && !strings.EqualFold(accountID, userAccount)
+	from = userAccount
+	if masquerading {
+		from = accountID
+	}
+	return
+}
+
+// messageIDs renders a single Message-ID value as the JMAP messageId list.
+func messageIDs(messageID string) []string {
+	if messageID = strings.TrimSpace(messageID); messageID != "" {
+		return []string{messageID}
+	}
+	return []string{}
+}
+
+// messageIDDomain extracts the domain part of an address for use as the
+// Message-ID domain; an empty result makes GenerateMessageID fall back to a
+// local domain.
+func messageIDDomain(address string) string {
+	if _, domain, ok := strings.Cut(address, "@"); ok {
+		return strings.ToLower(strings.TrimSpace(domain))
+	}
+	return ""
+}
+
 // JMAPEmail represents a JMAP Email object.
 type JMAPEmail struct {
 	ID            string                    `json:"id"`
@@ -572,13 +610,10 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			continue
 		}
 
-		// Extract email data
-		from := ""
-		if fromArr, ok := createMap["from"].([]interface{}); ok && len(fromArr) > 0 {
-			if f, ok := fromArr[0].(map[string]interface{}); ok {
-				from = f["email"].(string)
-			}
-		}
+		// Extract email data. The From address is locked to the authenticated
+		// user (or the masquerade target account), so a client-supplied
+		// "from" header is ignored.
+		from, _ := lockedFrom(ctx, accountID)
 
 		var to []email.Address
 		if toArr, ok := createMap["to"].([]interface{}); ok {
@@ -710,6 +745,7 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			Text:       text,
 			HTML:       html,
 			Size:       int64(textBodySize + htmlBodySize),
+			MessageID:  email.GenerateMessageID(messageIDDomain(from)),
 			InReplyTo:  inReplyTo,
 			References: references,
 		}
@@ -1081,22 +1117,12 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 		return nil, err
 	}
 
-	// The caller's identity, not the account being accessed, decides which
-	// From addresses are allowed. A User Manager (EmissaryUserManagement) can
-	// masquerade as another account and therefore send with another From.
-	claims := ClaimsFromContext(ctx)
-	canMasquerade := claims != nil && claims.EmissaryUserManagement
-	userAccount := accountID
-	if claims != nil && claims.Subject != "" {
-		userAccount = claims.Subject
-	}
-
 	created := make(map[string]interface{})
 	notCreated := make(map[string]interface{})
 
 	// For each submission to create
 	sessionID := ""
-	if claims != nil {
+	if claims := ClaimsFromContext(ctx); claims != nil {
 		sessionID = claims.SID
 	}
 	for createID, submission := range req.Create {
@@ -1137,57 +1163,27 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 			continue
 		}
 
-		// Resolve the requested From address. The explicit envelope sender
-		// wins, followed by the draft's From header. For replies with no
-		// explicit sender, default to the original recipient.
-		var from string
-		if submission.Envelope != nil {
-			from = submission.Envelope.MailFrom.Email
-		}
-		if from == "" {
-			from = emailMsg.From.Address
-		}
-		if from == "" {
-			var inReplyTo string
-			if len(emailMsg.InReplyTo) > 0 {
-				inReplyTo = emailMsg.InReplyTo[0]
-			} else if len(emailMsg.References) > 0 {
-				inReplyTo = emailMsg.References[0]
-			}
-			if inReplyTo != "" {
-				if original, err := h.storage.GetEmail(ctx, inReplyTo); err == nil && original.Email != nil && len(original.Email.To) > 0 {
-					from = original.Email.To[0].Address
-				}
-			}
-		}
-		// A JMAP account is normally the user's email address, so it is the
-		// final source for From when neither the envelope nor the draft carries
-		// one. An account without an address (for example the built-in "admin"
-		// account) cannot send from itself.
-		if from == "" && strings.Contains(accountID, "@") {
-			from = accountID
-		}
-
-		// Validate the From address syntax.
-		if from != "" {
-			parsed, err := mail.ParseAddress(from)
-			if err != nil {
-				notCreated[createID] = map[string]string{"type": "invalidProperties", "description": "Invalid from address"}
-				continue
-			}
-			from = parsed.Address
-		}
-
-		// A submission may only use the authenticated user's own address,
-		// unless that user is allowed to masquerade as another account.
-		masquerading := from != "" && !strings.EqualFold(from, userAccount)
-		if masquerading && !canMasquerade {
+		// The From address is locked to the authenticated user: submissions
+		// send as the caller's own account, or as the target account when a
+		// User Manager (EmissaryUserManagement) masquerades as a different
+		// accountId. A client-supplied sender (the envelope mailFrom or the
+		// draft's From header) is ignored.
+		from, masquerading := lockedFrom(ctx, accountID)
+		if !strings.Contains(from, "@") {
+			// An account without an email address (for example the built-in
+			// "admin" account) cannot send mail.
 			notCreated[createID] = map[string]string{
-				"type":        "forbidden",
-				"description": "From address does not match the authenticated user",
+				"type":        "invalidProperties",
+				"description": "From address must be a valid email address",
 			}
 			continue
 		}
+		parsed, parseErr := mail.ParseAddress(from)
+		if parseErr != nil {
+			notCreated[createID] = map[string]string{"type": "invalidProperties", "description": "Invalid from address"}
+			continue
+		}
+		from = parsed.Address
 
 		// When sending on behalf of another account, replies must go back to
 		// the same address that appears in From. Default Reply-To to From when
@@ -1264,17 +1260,22 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 			continue
 		}
 
-		// Create the message to send
+		// Create the message to send. The thread headers (In-Reply-To and
+		// References) and the stored Message-ID are carried into the delivered
+		// message so replies and forwards stay linked to their thread.
 		message := &email.UserEmail{
-			From:    email.Address{Address: from},
-			ReplyTo: replyTo,
-			To:      toAddresses,
-			Cc:      ccAddresses,
-			Bcc:     bccAddresses,
-			Subject: emailMsg.Subject,
-			Date:    time.Now().UTC(),
-			Text:    emailMsg.Text,
-			HTML:    emailMsg.HTML,
+			From:       email.Address{Address: from},
+			ReplyTo:    replyTo,
+			To:         toAddresses,
+			Cc:         ccAddresses,
+			Bcc:        bccAddresses,
+			Subject:    emailMsg.Subject,
+			Date:       time.Now().UTC(),
+			Text:       emailMsg.Text,
+			HTML:       emailMsg.HTML,
+			MessageID:  emailMsg.MessageID,
+			InReplyTo:  emailMsg.InReplyTo,
+			References: emailMsg.References,
 		}
 
 		// Send the email
@@ -1651,9 +1652,9 @@ func (h *Handler) toJMAPEmail(ctx context.Context, listed *email.ListedEmail) (*
 		Keywords:      keywords,
 		Size:          int(e.Size),
 		ReceivedAt:    receivedAt,
-		MessageID:     []string{}, // Would need to parse from headers
-		InReplyTo:     []string{},
-		References:    []string{},
+		MessageID:     messageIDs(e.MessageID),
+		InReplyTo:     e.InReplyTo,
+		References:    e.References,
 		Sender:        from, // Use From as Sender for simplicity
 		From:          from,
 		To:            to,

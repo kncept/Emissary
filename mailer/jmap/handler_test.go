@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -484,58 +485,258 @@ func TestEmailSubmissionSetForwardsHTMLBody(t *testing.T) {
 	}
 }
 
-// TestEmailSubmissionSetFromVerification exercises the From rules directly at
-// the JMAP layer: the address must be the caller's own account, unless the
-// caller has the masquerade permission.
-func TestEmailSubmissionSetFromVerification(t *testing.T) {
+// TestEmailSubmissionSetCarriesThreadHeaders checks that In-Reply-To and
+// References from the submitted draft reach the sender, so delivered replies
+// stay linked to their thread.
+func TestEmailSubmissionSetCarriesThreadHeaders(t *testing.T) {
+	const accountID = "alice@example.com"
+	store := storage.NewMemoryStorage()
+	addTestEmail(store, "draft1", accountID, "inbox", &email.UserEmail{
+		From:       email.Address{Address: accountID},
+		To:         []email.Address{{Address: "bob@example.com"}},
+		Subject:    "RE: Hello",
+		Text:       "my reply",
+		MessageID:  "<reply-1@example.com>",
+		InReplyTo:  []string{"<original-1@example.com>"},
+		References: []string{"<first@example.com>", "<original-1@example.com>"},
+	})
+	capture := &recordingSender{}
+	handler := NewHandler(store, metadata.NewMemoryMetadata(),
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		capture)
+
+	ctx := ContextWithClaims(context.Background(), &auth.Claims{Subject: accountID})
+	args := json.RawMessage(fmt.Sprintf(
+		`{"accountId":%q,"create":{"s1":{"identityId":"primary","emailId":"draft1"}}}`,
+		accountID))
+	if _, err := handler.EmailSubmissionSet(ctx, accountID, args); err != nil {
+		t.Fatalf("EmailSubmissionSet() error = %v", err)
+	}
+	if len(capture.messages) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(capture.messages))
+	}
+	msg := capture.messages[0]
+	if len(msg.InReplyTo) != 1 || msg.InReplyTo[0] != "<original-1@example.com>" {
+		t.Errorf("In-Reply-To = %v, want [<original-1@example.com>]", msg.InReplyTo)
+	}
+	if len(msg.References) != 2 || msg.References[0] != "<first@example.com>" || msg.References[1] != "<original-1@example.com>" {
+		t.Errorf("References = %v, want [<first@example.com> <original-1@example.com>]", msg.References)
+	}
+	if msg.MessageID != "<reply-1@example.com>" {
+		t.Errorf("Message-ID = %q, want <reply-1@example.com>", msg.MessageID)
+	}
+}
+
+// TestEmailSetCreateLocksFromAndGeneratesMessageID checks that a created draft
+// takes its From from the authenticated user (or the masquerade target)
+// regardless of the client's "from", and gets a Message-ID at create time.
+func TestEmailSetCreateLocksFromAndGeneratesMessageID(t *testing.T) {
 	const (
-		accountID = "alice@example.com"
-		draftFrom = "bob@example.com"
+		caller = "alice@example.com"
+		target = "bob@example.com"
+	)
+
+	t.Run("own account ignores the client From", func(t *testing.T) {
+		store := storage.NewMemoryStorage()
+		handler := NewHandler(store, metadata.NewMemoryMetadata(),
+			usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+			&recordingSender{})
+		ctx := ContextWithClaims(context.Background(), &auth.Claims{Subject: caller})
+		args := json.RawMessage(fmt.Sprintf(
+			`{"accountId":%q,"create":{"c1":{"from":[{"name":"","email":"carol@example.com"}],"to":[{"name":"","email":"dave@example.com"}],"subject":"s","bodyValues":{"text1":{"value":"hi"}},"textBody":[{"partId":"text1","size":2}]}}}`,
+			caller))
+		result, err := handler.EmailSet(ctx, caller, args)
+		if err != nil {
+			t.Fatalf("EmailSet() error = %v", err)
+		}
+		var resp struct {
+			Created map[string]struct {
+				ID string `json:"id"`
+			} `json:"created"`
+		}
+		if err := json.Unmarshal(result, &resp); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		id, ok := resp.Created["c1"]
+		if !ok {
+			t.Fatalf("created = %+v, want c1", resp.Created)
+		}
+		listed, err := store.GetEmail(ctx, id.ID)
+		if err != nil || listed.Email == nil {
+			t.Fatalf("GetEmail() = %+v, %v", listed, err)
+		}
+		if got := listed.Email.From.Address; got != caller {
+			t.Errorf("draft From = %q, want %q", got, caller)
+		}
+		if listed.Email.MessageID == "" || !strings.HasSuffix(listed.Email.MessageID, "@example.com>") {
+			t.Errorf("draft Message-ID = %q, want a generated id on the caller's domain", listed.Email.MessageID)
+		}
+	})
+
+	t.Run("masquerade uses the target account", func(t *testing.T) {
+		store := storage.NewMemoryStorage()
+		handler := NewHandler(store, metadata.NewMemoryMetadata(),
+			usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+			&recordingSender{})
+		ctx := ContextWithClaims(context.Background(), &auth.Claims{Subject: caller, EmissaryUserManagement: true})
+		args := json.RawMessage(fmt.Sprintf(
+			`{"accountId":%q,"create":{"c1":{"from":[{"name":"","email":%q}],"to":[{"name":"","email":"dave@example.com"}],"subject":"s","bodyValues":{"text1":{"value":"hi"}},"textBody":[{"partId":"text1","size":2}]}}}`,
+			target, caller))
+		result, err := handler.EmailSet(ctx, target, args)
+		if err != nil {
+			t.Fatalf("EmailSet() error = %v", err)
+		}
+		var resp struct {
+			Created map[string]struct {
+				ID string `json:"id"`
+			} `json:"created"`
+		}
+		if err := json.Unmarshal(result, &resp); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		id, ok := resp.Created["c1"]
+		if !ok {
+			t.Fatalf("created = %+v, want c1", resp.Created)
+		}
+		listed, err := store.GetEmail(ctx, id.ID)
+		if err != nil || listed.Email == nil {
+			t.Fatalf("GetEmail() = %+v, %v", listed, err)
+		}
+		if got := listed.Email.From.Address; got != target {
+			t.Errorf("draft From = %q, want %q", got, target)
+		}
+		if !strings.HasSuffix(listed.Email.MessageID, "@example.com>") {
+			t.Errorf("draft Message-ID = %q, want one on the target's domain", listed.Email.MessageID)
+		}
+	})
+}
+
+// TestEmailGetExposesThreadHeaders checks that Email/get reports the
+// messageId, inReplyTo and references properties for replies and forwards.
+func TestEmailGetExposesThreadHeaders(t *testing.T) {
+	const accountID = "alice@example.com"
+	store := storage.NewMemoryStorage()
+	addTestEmail(store, "email-1", accountID, "inbox", &email.UserEmail{
+		From:       email.Address{Address: "bob@example.com"},
+		Subject:    "Hello",
+		Text:       "body",
+		MessageID:  "<original-1@example.com>",
+		InReplyTo:  []string{"<first@example.com>"},
+		References: []string{"<first@example.com>", "<original-1@example.com>"},
+	})
+	handler := NewHandler(store, metadata.NewMemoryMetadata(),
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		&recordingSender{})
+
+	args := json.RawMessage(fmt.Sprintf(
+		`{"accountId":%q,"ids":["email-1"]}`, accountID))
+	result, err := handler.EmailGet(context.Background(), accountID, args)
+	if err != nil {
+		t.Fatalf("EmailGet() error = %v", err)
+	}
+	var resp struct {
+		List []struct {
+			MessageID  []string `json:"messageId"`
+			InReplyTo  []string `json:"inReplyTo"`
+			References []string `json:"references"`
+		} `json:"list"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.List) != 1 {
+		t.Fatalf("list = %+v, want one email", resp.List)
+	}
+	got := resp.List[0]
+	if len(got.MessageID) != 1 || got.MessageID[0] != "<original-1@example.com>" {
+		t.Errorf("messageId = %v, want [<original-1@example.com>]", got.MessageID)
+	}
+	if len(got.InReplyTo) != 1 || got.InReplyTo[0] != "<first@example.com>" {
+		t.Errorf("inReplyTo = %v, want [<first@example.com>]", got.InReplyTo)
+	}
+	if len(got.References) != 2 || got.References[0] != "<first@example.com>" || got.References[1] != "<original-1@example.com>" {
+		t.Errorf("references = %v, want [<first@example.com> <original-1@example.com>]", got.References)
+	}
+}
+
+// TestEmailSubmissionSetLocksFrom exercises the locked-From rule at the JMAP
+// layer: submissions always send as the caller's own account, or as the target
+// account when a User Manager masquerades as it. Client-supplied senders
+// (draft From header and envelope mailFrom) are ignored.
+func TestEmailSubmissionSetLocksFrom(t *testing.T) {
+	const (
+		caller     = "alice@example.com"
+		target     = "bob@example.com"
+		forgedFrom = "carol@example.com"
+		nonEmail   = "admin"
 	)
 
 	tests := []struct {
-		name          string
-		claims        *auth.Claims
-		from          string
-		wantForbidden bool
-		wantFrom      string
+		name      string
+		claims    *auth.Claims
+		accountID string
+		draftFrom string
+		mailFrom  string
+		wantError string
+		wantFrom  string
 	}{
 		{
-			name:     "own address",
-			claims:   &auth.Claims{Subject: accountID},
-			from:     accountID,
-			wantFrom: accountID,
+			name:      "sends as the caller's own account",
+			claims:    &auth.Claims{Subject: caller},
+			accountID: caller,
+			wantFrom:  caller,
 		},
 		{
-			name:          "forged address",
-			claims:        &auth.Claims{Subject: accountID},
-			from:          draftFrom,
-			wantForbidden: true,
+			name:      "ignores a forged draft From header",
+			claims:    &auth.Claims{Subject: caller},
+			accountID: caller,
+			draftFrom: forgedFrom,
+			wantFrom:  caller,
 		},
 		{
-			name:     "user manager may masquerade",
-			claims:   &auth.Claims{Subject: accountID, EmissaryUserManagement: true},
-			from:     draftFrom,
-			wantFrom: draftFrom,
+			name:      "ignores the envelope mailFrom",
+			claims:    &auth.Claims{Subject: caller},
+			accountID: caller,
+			mailFrom:  forgedFrom,
+			wantFrom:  caller,
 		},
 		{
-			name:          "system manager alone may not masquerade",
-			claims:        &auth.Claims{Subject: accountID, SystemManager: true},
-			from:          draftFrom,
-			wantForbidden: true,
+			name:      "user manager masquerades as the target account",
+			claims:    &auth.Claims{Subject: caller, EmissaryUserManagement: true},
+			accountID: target,
+			draftFrom: caller,
+			wantFrom:  target,
 		},
 		{
-			name:     "no claims falls back to account",
-			from:     accountID,
-			wantFrom: accountID,
+			name:      "system manager alone does not masquerade",
+			claims:    &auth.Claims{Subject: caller, SystemManager: true},
+			accountID: caller,
+			draftFrom: forgedFrom,
+			wantFrom:  caller,
+		},
+		{
+			name:      "no claims falls back to the account",
+			accountID: caller,
+			draftFrom: forgedFrom,
+			wantFrom:  caller,
+		},
+		{
+			name:      "account without an email address cannot send",
+			claims:    &auth.Claims{Subject: nonEmail},
+			accountID: nonEmail,
+			wantError: "invalidProperties",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := storage.NewMemoryStorage()
-			addTestEmail(store, "draft1", accountID, "inbox", &email.UserEmail{
-				From:    email.Address{Address: tc.from},
+			draftFrom := tc.draftFrom
+			if draftFrom == "" {
+				draftFrom = tc.accountID
+			}
+			addTestEmail(store, "draft1", tc.accountID, "inbox", &email.UserEmail{
+				From:    email.Address{Address: draftFrom},
 				To:      []email.Address{{Address: "dave@example.com"}},
 				Subject: "subject",
 				Text:    "body",
@@ -549,10 +750,16 @@ func TestEmailSubmissionSetFromVerification(t *testing.T) {
 			if tc.claims != nil {
 				ctx = ContextWithClaims(ctx, tc.claims)
 			}
+			create := `{"identityId":"primary","emailId":"draft1"}`
+			if tc.mailFrom != "" {
+				create = fmt.Sprintf(
+					`{"identityId":"primary","emailId":"draft1","envelope":{"mailFrom":{"email":%q},"rcptTo":[{"email":"dave@example.com"}]}}`,
+					tc.mailFrom)
+			}
 			args := json.RawMessage(fmt.Sprintf(
-				`{"accountId":%q,"create":{"s1":{"identityId":"primary","emailId":"draft1"}}}`,
-				accountID))
-			result, err := handler.EmailSubmissionSet(ctx, accountID, args)
+				`{"accountId":%q,"create":{"s1":%s}}`,
+				tc.accountID, create))
+			result, err := handler.EmailSubmissionSet(ctx, tc.accountID, args)
 			if err != nil {
 				t.Fatalf("EmailSubmissionSet() error = %v", err)
 			}
@@ -566,13 +773,13 @@ func TestEmailSubmissionSetFromVerification(t *testing.T) {
 				t.Fatalf("unmarshal response: %v", err)
 			}
 
-			if tc.wantForbidden {
+			if tc.wantError != "" {
 				problem, ok := resp.NotCreated["s1"]
-				if !ok || problem.Type != "forbidden" {
-					t.Fatalf("notCreated = %+v, want forbidden", resp.NotCreated)
+				if !ok || problem.Type != tc.wantError {
+					t.Fatalf("notCreated = %+v, want type %q", resp.NotCreated, tc.wantError)
 				}
 				if len(capture.messages) != 0 {
-					t.Fatalf("message was sent despite forbidden From: %+v", capture.messages)
+					t.Fatalf("message was sent despite rejected From: %+v", capture.messages)
 				}
 				return
 			}
@@ -587,12 +794,12 @@ func TestEmailSubmissionSetFromVerification(t *testing.T) {
 	}
 }
 
-// TestEmailSubmissionSetMasqueradeReplyTo checks that a submission sent on
-// behalf of another account always uses the From address for replies.
+// TestEmailSubmissionSetMasqueradeReplyTo checks that a submission masquerading
+// as another account always uses the From address for replies.
 func TestEmailSubmissionSetMasqueradeReplyTo(t *testing.T) {
 	const (
-		accountID = "alice@example.com"
-		from      = "bob@example.com"
+		caller = "alice@example.com"
+		target = "bob@example.com"
 	)
 
 	tests := []struct {
@@ -601,9 +808,9 @@ func TestEmailSubmissionSetMasqueradeReplyTo(t *testing.T) {
 		wantError   string
 		wantReplyTo []string
 	}{
-		{name: "default Reply-To to From", wantReplyTo: []string{from}},
-		{name: "matching Reply-To", replyTo: []string{from}, wantReplyTo: []string{from}},
-		{name: "conflicting Reply-To", replyTo: []string{"alice@example.com"}, wantError: "invalidProperties"},
+		{name: "default Reply-To to From", wantReplyTo: []string{target}},
+		{name: "matching Reply-To", replyTo: []string{target}, wantReplyTo: []string{target}},
+		{name: "conflicting Reply-To", replyTo: []string{caller}, wantError: "invalidProperties"},
 	}
 
 	for _, tc := range tests {
@@ -613,8 +820,8 @@ func TestEmailSubmissionSetMasqueradeReplyTo(t *testing.T) {
 			for _, addr := range tc.replyTo {
 				replyTo = append(replyTo, email.Address{Address: addr})
 			}
-			addTestEmail(store, "draft1", accountID, "inbox", &email.UserEmail{
-				From:    email.Address{Address: from},
+			addTestEmail(store, "draft1", target, "inbox", &email.UserEmail{
+				From:    email.Address{Address: target},
 				ReplyTo: replyTo,
 				To:      []email.Address{{Address: "dave@example.com"}},
 				Subject: "subject",
@@ -626,13 +833,13 @@ func TestEmailSubmissionSetMasqueradeReplyTo(t *testing.T) {
 				capture)
 
 			ctx := ContextWithClaims(context.Background(), &auth.Claims{
-				Subject:                accountID,
+				Subject:                caller,
 				EmissaryUserManagement: true,
 			})
 			args := json.RawMessage(fmt.Sprintf(
 				`{"accountId":%q,"create":{"s1":{"identityId":"primary","emailId":"draft1"}}}`,
-				accountID))
-			result, err := handler.EmailSubmissionSet(ctx, accountID, args)
+				target))
+			result, err := handler.EmailSubmissionSet(ctx, target, args)
 			if err != nil {
 				t.Fatalf("EmailSubmissionSet() error = %v", err)
 			}
@@ -658,6 +865,9 @@ func TestEmailSubmissionSetMasqueradeReplyTo(t *testing.T) {
 
 			if len(resp.Created) != 1 || len(capture.messages) != 1 {
 				t.Fatalf("created = %+v, sent = %+v, want one of each", resp.Created, capture.messages)
+			}
+			if got := capture.messages[0].From.Address; got != target {
+				t.Errorf("sent From = %q, want %q", got, target)
 			}
 			got := capture.messages[0].ReplyTo
 			if len(got) != len(tc.wantReplyTo) {

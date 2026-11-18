@@ -185,7 +185,7 @@ func (s *MtaSender) deliver(ctx context.Context, envelopeFrom, helloName string,
 
 	// Serialize once so every MX host receives an identical message (including
 	// the same Message-ID). Bcc appears only in the SMTP envelope.
-	wire := s.buildWireMessage(envelopeFrom, helloName, message)
+	wire := BuildWireMessage(message, envelopeFrom, helloName)
 
 	domains := make([]string, 0, len(recipients))
 	for domain := range recipients {
@@ -342,7 +342,13 @@ func bareAddress(value string) string {
 	return value
 }
 
-func (s *MtaSender) buildWireMessage(envelopeFrom, helloName string, message *email.UserEmail) []byte {
+// BuildWireMessage renders message as an RFC 5322 wire-format byte string.
+// It is shared by every wire sender so that each delivery path emits the same
+// headers and body for the same message. envelopeFrom and helloName only
+// determine the domain part of a generated Message-ID; a message that already
+// carries a Message-ID reuses it. Bcc appears only in the delivery envelope,
+// never in the headers.
+func BuildWireMessage(message *email.UserEmail, envelopeFrom, helloName string) []byte {
 	from := message.From
 
 	var b strings.Builder
@@ -364,7 +370,17 @@ func (s *MtaSender) buildWireMessage(envelopeFrom, helloName string, message *em
 		date = time.Now().UTC()
 	}
 	fmt.Fprintf(&b, "Date: %s\r\n", date.UTC().Format(time.RFC1123Z))
-	fmt.Fprintf(&b, "Message-ID: <%s@%s>\r\n", randomToken(16), s.messageDomain(envelopeFrom, helloName))
+	if messageID := strings.TrimSpace(message.MessageID); messageID != "" {
+		fmt.Fprintf(&b, "Message-ID: %s\r\n", headerValue(messageID))
+	} else {
+		fmt.Fprintf(&b, "Message-ID: <%s@%s>\r\n", randomToken(16), messageDomain(envelopeFrom, helloName))
+	}
+	if len(message.InReplyTo) > 0 {
+		fmt.Fprintf(&b, "In-Reply-To: %s\r\n", headerValue(strings.Join(message.InReplyTo, " ")))
+	}
+	if len(message.References) > 0 {
+		fmt.Fprintf(&b, "References: %s\r\n", headerValue(strings.Join(message.References, " ")))
+	}
 	b.WriteString("MIME-Version: 1.0\r\n")
 
 	text := message.Text
@@ -392,7 +408,9 @@ func (s *MtaSender) buildWireMessage(envelopeFrom, helloName string, message *em
 	return []byte(b.String())
 }
 
-func (s *MtaSender) messageDomain(envelopeFrom, helloName string) string {
+// messageDomain chooses the domain part for a generated Message-ID: the
+// envelope sender's domain, falling back to the EHLO/HELO identity.
+func messageDomain(envelopeFrom, helloName string) string {
 	if _, domain, ok := strings.Cut(envelopeFrom, "@"); ok && domain != "" {
 		return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
 	}

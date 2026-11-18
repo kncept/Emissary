@@ -12,9 +12,10 @@ export function htmlToText(html: string): string {
     block.insertAdjacentText('afterend', '\n');
   });
 
-  return (doc.body.textContent || '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  // No collapsing of long runs of newlines here: reply and forward bodies use
+  // deliberate blank lines (six above the quote separator, one below) that
+  // the plain-text alternative must carry through exactly.
+  return (doc.body.textContent || '').trim();
 }
 
 export function isHtmlEmpty(html: string): boolean {

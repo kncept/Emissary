@@ -728,55 +728,20 @@ func TestBlankAdminPasswordDisablesAdminLogin(t *testing.T) {
 	}
 }
 
+// TestSendEmailFromRules verifies that the From address is locked to the
+// authenticated account (or the masquerade target account for a user
+// manager) and that a client-supplied From is ignored.
 func TestSendEmailFromRules(t *testing.T) {
 	h, store, sender := newHandlerForTest(t, "secret")
 	addEmail(store, "original", "alice@example.com", "bob@example.com")
 
 	_, userToken, _ := login(t, h, "bob@example.com", "anything")
 
-	// First create the email
-	emailCreateResp := jmapRequest(t, h, userToken, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
-		{"Email/set", map[string]interface{}{
-			"accountId": "bob@example.com",
-			"create": map[string]interface{}{
-				"c1": map[string]interface{}{
-					"mailboxIds": map[string]bool{"drafts": true},
-					"keywords":   map[string]bool{},
-					"from":       []map[string]string{{"email": "bob@example.com", "name": ""}},
-					"to":         []map[string]string{{"email": "dave@example.com", "name": ""}},
-					"subject":    "hello",
-					"textBody":   []map[string]interface{}{{"partId": "text1", "type": "text/plain", "size": 4}},
-					"bodyValues": map[string]interface{}{"text1": map[string]interface{}{"value": "body", "isEncodingProblem": false, "isTruncated": false}},
-				},
-			},
-		}, "e1"},
-	})
+	// Bob's draft requests a forged From; the server stores and sends his
+	// own address instead.
+	createdEmailID := createDraftForSend(t, h, userToken, "bob@example.com", "carol@example.com", "dave@example.com")
 
-	// Parse the created email ID
-	var createdEmailID string
-	methodResponsesRaw, _ := emailCreateResp["methodResponses"].([]interface{})
-	for _, mr := range methodResponsesRaw {
-		call := mr.([]interface{})
-		if len(call) >= 2 && call[0] == "Email/set" {
-			result := call[1].(map[string]interface{})
-			if created, ok := result["created"].(map[string]interface{}); ok {
-				for _, v := range created {
-					if emailData, ok := v.(map[string]interface{}); ok {
-						if id, ok := emailData["id"].(string); ok {
-							createdEmailID = id
-							break
-						}
-					}
-				}
-			}
-			break
-		}
-	}
-	if createdEmailID == "" {
-		t.Fatal("failed to create email")
-	}
-
-	// Now submit the email (ordinary user - no custom from allowed)
+	// Submit the email (ordinary user - From is locked to their own address)
 	jmapRequest(t, h, userToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
 		{"EmailSubmission/set", map[string]interface{}{
 			"accountId": "bob@example.com",
@@ -784,7 +749,6 @@ func TestSendEmailFromRules(t *testing.T) {
 				"s1": map[string]interface{}{
 					"identityId": "primary",
 					"emailId":    createdEmailID,
-					// No envelope - ordinary users can't set custom from
 				},
 			},
 			"onSuccessUpdateEmail": map[string]interface{}{
@@ -803,58 +767,17 @@ func TestSendEmailFromRules(t *testing.T) {
 
 	_, adminToken, _ := login(t, h, "admin", "secret")
 
-	// Admin send with explicit from
-	adminEmailCreateResp := jmapRequest(t, h, adminToken, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
-		{"Email/set", map[string]interface{}{
-			"accountId": "admin",
-			"create": map[string]interface{}{
-				"c1": map[string]interface{}{
-					"mailboxIds": map[string]bool{"drafts": true},
-					"keywords":   map[string]bool{},
-					"from":       []map[string]string{{"email": "dave@example.com", "name": ""}},
-					"to":         []map[string]string{{"email": "alice@example.com", "name": ""}},
-					"subject":    "hello",
-					"textBody":   []map[string]interface{}{{"partId": "text1", "type": "text/plain", "size": 4}},
-					"bodyValues": map[string]interface{}{"text1": map[string]interface{}{"value": "body", "isEncodingProblem": false, "isTruncated": false}},
-				},
-			},
-		}, "e1"},
-	})
-
-	var adminCreatedEmailID string
-	methodResponsesRaw, _ = adminEmailCreateResp["methodResponses"].([]interface{})
-	for _, mr := range methodResponsesRaw {
-		call := mr.([]interface{})
-		if len(call) >= 2 && call[0] == "Email/set" {
-			result := call[1].(map[string]interface{})
-			if created, ok := result["created"].(map[string]interface{}); ok {
-				for _, v := range created {
-					if emailData, ok := v.(map[string]interface{}); ok {
-						if id, ok := emailData["id"].(string); ok {
-							adminCreatedEmailID = id
-							break
-						}
-					}
-				}
-			}
-			break
-		}
-	}
-	if adminCreatedEmailID == "" {
-		t.Fatal("failed to create admin email")
-	}
+	// A user manager masquerades as a different account: the From is locked
+	// to the target account, not the caller.
+	adminCreatedEmailID := createDraftForSend(t, h, adminToken, "carol@example.com", "admin@example.com", "alice@example.com")
 
 	jmapRequest(t, h, adminToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
 		{"EmailSubmission/set", map[string]interface{}{
-			"accountId": "admin",
+			"accountId": "carol@example.com",
 			"create": map[string]interface{}{
 				"s1": map[string]interface{}{
 					"identityId": "primary",
 					"emailId":    adminCreatedEmailID,
-					"envelope": map[string]interface{}{
-						"mailFrom": map[string]string{"email": "dave@example.com"},
-						"rcptTo":   []map[string]string{{"email": "alice@example.com"}},
-					},
 				},
 			},
 			"onSuccessUpdateEmail": map[string]interface{}{
@@ -865,15 +788,15 @@ func TestSendEmailFromRules(t *testing.T) {
 	})
 
 	if len(sender.messages) < 2 {
-		t.Fatal("admin email was not sent")
+		t.Fatal("masqueraded email was not sent")
 	}
-	if got := sender.messages[len(sender.messages)-1].From.Address; got != "dave@example.com" {
-		t.Errorf("admin from = %q, want dave@example.com", got)
+	if got := sender.messages[len(sender.messages)-1].From.Address; got != "carol@example.com" {
+		t.Errorf("masqueraded from = %q, want carol@example.com", got)
 	}
 
-	// Replying without an explicit From defaults to the original recipient.
-	// First get the original email to find its ID
-	emails := getEmailsJMAP(t, h, adminToken, "bob@example.com")
+	// Replying without an explicit From stays locked to the user's own
+	// address. First get the original email to find its ID.
+	emails := getEmailsJMAP(t, h, userToken, "bob@example.com")
 	var originalID string
 	for _, e := range emails {
 		if e.ID == "original" {
@@ -886,14 +809,14 @@ func TestSendEmailFromRules(t *testing.T) {
 	}
 
 	// Create reply email
-	replyCreateResp := jmapRequest(t, h, adminToken, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
+	replyCreateResp := jmapRequest(t, h, userToken, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
 		{"Email/set", map[string]interface{}{
-			"accountId": "admin",
+			"accountId": "bob@example.com",
 			"create": map[string]interface{}{
 				"c1": map[string]interface{}{
 					"mailboxIds": map[string]bool{"drafts": true},
 					"keywords":   map[string]bool{},
-					"from":       []map[string]string{{"email": "", "name": ""}},
+					"from":       []map[string]string{{"email": "alice@example.com", "name": ""}},
 					"to":         []map[string]string{{"email": "alice@example.com", "name": ""}},
 					"subject":    "re",
 					"inReplyTo":  []string{originalID},
@@ -906,7 +829,7 @@ func TestSendEmailFromRules(t *testing.T) {
 	})
 
 	var replyCreatedEmailID string
-	methodResponsesRaw, _ = replyCreateResp["methodResponses"].([]interface{})
+	methodResponsesRaw, _ := replyCreateResp["methodResponses"].([]interface{})
 	for _, mr := range methodResponsesRaw {
 		call := mr.([]interface{})
 		if len(call) >= 2 && call[0] == "Email/set" {
@@ -929,14 +852,14 @@ func TestSendEmailFromRules(t *testing.T) {
 	}
 
 	// Submit reply
-	jmapRequest(t, h, adminToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
+	jmapRequest(t, h, userToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
 		{"EmailSubmission/set", map[string]interface{}{
-			"accountId": "admin",
+			"accountId": "bob@example.com",
 			"create": map[string]interface{}{
 				"s1": map[string]interface{}{
 					"identityId": "primary",
 					"emailId":    replyCreatedEmailID,
-					// No envelope - should default to original recipient
+					// No envelope - From stays locked to bob
 				},
 			},
 			"onSuccessUpdateEmail": map[string]interface{}{
@@ -947,10 +870,10 @@ func TestSendEmailFromRules(t *testing.T) {
 	})
 
 	if len(sender.messages) < 3 {
-		t.Fatal("admin reply email was not sent")
+		t.Fatal("reply email was not sent")
 	}
 	if got := sender.messages[len(sender.messages)-1].From.Address; got != "bob@example.com" {
-		t.Errorf("admin reply from = %q, want bob@example.com", got)
+		t.Errorf("reply from = %q, want bob@example.com", got)
 	}
 }
 
@@ -993,13 +916,27 @@ func createDraftForSend(t *testing.T, h http.Handler, token, accountID, from, to
 	return ""
 }
 
+// TestSendEmailFromVerification verifies that a forged From in a draft is
+// rewritten to the sender's own address at creation time, so submission
+// always sends as the authenticated account (or the masquerade target).
 func TestSendEmailFromVerification(t *testing.T) {
-	h, _, capture := newHandlerForTest(t, "secret")
+	h, store, capture := newHandlerForTest(t, "secret")
 	_, bobToken, _ := login(t, h, "bob@example.com", "anything")
 	_, adminToken, _ := login(t, h, "admin", "secret")
 
-	// An ordinary user cannot send as somebody else.
+	// An ordinary user's forged From is replaced with their own address,
+	// and the submission succeeds as that address.
 	bobDraft := createDraftForSend(t, h, bobToken, "bob@example.com", "carol@example.com", "dave@example.com")
+	// The stored draft itself carries the locked From.
+	bobClaims := decodeClaims(t, bobToken)
+	bobSID, _ := bobClaims["sid"].(string)
+	storedDraft, err := store.GetDraft(context.Background(), bobSID, bobDraft)
+	if err != nil || storedDraft == nil {
+		t.Fatalf("failed to load stored draft: %v", err)
+	}
+	if got := storedDraft.From.Address; got != "bob@example.com" {
+		t.Errorf("stored draft From = %q, want bob@example.com", got)
+	}
 	resp := jmapRequest(t, h, bobToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
 		{"EmailSubmission/set", map[string]interface{}{
 			"accountId": "bob@example.com",
@@ -1008,19 +945,18 @@ func TestSendEmailFromVerification(t *testing.T) {
 			},
 		}, "s1"},
 	})
-	problem, ok := submissionNotCreated(t, resp)["s1"].(map[string]interface{})
-	if !ok || problem["type"] != "forbidden" {
-		t.Fatalf("forged From should be forbidden, got %v", submissionNotCreated(t, resp))
+	if notCreated := submissionNotCreated(t, resp); len(notCreated) > 0 {
+		t.Fatalf("submission failed: %v", notCreated)
 	}
-	if len(capture.messages) != 0 {
-		t.Fatalf("forged From should not be sent, got %d messages", len(capture.messages))
+	if len(capture.messages) != 1 || capture.messages[0].From.Address != "bob@example.com" {
+		t.Fatalf("expected one message from bob@example.com, got %+v", capture.messages)
 	}
 
-	// A user with masquerade permission can send with a different From.
-	adminDraft := createDraftForSend(t, h, adminToken, "admin", "carol@example.com", "dave@example.com")
+	// A user with masquerade permission sends as the target account.
+	adminDraft := createDraftForSend(t, h, adminToken, "carol@example.com", "admin@example.com", "dave@example.com")
 	resp = jmapRequest(t, h, adminToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
 		{"EmailSubmission/set", map[string]interface{}{
-			"accountId": "admin",
+			"accountId": "carol@example.com",
 			"create": map[string]interface{}{
 				"s1": map[string]interface{}{"identityId": "primary", "emailId": adminDraft},
 			},
@@ -1029,8 +965,8 @@ func TestSendEmailFromVerification(t *testing.T) {
 	if notCreated := submissionNotCreated(t, resp); len(notCreated) > 0 {
 		t.Fatalf("masquerading submission failed: %v", notCreated)
 	}
-	if len(capture.messages) != 1 || capture.messages[0].From.Address != "carol@example.com" {
-		t.Fatalf("expected one message from carol@example.com, got %+v", capture.messages)
+	if len(capture.messages) != 2 || capture.messages[1].From.Address != "carol@example.com" {
+		t.Fatalf("expected second message from carol@example.com, got %+v", capture.messages)
 	}
 }
 

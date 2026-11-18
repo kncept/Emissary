@@ -901,3 +901,139 @@ No boundary
 		t.Errorf("ErrorSummary should mention multipart: %s", summary)
 	}
 }
+
+func TestGenerateMessageID(t *testing.T) {
+	id := GenerateMessageID("example.com")
+	if !strings.HasPrefix(id, "<") || !strings.HasSuffix(id, ">") {
+		t.Fatalf("Message-ID = %q, want wrapped in angle brackets", id)
+	}
+	local, domain, ok := strings.Cut(strings.Trim(id, "<>"), "@")
+	if !ok {
+		t.Fatalf("Message-ID = %q, want a local@domain token", id)
+	}
+	if domain != "example.com" {
+		t.Errorf("domain = %q, want example.com", domain)
+	}
+	if len(local) != 32 {
+		t.Errorf("local part = %q, want 32 hex chars", local)
+	}
+	for _, c := range local {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			t.Errorf("local part = %q, want lowercase hex only", local)
+			break
+		}
+	}
+
+	if other := GenerateMessageID("example.com"); other == id {
+		t.Error("GenerateMessageID should return a unique value on each call")
+	}
+
+	if fallback := GenerateMessageID(""); !strings.HasSuffix(fallback, "@emissary.local>") {
+		t.Errorf("Message-ID = %q, want @emissary.local for empty domain", fallback)
+	}
+	if normalized := GenerateMessageID("  Example.COM  "); !strings.HasSuffix(normalized, "@example.com>") {
+		t.Errorf("Message-ID = %q, want trimmed lowercase domain", normalized)
+	}
+}
+
+func TestRawFromUserEmail_ThreadHeaders(t *testing.T) {
+	e := &UserEmail{
+		From:      Address{Name: "Sender Name", Address: "sender@example.com"},
+		ReplyTo:   []Address{{Address: "replyto@example.com"}},
+		To:        []Address{{Address: "a@example.com"}, {Address: "b@example.com"}},
+		Cc:        []Address{{Name: "Cc Name", Address: "cc@example.com"}},
+		Bcc:       []Address{{Address: "hidden@example.com"}},
+		Subject:   "Thread Test",
+		Date:      time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
+		Text:      "New text",
+		MessageID: "<new@example.com>",
+		InReplyTo: []string{"<orig@example.com>"},
+		References: []string{
+			"<root@example.com>",
+			"<orig@example.com>",
+			"<new@example.com>",
+		},
+	}
+
+	parsed, err := Parse("test-id", strings.NewReader(string(RawFromUserEmail(e))))
+	if err != nil {
+		t.Fatalf("Parse() of RawFromUserEmail() error = %v", err)
+	}
+
+	if parsed.From.Address != "sender@example.com" || parsed.From.Name != "Sender Name" {
+		t.Errorf("From = %v, want {Sender Name, sender@example.com}", parsed.From)
+	}
+	if len(parsed.To) != 2 || parsed.To[0].Address != "a@example.com" || parsed.To[1].Address != "b@example.com" {
+		t.Errorf("To = %v, want [a@example.com b@example.com]", parsed.To)
+	}
+	if len(parsed.Cc) != 1 || parsed.Cc[0].Address != "cc@example.com" {
+		t.Errorf("Cc = %v, want [cc@example.com]", parsed.Cc)
+	}
+	if len(parsed.ReplyTo) != 1 || parsed.ReplyTo[0].Address != "replyto@example.com" {
+		t.Errorf("ReplyTo = %v, want [replyto@example.com]", parsed.ReplyTo)
+	}
+	if len(parsed.Bcc) != 0 {
+		t.Errorf("Bcc = %v, want empty (Bcc must never be rendered)", parsed.Bcc)
+	}
+	if parsed.MessageID != "<new@example.com>" {
+		t.Errorf("MessageID = %q, want <new@example.com>", parsed.MessageID)
+	}
+	if len(parsed.InReplyTo) != 1 || parsed.InReplyTo[0] != "<orig@example.com>" {
+		t.Errorf("InReplyTo = %v, want [<orig@example.com>]", parsed.InReplyTo)
+	}
+	if len(parsed.References) != 3 || parsed.References[0] != "<root@example.com>" || parsed.References[1] != "<orig@example.com>" || parsed.References[2] != "<new@example.com>" {
+		t.Errorf("References = %v, want [<root@example.com> <orig@example.com> <new@example.com>]", parsed.References)
+	}
+	if parsed.Text != "New text" {
+		t.Errorf("Text = %q, want 'New text'", parsed.Text)
+	}
+}
+
+func TestRawFromUserEmail_OmitsOptionalHeadersWhenEmpty(t *testing.T) {
+	e := &UserEmail{
+		From:    Address{Address: "sender@example.com"},
+		To:      []Address{{Address: "recipient@example.com"}},
+		Subject: "Minimal",
+		Text:    "Body",
+	}
+
+	parsed, err := Parse("test-id", strings.NewReader(string(RawFromUserEmail(e))))
+	if err != nil {
+		t.Fatalf("Parse() of RawFromUserEmail() error = %v", err)
+	}
+
+	if parsed.MessageID != "" {
+		t.Errorf("MessageID = %q, want empty", parsed.MessageID)
+	}
+	if len(parsed.InReplyTo) != 0 {
+		t.Errorf("InReplyTo = %v, want empty", parsed.InReplyTo)
+	}
+	if len(parsed.References) != 0 {
+		t.Errorf("References = %v, want empty", parsed.References)
+	}
+}
+
+func TestWireFormat_ToUserEmail_ThreadHeaders(t *testing.T) {
+	raw := `From: sender@example.com
+To: recipient@example.com
+Subject: Test
+Date: Mon, 1 Jan 2024 12:00:00 +0000
+Message-ID: <msg2@example.com>
+In-Reply-To: <msg1@example.com>
+References: <msg0@example.com> <msg1@example.com> <msg2@example.com>
+
+Body
+`
+
+	userEmail := ParseWireFormat("test-id", strings.NewReader(raw)).ToUserEmail()
+
+	if userEmail.MessageID != "<msg2@example.com>" {
+		t.Errorf("MessageID = %q, want <msg2@example.com>", userEmail.MessageID)
+	}
+	if len(userEmail.InReplyTo) != 1 || userEmail.InReplyTo[0] != "<msg1@example.com>" {
+		t.Errorf("InReplyTo = %v, want [<msg1@example.com>]", userEmail.InReplyTo)
+	}
+	if len(userEmail.References) != 3 || userEmail.References[2] != "<msg2@example.com>" {
+		t.Errorf("References = %v, want [<msg0@example.com> <msg1@example.com> <msg2@example.com>]", userEmail.References)
+	}
+}

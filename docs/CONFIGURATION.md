@@ -34,10 +34,13 @@ deployed Lambda receives its JWT secret as an ARN.
 | `SENDER` | `aws-ses` when AWS credentials are configured, otherwise `log` | `aws-ses` (alias `ses`), `mta` or `log`. |
 | `MTA_PORT` | `25` | SMTP port used by the `mta` sender (e.g. `1025` for a local mail sink). |
 
-There is no configured From address. From is always the submitting user's own
-address (or the masquerade target's when a User Manager sends on behalf of
-another account). Reply-To is carried on the message and, when masquerading,
-must match From (it defaults to From when omitted).
+There is no configured From address. From is locked to the submitting user's
+own address (or the masquerade target's when a User Manager sends on behalf
+of another account); a From address supplied by the client is ignored.
+Reply-To is carried on the message and, when masquerading, must match From
+(it defaults to From when omitted). `In-Reply-To` and `References` headers
+from the draft are written into the delivered message, and the message's
+stored `Message-ID` is reused on the wire.
 
 `SENDER=mta` delivers directly: for each recipient domain it resolves MX
 records, connects to the preferred mail exchanger on `MTA_PORT` and speaks SMTP.

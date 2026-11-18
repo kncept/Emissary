@@ -8,6 +8,12 @@ export interface Email {
   timestamp: string;
   read: boolean;
   flagged: boolean;
+  /** RFC 5322 Message-ID of the message (with angle brackets). */
+  messageId?: string;
+  /** Original References header values, oldest first. */
+  references?: string[];
+  /** Reply-To addresses; replies go here when present, otherwise to From. */
+  replyTo?: string[];
 }
 
 export interface AuthState {
@@ -32,10 +38,18 @@ export interface LoginResponse {
 export type EmailBodyFormat = 'plain' | 'html';
 
 export interface SendEmailRequest {
-  from?: string;
+  /** Comma-separated To recipients. The server locks From to the
+   * authenticated account, so no From is sent. */
   to: string;
+  /** Comma-separated Cc recipients. */
+  cc?: string;
+  /** Comma-separated Bcc recipients. */
+  bcc?: string;
   subject: string;
   body: string;
   format: EmailBodyFormat;
-  replyToId?: string;
+  /** Message-IDs carried as the In-Reply-To header (usually one). */
+  inReplyTo?: string[];
+  /** Message-IDs carried as the References header, oldest first. */
+  references?: string[];
 }

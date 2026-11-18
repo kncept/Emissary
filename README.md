@@ -49,7 +49,8 @@ and `EmissaryUserManagement: true` for users who may manage accounts. Mail is
 exposed through JMAP as per-user **mailboxes**: ordinary users read only their
 own `accountId`, while a user with `EmissaryUserManagement` can pass another
 account's `accountId` on a JMAP method call to masquerade for support. Mail
-submissions must use the caller's own From address; users with masquerade
-permission may send from another address. See
+submissions are locked to the caller's own From address; a caller with
+masquerade permission sends as the masqueraded account instead, and any
+other client-supplied From is ignored. See
 [API.md](docs/API.md#jmap-mail-operations) and [S3.md](docs/S3.md#bucket-layout)
 for details.

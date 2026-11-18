@@ -328,10 +328,19 @@ describe('auth api', () => {
       return fetchMock;
     }
 
-    async function sentCreateArgs(fetchMock: ReturnType<typeof stubJmapFetch>) {
+    async function sentJmapBody(fetchMock: ReturnType<typeof stubJmapFetch>) {
       const apiCall = fetchMock.mock.calls.find((call) => call[0] === '/api/');
-      const body = JSON.parse(String(apiCall?.[1]?.body));
+      return JSON.parse(String(apiCall?.[1]?.body));
+    }
+
+    async function sentCreateArgs(fetchMock: ReturnType<typeof stubJmapFetch>) {
+      const body = await sentJmapBody(fetchMock);
       return body.methodCalls[0][1].create.create1;
+    }
+
+    async function sentSubmissionArgs(fetchMock: ReturnType<typeof stubJmapFetch>) {
+      const body = await sentJmapBody(fetchMock);
+      return body.methodCalls[1][1];
     }
 
     beforeEach(() => {
@@ -372,6 +381,90 @@ describe('auth api', () => {
       expect(create.htmlBody).toEqual([{ partId: 'html1', type: 'text/html', size: 25 }]);
       expect(create.bodyValues.html1.value).toBe('<p>Hello <b>world</b></p>');
       expect(create.bodyValues.text1.value).toBe('Hello world');
+    });
+
+    it('never sends a From and expands comma-separated recipients', async () => {
+      const { sendEmail } = await importApi();
+      const fetchMock = stubJmapFetch();
+
+      await sendEmail({
+        to: 'bob@example.com, carol@example.com',
+        cc: ' dave@example.com ,',
+        bcc: 'erin@example.com',
+        subject: 'Hi',
+        body: 'Hello',
+        format: 'plain',
+      });
+
+      const create = await sentCreateArgs(fetchMock);
+      expect(create.from).toBeUndefined();
+      expect(create.to).toEqual([
+        { email: 'bob@example.com', name: '' },
+        { email: 'carol@example.com', name: '' },
+      ]);
+      expect(create.cc).toEqual([{ email: 'dave@example.com', name: '' }]);
+      expect(create.bcc).toEqual([{ email: 'erin@example.com', name: '' }]);
+
+      // The envelope covers every recipient, including Bcc.
+      const submission = await sentSubmissionArgs(fetchMock);
+      expect(submission.create.submission1.envelope.rcptTo).toEqual([
+        { email: 'bob@example.com' },
+        { email: 'carol@example.com' },
+        { email: 'dave@example.com' },
+        { email: 'erin@example.com' },
+      ]);
+      expect(submission.create.submission1.envelope.mailFrom).toBeUndefined();
+    });
+
+    it('carries the reply/forward thread headers into the draft', async () => {
+      const { sendEmail } = await importApi();
+      const fetchMock = stubJmapFetch();
+
+      await sendEmail({
+        to: 'alice@example.com',
+        subject: 'RE: Hi',
+        body: 'Replying',
+        format: 'plain',
+        inReplyTo: ['<orig@example.com>'],
+        references: ['<root@example.com>', '<orig@example.com>'],
+      });
+
+      const create = await sentCreateArgs(fetchMock);
+      expect(create.inReplyTo).toEqual(['<orig@example.com>']);
+      expect(create.references).toEqual(['<root@example.com>', '<orig@example.com>']);
+    });
+
+    it('omits thread headers and cc/bcc when not supplied', async () => {
+      const { sendEmail } = await importApi();
+      const fetchMock = stubJmapFetch();
+
+      await sendEmail({
+        to: 'bob@example.com',
+        subject: 'Hi',
+        body: 'Hello',
+        format: 'plain',
+      });
+
+      const create = await sentCreateArgs(fetchMock);
+      expect(create.inReplyTo).toBeUndefined();
+      expect(create.references).toBeUndefined();
+      expect(create.cc).toBeUndefined();
+      expect(create.bcc).toBeUndefined();
+    });
+  });
+
+  describe('parseAddressList', () => {
+    it('splits, trims and drops empty entries', async () => {
+      const { parseAddressList } = await importApi();
+      expect(parseAddressList('a@example.com, b@example.com')).toEqual([
+        'a@example.com',
+        'b@example.com',
+      ]);
+      expect(parseAddressList(' a@example.com ,, c@example.com ,')).toEqual([
+        'a@example.com',
+        'c@example.com',
+      ]);
+      expect(parseAddressList('')).toEqual([]);
     });
   });
 });

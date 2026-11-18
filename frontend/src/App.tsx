@@ -67,8 +67,9 @@ function App() {
                 <Routes>
                   <Route path="/" element={<EmailList />} />
                   <Route path="/email/:id" element={<EmailView />} />
-                  <Route path="/compose" element={<Compose systemManager={auth.systemManager} currentUser={auth.username} />} />
-                  <Route path="/compose/:id" element={<Compose systemManager={auth.systemManager} currentUser={auth.username} />} />
+                  <Route path="/compose" element={<Compose currentUser={auth.username} />} />
+                  <Route path="/compose/:id" element={<Compose mode="reply" currentUser={auth.username} />} />
+                  <Route path="/compose/forward/:id" element={<Compose mode="forward" currentUser={auth.username} />} />
                   <Route path="/settings" element={<Settings auth={auth} />} />
                   <Route
                     path="/support"

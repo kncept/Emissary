@@ -14,4 +14,14 @@ describe('htmlToText', () => {
     expect(isHtmlEmpty('<p><br></p>')).toBe(true);
     expect(isHtmlEmpty('<p>Hello</p>')).toBe(false);
   });
+
+  it('preserves the reply quote layout: six blank lines above and one below the separator', () => {
+    const html =
+      'New text' +
+      '<br>'.repeat(7) +
+      '<div class="emissary-quote-separator">-----</div>' +
+      '<br>' +
+      '<pre class="emissary-quote">Old text</pre>';
+    expect(htmlToText(html)).toBe('New text' + '\n'.repeat(7) + '-----' + '\n\n' + 'Old text');
+  });
 });
