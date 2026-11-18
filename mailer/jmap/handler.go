@@ -581,6 +581,17 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			}
 		}
 
+		var replyTo []email.Address
+		if replyToArr, ok := createMap["replyTo"].([]interface{}); ok {
+			for _, r := range replyToArr {
+				if rm, ok := r.(map[string]interface{}); ok {
+					if address, ok := rm["email"].(string); ok {
+						replyTo = append(replyTo, email.Address{Address: address})
+					}
+				}
+			}
+		}
+
 		subject := ""
 		if s, ok := createMap["subject"].(string); ok {
 			subject = s
@@ -661,6 +672,7 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			AccountID:  accountID,
 			MailboxID:  mailboxID,
 			From:       email.Address{Address: from},
+			ReplyTo:    replyTo,
 			To:         to,
 			Cc:         cc,
 			Bcc:        bcc,
@@ -1000,11 +1012,14 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 		return nil, err
 	}
 
-	// Check whether the user has system management privileges for the
-	// target account.
-	isSystemManager := false
-	if user, err := h.userMgr.Lookup(ctx, accountID); err == nil {
-		isSystemManager = user.SystemManager
+	// The caller's identity, not the account being accessed, decides which
+	// From addresses are allowed. A User Manager (EmissaryUserManagement) can
+	// masquerade as another account and therefore send with another From.
+	claims := ClaimsFromContext(ctx)
+	canMasquerade := claims != nil && claims.EmissaryUserManagement
+	userAccount := accountID
+	if claims != nil && claims.Subject != "" {
+		userAccount = claims.Subject
 	}
 
 	created := make(map[string]interface{})
@@ -1020,37 +1035,40 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 			continue
 		}
 
-		// Determine from address
+		// Resolve the requested From address. The explicit envelope sender
+		// wins, followed by the draft's From header. For replies with no
+		// explicit sender, default to the original recipient.
 		var from string
-		if isSystemManager {
-			// System Managers can use a custom from address from the envelope.
-			if submission.Envelope != nil && submission.Envelope.MailFrom.Email != "" {
-				from = submission.Envelope.MailFrom.Email
-			} else if emailMsg.From.Address != "" {
-				from = emailMsg.From.Address
-			} else {
-				// For replies, try to get the original recipient from the InReplyTo/References
-				var inReplyTo string
-				if len(emailMsg.InReplyTo) > 0 {
-					inReplyTo = emailMsg.InReplyTo[0]
-				} else if len(emailMsg.References) > 0 {
-					inReplyTo = emailMsg.References[0]
-				}
-				if inReplyTo != "" {
-					if original, err := h.storage.GetEmail(ctx, inReplyTo); err == nil && len(original.To) > 0 {
-						from = original.To[0].Address
-					}
-				}
-				if from == "" {
-					from = h.sender.From()
+		if submission.Envelope != nil {
+			from = submission.Envelope.MailFrom.Email
+		}
+		if from == "" {
+			from = emailMsg.From.Address
+		}
+		if from == "" {
+			var inReplyTo string
+			if len(emailMsg.InReplyTo) > 0 {
+				inReplyTo = emailMsg.InReplyTo[0]
+			} else if len(emailMsg.References) > 0 {
+				inReplyTo = emailMsg.References[0]
+			}
+			if inReplyTo != "" {
+				if original, err := h.storage.GetEmail(ctx, inReplyTo); err == nil && len(original.To) > 0 {
+					from = original.To[0].Address
 				}
 			}
-		} else {
-			// Ordinary users must send as themselves
+		}
+		// A JMAP account is normally the user's email address. Fall back to
+		// the configured sender only when the account is not an address (for
+		// example the built-in "admin" account).
+		if from == "" && strings.Contains(accountID, "@") {
 			from = accountID
 		}
+		if from == "" {
+			from = h.sender.From()
+		}
 
-		// Validate from address
+		// Validate the From address syntax.
 		if from != "" {
 			parsed, err := mail.ParseAddress(from)
 			if err != nil {
@@ -1059,8 +1077,40 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 			}
 			from = parsed.Address
 		}
-		if from == "" {
-			from = h.sender.From()
+
+		// A submission may only use the authenticated user's own address,
+		// unless that user is allowed to masquerade as another account.
+		masquerading := from != "" && !strings.EqualFold(from, userAccount)
+		if masquerading && !canMasquerade {
+			notCreated[createID] = map[string]string{
+				"type":        "forbidden",
+				"description": "From address does not match the authenticated user",
+			}
+			continue
+		}
+
+		// When sending on behalf of another account, replies must go back to
+		// the same address that appears in From. Default Reply-To to From when
+		// the client did not set one, and reject a conflicting one.
+		replyTo := append([]email.Address(nil), emailMsg.ReplyTo...)
+		if masquerading {
+			mismatch := false
+			for _, addr := range replyTo {
+				if !strings.EqualFold(addr.Address, from) {
+					mismatch = true
+					break
+				}
+			}
+			if mismatch {
+				notCreated[createID] = map[string]string{
+					"type":        "invalidProperties",
+					"description": "Reply-To must match From when masquerading",
+				}
+				continue
+			}
+			if len(replyTo) == 0 {
+				replyTo = []email.Address{{Address: from}}
+			}
 		}
 
 		// Determine recipients from the email's headers
@@ -1117,6 +1167,7 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 		// Create the message to send
 		message := &email.UserEmail{
 			From:    email.Address{Address: from},
+			ReplyTo: replyTo,
 			To:      toAddresses,
 			Cc:      ccAddresses,
 			Bcc:     bccAddresses,
@@ -1447,6 +1498,11 @@ func (h *Handler) toJMAPEmail(ctx context.Context, e *email.UserEmail) (*JMAPEma
 		bcc[i] = EmailAddress{Name: addr.Name, Email: addr.Address}
 	}
 
+	replyTo := make([]EmailAddress, len(e.ReplyTo))
+	for i, addr := range e.ReplyTo {
+		replyTo[i] = EmailAddress{Name: addr.Name, Email: addr.Address}
+	}
+
 	// Build preview from text body
 	preview := e.Text
 	if len(preview) > 200 {
@@ -1475,7 +1531,7 @@ func (h *Handler) toJMAPEmail(ctx context.Context, e *email.UserEmail) (*JMAPEma
 		To:            to,
 		Cc:            cc,
 		Bcc:           bcc,
-		ReplyTo:       []EmailAddress{},
+		ReplyTo:       replyTo,
 		Subject:       e.Subject,
 		SentAt:        &sentAt,
 		HasAttachment: false, // Would need to parse from wire format

@@ -54,13 +54,37 @@ func (fakeUserManager) Lookup(_ context.Context, username string) (*usermanager.
 }
 func (fakeUserManager) Autocomplete(context.Context, string) ([]string, error) { return nil, nil }
 
-type fakeSender struct{}
+type bounceCall struct {
+	messageID    string
+	bounceSender string
+	recipient    string
+	bounceType   string
+	original     *email.UserEmail
+}
 
-func (fakeSender) Name() string                                 { return "fake" }
-func (fakeSender) From() string                                 { return "mailer@example.com" }
-func (fakeSender) Send(context.Context, *email.UserEmail) error { return nil }
-func (fakeSender) SendBounce(context.Context, string, string, string, string, *email.UserEmail) error {
+type fakeSender struct {
+	bounces []bounceCall
+}
+
+func (*fakeSender) Name() string                                 { return "fake" }
+func (*fakeSender) From() string                                 { return "mailer@example.com" }
+func (*fakeSender) Send(context.Context, *email.UserEmail) error { return nil }
+func (s *fakeSender) SendBounce(_ context.Context, originalMessageID, bounceSender, recipient, bounceType string, original *email.UserEmail) error {
+	s.bounces = append(s.bounces, bounceCall{originalMessageID, bounceSender, recipient, bounceType, original})
 	return nil
+}
+
+// rejectingUserManager treats one address as unknown so the receiver bounces it.
+type rejectingUserManager struct {
+	fakeUserManager
+	invalid string
+}
+
+func (m rejectingUserManager) Lookup(_ context.Context, username string) (*usermanager.User, error) {
+	if strings.EqualFold(username, m.invalid) {
+		return nil, usermanager.ErrUserNotFound
+	}
+	return m.fakeUserManager.Lookup(context.Background(), username)
 }
 
 func newTestReceiver(client S3Client) *Receiver {
@@ -68,7 +92,7 @@ func newTestReceiver(client S3Client) *Receiver {
 		Bucket:      "bucket",
 		Domain:      "example.com",
 		UserManager: fakeUserManager{},
-		Sender:      fakeSender{},
+		Sender:      &fakeSender{},
 		SESClient:   client,
 	})
 	if err != nil {
@@ -117,6 +141,46 @@ func TestProcessMessageFallbackTimestampUsesISO8601BasicFormat(t *testing.T) {
 	}
 	if _, err := time.Parse(email.DeliveredTimestampFormat, match[1]); err != nil {
 		t.Fatalf("timestamp %q is not a valid %s timestamp: %v", match[1], email.DeliveredTimestampFormat, err)
+	}
+}
+
+func TestProcessMessageSendsBounceThroughSender(t *testing.T) {
+	const key = "01000192a3b4c5d7"
+	raw := "From: sender@example.com\r\nTo: unknown@example.com\r\nSubject: hi\r\n\r\nbody\r\n"
+	client := &fakeS3{objects: map[string][]byte{key: []byte(raw)}}
+	mailSender := &fakeSender{}
+	r, err := NewReceiver(ReceiverConfig{
+		Bucket:      "bucket",
+		Domain:      "example.com",
+		UserManager: rejectingUserManager{invalid: "unknown@example.com"},
+		Sender:      mailSender,
+		SESClient:   client,
+	})
+	if err != nil {
+		t.Fatalf("NewReceiver() error = %v", err)
+	}
+	if err := r.ProcessMessage(context.Background(), key); err != nil {
+		t.Fatalf("ProcessMessage() error = %v", err)
+	}
+
+	if len(mailSender.bounces) != 1 {
+		t.Fatalf("bounces = %+v, want one bounce through the sender", mailSender.bounces)
+	}
+	bounce := mailSender.bounces[0]
+	if bounce.messageID != key {
+		t.Errorf("bounce message id = %q, want %q", bounce.messageID, key)
+	}
+	if bounce.bounceSender != "mailer-daemon@example.com" {
+		t.Errorf("bounce sender = %q, want mailer-daemon@example.com", bounce.bounceSender)
+	}
+	if bounce.recipient != "unknown@example.com" {
+		t.Errorf("bounce recipient = %q, want unknown@example.com", bounce.recipient)
+	}
+	if bounce.bounceType != "UserUnknown" {
+		t.Errorf("bounce type = %q, want UserUnknown", bounce.bounceType)
+	}
+	if bounce.original == nil || bounce.original.Subject != "hi" {
+		t.Errorf("bounce original = %+v, want the original message", bounce.original)
 	}
 }
 

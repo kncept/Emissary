@@ -43,6 +43,21 @@ func (inv Invocation) MarshalJSON() ([]byte, error) {
 	return json.Marshal([]interface{}{inv.Name, inv.Arguments, inv.ClientID})
 }
 
+// claimsContextKey is the context key used to pass the authenticated caller's
+// claims from the dispatcher to individual method handlers.
+type claimsContextKey struct{}
+
+// ContextWithClaims attaches the authenticated caller's claims to ctx.
+func ContextWithClaims(ctx context.Context, claims *auth.Claims) context.Context {
+	return context.WithValue(ctx, claimsContextKey{}, claims)
+}
+
+// ClaimsFromContext returns the authenticated caller's claims, if present.
+func ClaimsFromContext(ctx context.Context) *auth.Claims {
+	claims, _ := ctx.Value(claimsContextKey{}).(*auth.Claims)
+	return claims
+}
+
 // Dispatcher handles routing JMAP method calls to the appropriate handler.
 type Dispatcher struct {
 	handler MethodHandler
@@ -90,6 +105,11 @@ type Response struct {
 
 // DispatchRequest processes a batch of method calls and returns the responses.
 func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID string, claims *auth.Claims, req *Request) (*Response, error) {
+	// Method handlers need the caller's identity and privileges to authorise
+	// operations such as EmailSubmission/set, where the From address must
+	// belong to the caller (or the caller must be allowed to masquerade).
+	ctx = ContextWithClaims(ctx, claims)
+
 	responses := make([]Invocation, 0, len(req.MethodCalls))
 
 	for _, call := range req.MethodCalls {

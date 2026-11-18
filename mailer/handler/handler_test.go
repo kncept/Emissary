@@ -203,6 +203,23 @@ func jmapRequest(t *testing.T, h http.Handler, token string, using []string, met
 
 type JmapMethodCall []interface{} // [methodName, args, clientId]
 
+// submissionNotCreated returns the notCreated map from an EmailSubmission/set
+// response in a JMAP batch result.
+func submissionNotCreated(t *testing.T, resp map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	responses, _ := resp["methodResponses"].([]interface{})
+	for _, raw := range responses {
+		call, ok := raw.([]interface{})
+		if !ok || len(call) < 2 || call[0] != "EmailSubmission/set" {
+			continue
+		}
+		result, _ := call[1].(map[string]interface{})
+		notCreated, _ := result["notCreated"].(map[string]interface{})
+		return notCreated
+	}
+	return nil
+}
+
 func getEmailsJMAP(t *testing.T, h http.Handler, token, accountID string) []EmailResponse {
 	// First, query for email IDs
 	queryResp := jmapRequest(t, h, token, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
@@ -658,7 +675,7 @@ func TestSendEmailFromRules(t *testing.T) {
 				"c1": map[string]interface{}{
 					"mailboxIds": map[string]bool{"drafts": true},
 					"keywords":   map[string]bool{},
-					"from":       []map[string]string{{"email": "carol@example.com", "name": ""}},
+					"from":       []map[string]string{{"email": "bob@example.com", "name": ""}},
 					"to":         []map[string]string{{"email": "dave@example.com", "name": ""}},
 					"subject":    "hello",
 					"textBody":   []map[string]interface{}{{"partId": "text1", "type": "text/plain", "size": 4}},
@@ -867,6 +884,86 @@ func TestSendEmailFromRules(t *testing.T) {
 	}
 	if got := sender.messages[len(sender.messages)-1].From.Address; got != "bob@example.com" {
 		t.Errorf("admin reply from = %q, want bob@example.com", got)
+	}
+}
+
+// createDraftForSend stores a draft through JMAP and returns its id.
+func createDraftForSend(t *testing.T, h http.Handler, token, accountID, from, to string) string {
+	t.Helper()
+	resp := jmapRequest(t, h, token, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
+		{"Email/set", map[string]interface{}{
+			"accountId": accountID,
+			"create": map[string]interface{}{
+				"c1": map[string]interface{}{
+					"mailboxIds": map[string]bool{"drafts": true},
+					"keywords":   map[string]bool{"$draft": true},
+					"from":       []map[string]string{{"email": from, "name": ""}},
+					"to":         []map[string]string{{"email": to, "name": ""}},
+					"subject":    "from verification",
+					"textBody":   []map[string]interface{}{{"partId": "text1", "type": "text/plain", "size": 4}},
+					"bodyValues": map[string]interface{}{"text1": map[string]interface{}{"value": "body"}},
+				},
+			},
+		}, "e1"},
+	})
+	responses, _ := resp["methodResponses"].([]interface{})
+	for _, raw := range responses {
+		call, ok := raw.([]interface{})
+		if !ok || len(call) < 2 || call[0] != "Email/set" {
+			continue
+		}
+		result, _ := call[1].(map[string]interface{})
+		created, _ := result["created"].(map[string]interface{})
+		for _, v := range created {
+			if data, ok := v.(map[string]interface{}); ok {
+				if id, ok := data["id"].(string); ok {
+					return id
+				}
+			}
+		}
+	}
+	t.Fatalf("failed to create draft: %v", resp)
+	return ""
+}
+
+func TestSendEmailFromVerification(t *testing.T) {
+	h, _, capture := newHandlerForTest(t, "secret")
+	_, bobToken, _ := login(t, h, "bob@example.com", "anything")
+	_, adminToken, _ := login(t, h, "admin", "secret")
+
+	// An ordinary user cannot send as somebody else.
+	bobDraft := createDraftForSend(t, h, bobToken, "bob@example.com", "carol@example.com", "dave@example.com")
+	resp := jmapRequest(t, h, bobToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
+		{"EmailSubmission/set", map[string]interface{}{
+			"accountId": "bob@example.com",
+			"create": map[string]interface{}{
+				"s1": map[string]interface{}{"identityId": "primary", "emailId": bobDraft},
+			},
+		}, "s1"},
+	})
+	problem, ok := submissionNotCreated(t, resp)["s1"].(map[string]interface{})
+	if !ok || problem["type"] != "forbidden" {
+		t.Fatalf("forged From should be forbidden, got %v", submissionNotCreated(t, resp))
+	}
+	if len(capture.messages) != 0 {
+		t.Fatalf("forged From should not be sent, got %d messages", len(capture.messages))
+	}
+
+	// A user with masquerade permission can send with a different From.
+	adminDraft := createDraftForSend(t, h, adminToken, "admin", "carol@example.com", "dave@example.com")
+	resp = jmapRequest(t, h, adminToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
+		{"EmailSubmission/set", map[string]interface{}{
+			"accountId": "admin",
+			"create": map[string]interface{}{
+				"s1": map[string]interface{}{"identityId": "primary", "emailId": adminDraft},
+			},
+		}, "s1"},
+	})
+	if notCreated := submissionNotCreated(t, resp); len(notCreated) > 0 {
+		t.Fatalf("masquerading submission failed: %v", notCreated)
+	}
+	if len(capture.messages) != 1 || capture.messages[0].From.Address != "carol@example.com" {
+		t.Fatalf("expected one message from carol@example.com, got %+v", capture.messages)
 	}
 }
 

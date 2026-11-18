@@ -140,6 +140,13 @@ in that account's mailbox (masquerade); this applies to `Email/query`,
 ### Send Email
 - `Email/set` create to store the email in the `drafts` mailbox
 - `EmailSubmission/set` create to submit the email for delivery
+- The resolved From address (envelope sender, draft From header, or reply
+  recipient) must be the authenticated user's own address; a caller with
+  `EmissaryUserManagement` may send with another address because it can
+  masquerade. Other senders get a `forbidden` submission error.
+- When masquerading (From differs from the caller's own address), Reply-To
+  must match From. It defaults to From when omitted; a conflicting Reply-To
+  is rejected with `invalidProperties`.
 - `onSuccessUpdateEmail` to move from drafts to sent
 - `onSuccessDestroyEmail` to remove the draft
 

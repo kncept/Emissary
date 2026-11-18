@@ -50,7 +50,7 @@ application.
 | Email id | The full S3 object key of a delivered message: `users/<accountId>/<mailboxId>/<timestamp>_<ses-message-id>.eml`. The id encodes the account, JMAP mailbox, received time and SES message id; the timestamp is part of the id and uses ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`). |
 | Account | A JMAP account, identified by the user's email address. Storage reads are scoped to this account's prefix; `accountId` on a JMAP call selects it. |
 | Mailbox | A JMAP mailbox inside an account (`inbox`, `sent`, `drafts`, ...). `Email/query` can restrict the read with `filter.inMailbox`. |
-| Administrator | The single built-in user defined by `USERNAME`/`PASSWORD`. With `EmissaryUserManagement` it can read another account's mailbox by passing that account's `accountId` (masquerade); like other System Managers it can send from any address. |
+| Administrator | The single built-in user defined by `USERNAME`/`PASSWORD`. With `EmissaryUserManagement` it can read another account's mailbox by passing that account's `accountId` (masquerade) and send with that account's From address. Other users can only send from their own address. |
 | Ordinary user | Any user accepted by the configured user manager. Reads only their own account/mailboxes and always sends as themselves. |
 | Metadata | Small per-message state that is not part of the RFC 5322 message: read and flagged flags. Stored separately from S3. |
 

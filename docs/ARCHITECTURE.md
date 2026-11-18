@@ -171,12 +171,17 @@ enabling independent management (move, delete, flag) per user.
 1. The client creates a draft with `Email/set` and submits it with
    `EmailSubmission/set`, both on the JMAP batch endpoint.
 2. The handler verifies the submitted email belongs to the request's
-   `accountId`, then resolves the From address: System Managers may specify
-   one (defaulting, on a reply, to the original recipient);
-   ordinary users always send as their own address; otherwise the
-   sender's configured `From` (`SES_FROM`) is used.
-3. The message is handed to the sender — in production the SES v2
-   `SendEmail` API, in development a log line.
+   `accountId`, then resolves the From address from the envelope sender, the
+   draft's From header, or (on a reply) the original recipient, falling back
+   to the account address and finally the sender's configured `From`
+   (`SES_FROM`).
+3. The From address must match the authenticated user's account, unless the
+   caller has `EmissaryUserManagement` and may masquerade as another user.
+   A mismatched From is rejected with a `forbidden` submission error. When
+   masquerading, Reply-To must match From (it defaults to From when omitted).
+4. The message is handed to the configured `sender.Sender` implementation —
+   in production the SES v2 `SendEmail` API (including Reply-To addresses), in
+   development a log line.
 
 ## Authentication and visibility
 

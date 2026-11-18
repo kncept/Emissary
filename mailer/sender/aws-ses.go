@@ -57,7 +57,8 @@ func (s *AwsSesSender) Send(ctx context.Context, message *email.UserEmail) error
 	}
 
 	_, err := s.client.SendEmail(ctx, &ses.SendEmailInput{
-		Source: aws.String(source),
+		Source:           aws.String(source),
+		ReplyToAddresses: addressStrings(message.ReplyTo),
 		Destination: &types.Destination{
 			ToAddresses:  addressStrings(message.To),
 			CcAddresses:  addressStrings(message.Cc),

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/sender"
@@ -262,5 +263,246 @@ func TestHandler_EmailQueryScopesToAccountAndMailbox(t *testing.T) {
 	}
 	if len(getResp.List) != 0 || len(getResp.NotFound) != 1 || getResp.NotFound[0] != bobInbox {
 		t.Fatalf("Email/get response = %+v, want bob's id in notFound", getResp)
+	}
+}
+
+func TestEmailSetStoresReplyTo(t *testing.T) {
+	store := storage.NewMemoryStorage()
+	handler := NewHandler(store, metadata.NewMemoryMetadata(),
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender("test@example.com"))
+
+	args := json.RawMessage(`{"accountId":"alice@example.com","create":{"c1":{
+		"mailboxIds":{"drafts":true},
+		"from":[{"email":"alice@example.com"}],
+		"replyTo":[{"email":"bob@example.com"}],
+		"to":[{"email":"dave@example.com"}],
+		"subject":"subject"}}}`)
+	result, err := handler.EmailSet(context.Background(), "alice@example.com", args)
+	if err != nil {
+		t.Fatalf("EmailSet() error = %v", err)
+	}
+	var resp struct {
+		Created map[string]struct {
+			ID string `json:"id"`
+		} `json:"created"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	created := resp.Created["c1"]
+	draft, err := store.GetEmail(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetEmail(%q) error = %v", created.ID, err)
+	}
+	if len(draft.ReplyTo) != 1 || draft.ReplyTo[0].Address != "bob@example.com" {
+		t.Fatalf("stored Reply-To = %+v, want [bob@example.com]", draft.ReplyTo)
+	}
+}
+
+type recordingSender struct {
+	from     string
+	messages []*email.UserEmail
+}
+
+func (s *recordingSender) Name() string { return "recording" }
+func (s *recordingSender) From() string { return s.from }
+func (s *recordingSender) Send(_ context.Context, message *email.UserEmail) error {
+	s.messages = append(s.messages, message)
+	return nil
+}
+func (s *recordingSender) SendBounce(_ context.Context, _, _, _, _ string, _ *email.UserEmail) error {
+	return nil
+}
+
+// TestEmailSubmissionSetFromVerification exercises the From rules directly at
+// the JMAP layer: the address must be the caller's own account, unless the
+// caller has the masquerade permission.
+func TestEmailSubmissionSetFromVerification(t *testing.T) {
+	const (
+		accountID = "alice@example.com"
+		draftFrom = "bob@example.com"
+	)
+
+	tests := []struct {
+		name          string
+		claims        *auth.Claims
+		from          string
+		wantForbidden bool
+		wantFrom      string
+	}{
+		{
+			name:     "own address",
+			claims:   &auth.Claims{Subject: accountID},
+			from:     accountID,
+			wantFrom: accountID,
+		},
+		{
+			name:          "forged address",
+			claims:        &auth.Claims{Subject: accountID},
+			from:          draftFrom,
+			wantForbidden: true,
+		},
+		{
+			name:     "user manager may masquerade",
+			claims:   &auth.Claims{Subject: accountID, EmissaryUserManagement: true},
+			from:     draftFrom,
+			wantFrom: draftFrom,
+		},
+		{
+			name:          "system manager alone may not masquerade",
+			claims:        &auth.Claims{Subject: accountID, SystemManager: true},
+			from:          draftFrom,
+			wantForbidden: true,
+		},
+		{
+			name:     "no claims falls back to account",
+			from:     accountID,
+			wantFrom: accountID,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := storage.NewMemoryStorage()
+			store.Add(&email.UserEmail{
+				ID:        "draft1",
+				AccountID: accountID,
+				From:      email.Address{Address: tc.from},
+				To:        []email.Address{{Address: "dave@example.com"}},
+				Subject:   "subject",
+				Text:      "body",
+			})
+			capture := &recordingSender{from: "default@example.com"}
+			handler := NewHandler(store, metadata.NewMemoryMetadata(),
+				usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+				capture)
+
+			ctx := context.Background()
+			if tc.claims != nil {
+				ctx = ContextWithClaims(ctx, tc.claims)
+			}
+			args := json.RawMessage(fmt.Sprintf(
+				`{"accountId":%q,"create":{"s1":{"identityId":"primary","emailId":"draft1"}}}`,
+				accountID))
+			result, err := handler.EmailSubmissionSet(ctx, accountID, args)
+			if err != nil {
+				t.Fatalf("EmailSubmissionSet() error = %v", err)
+			}
+			var resp struct {
+				Created    map[string]json.RawMessage `json:"created"`
+				NotCreated map[string]struct {
+					Type string `json:"type"`
+				} `json:"notCreated"`
+			}
+			if err := json.Unmarshal(result, &resp); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+
+			if tc.wantForbidden {
+				problem, ok := resp.NotCreated["s1"]
+				if !ok || problem.Type != "forbidden" {
+					t.Fatalf("notCreated = %+v, want forbidden", resp.NotCreated)
+				}
+				if len(capture.messages) != 0 {
+					t.Fatalf("message was sent despite forbidden From: %+v", capture.messages)
+				}
+				return
+			}
+
+			if len(resp.Created) != 1 || len(capture.messages) != 1 {
+				t.Fatalf("created = %+v, sent = %+v, want one of each", resp.Created, capture.messages)
+			}
+			if got := capture.messages[0].From.Address; got != tc.wantFrom {
+				t.Errorf("sent From = %q, want %q", got, tc.wantFrom)
+			}
+		})
+	}
+}
+
+// TestEmailSubmissionSetMasqueradeReplyTo checks that a submission sent on
+// behalf of another account always uses the From address for replies.
+func TestEmailSubmissionSetMasqueradeReplyTo(t *testing.T) {
+	const (
+		accountID = "alice@example.com"
+		from      = "bob@example.com"
+	)
+
+	tests := []struct {
+		name        string
+		replyTo     []string
+		wantError   string
+		wantReplyTo []string
+	}{
+		{name: "default Reply-To to From", wantReplyTo: []string{from}},
+		{name: "matching Reply-To", replyTo: []string{from}, wantReplyTo: []string{from}},
+		{name: "conflicting Reply-To", replyTo: []string{"alice@example.com"}, wantError: "invalidProperties"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := storage.NewMemoryStorage()
+			replyTo := make([]email.Address, 0, len(tc.replyTo))
+			for _, addr := range tc.replyTo {
+				replyTo = append(replyTo, email.Address{Address: addr})
+			}
+			store.Add(&email.UserEmail{
+				ID:        "draft1",
+				AccountID: accountID,
+				From:      email.Address{Address: from},
+				ReplyTo:   replyTo,
+				To:        []email.Address{{Address: "dave@example.com"}},
+				Subject:   "subject",
+				Text:      "body",
+			})
+			capture := &recordingSender{from: "default@example.com"}
+			handler := NewHandler(store, metadata.NewMemoryMetadata(),
+				usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+				capture)
+
+			ctx := ContextWithClaims(context.Background(), &auth.Claims{
+				Subject:                accountID,
+				EmissaryUserManagement: true,
+			})
+			args := json.RawMessage(fmt.Sprintf(
+				`{"accountId":%q,"create":{"s1":{"identityId":"primary","emailId":"draft1"}}}`,
+				accountID))
+			result, err := handler.EmailSubmissionSet(ctx, accountID, args)
+			if err != nil {
+				t.Fatalf("EmailSubmissionSet() error = %v", err)
+			}
+			var resp struct {
+				Created    map[string]json.RawMessage `json:"created"`
+				NotCreated map[string]struct {
+					Type string `json:"type"`
+				} `json:"notCreated"`
+			}
+			if err := json.Unmarshal(result, &resp); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+
+			if tc.wantError != "" {
+				if got := resp.NotCreated["s1"].Type; got != tc.wantError {
+					t.Fatalf("notCreated type = %q, want %q (%+v)", got, tc.wantError, resp.NotCreated)
+				}
+				if len(capture.messages) != 0 {
+					t.Fatalf("message was sent despite Reply-To mismatch: %+v", capture.messages)
+				}
+				return
+			}
+
+			if len(resp.Created) != 1 || len(capture.messages) != 1 {
+				t.Fatalf("created = %+v, sent = %+v, want one of each", resp.Created, capture.messages)
+			}
+			got := capture.messages[0].ReplyTo
+			if len(got) != len(tc.wantReplyTo) {
+				t.Fatalf("Reply-To = %+v, want %v", got, tc.wantReplyTo)
+			}
+			for i := range got {
+				if got[i].Address != tc.wantReplyTo[i] {
+					t.Errorf("Reply-To[%d] = %q, want %q", i, got[i].Address, tc.wantReplyTo[i])
+				}
+			}
+		})
 	}
 }

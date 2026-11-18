@@ -35,7 +35,7 @@ func (s *LogSender) Send(_ context.Context, message *email.UserEmail) error {
 	if message.From.Address != "" {
 		from = message.From.Address
 	}
-	log.Printf("outbound email from=%s to=%v subject=%q", from, addressStrings(message.To), message.Subject)
+	log.Printf("outbound email from=%s replyTo=%v to=%v subject=%q", from, addressStrings(message.ReplyTo), addressStrings(message.To), message.Subject)
 	return nil
 }
 

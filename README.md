@@ -46,7 +46,8 @@ The JWT carries the user id (the user's email address) in the `sub` claim,
 and `EmissaryUserManagement: true` for users who may manage accounts. Mail is
 exposed through JMAP as per-user **mailboxes**: ordinary users read only their
 own `accountId`, while a user with `EmissaryUserManagement` can pass another
-account's `accountId` on a JMAP method call to masquerade for support. The
-built-in administrator account can send with a custom envelope sender. See
+account's `accountId` on a JMAP method call to masquerade for support. Mail
+submissions must use the caller's own From address; users with masquerade
+permission may send from another address. See
 [API.md](docs/API.md#jmap-mail-operations) and [S3.md](docs/S3.md#bucket-layout)
 for details.

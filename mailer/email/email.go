@@ -40,6 +40,7 @@ type UserEmail struct {
 	AccountID  string    `json:"accountId,omitempty"`
 	MailboxID  string    `json:"mailboxId,omitempty"`
 	From       Address   `json:"from"`
+	ReplyTo    []Address `json:"replyTo,omitempty"`
 	To         []Address `json:"to"`
 	Cc         []Address `json:"cc,omitempty"`
 	Bcc        []Address `json:"bcc,omitempty"`
