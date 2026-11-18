@@ -33,7 +33,11 @@ const (
 //     Email/receivedAt property.
 //   - Keywords use the JMAP "String[Boolean]" shape: every present key has the
 //     value true.
+//
+// Records are keyed per user and per mail message: UserID is the owning user,
+// ID is the mail id.
 type EmailMetadata struct {
+	UserID     string          `json:"userId,omitempty" dynamodbav:"userId"`
 	ID         string          `json:"id" dynamodbav:"id"`
 	ReceivedAt string          `json:"receivedAt,omitempty" dynamodbav:"receivedAt,omitempty"`
 	Keywords   map[string]bool `json:"keywords,omitempty" dynamodbav:"keywords,omitempty"`
@@ -45,11 +49,12 @@ func FormatReceivedAt(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-// EmptyEmailMetadata returns metadata for an id with no stored record. It is
-// deliberately distinct from NewEmailMetadata: a missing record must not
-// fabricate a receive time, so callers can fall back to the message Date.
-func EmptyEmailMetadata(id string) EmailMetadata {
-	return EmailMetadata{ID: id, Keywords: make(map[string]bool)}
+// EmptyEmailMetadata returns metadata for a user/mail pair with no stored
+// record. It is deliberately distinct from NewEmailMetadata: a missing record
+// must not fabricate a receive time, so callers can fall back to the message
+// Date.
+func EmptyEmailMetadata(userID, mailID string) EmailMetadata {
+	return EmailMetadata{UserID: userID, ID: mailID, Keywords: make(map[string]bool)}
 }
 
 // NormalizeKeyword validates and lowercases a JMAP keyword. JMAP keywords are
@@ -76,9 +81,10 @@ func NormalizeKeyword(keyword string) (string, bool) {
 // given keywords. It stamps receivedAt with the current UTC time; callers must
 // not use it as a fallback for missing records (use EmptyEmailMetadata).
 // Invalid keyword names are ignored.
-func NewEmailMetadata(id string, keywords ...string) EmailMetadata {
+func NewEmailMetadata(userID, mailID string, keywords ...string) EmailMetadata {
 	m := EmailMetadata{
-		ID:         id,
+		UserID:     userID,
+		ID:         mailID,
 		ReceivedAt: FormatReceivedAt(time.Now()),
 		Keywords:   make(map[string]bool),
 	}
@@ -91,8 +97,8 @@ func NewEmailMetadata(id string, keywords ...string) EmailMetadata {
 }
 
 // NewEmailMetadataFromMap creates a metadata record from a JMAP keyword map.
-func NewEmailMetadataFromMap(id string, keywords map[string]bool) EmailMetadata {
-	m := NewEmailMetadata(id)
+func NewEmailMetadataFromMap(userID, mailID string, keywords map[string]bool) EmailMetadata {
+	m := NewEmailMetadata(userID, mailID)
 	for keyword, enabled := range keywords {
 		if !enabled {
 			continue
@@ -122,7 +128,7 @@ func (m EmailMetadata) IsFlagged() bool { return m.HasKeyword(KeywordFlagged) }
 // Clone returns an independent copy, so callers can patch keywords without
 // mutating a value held by a store implementation.
 func (m EmailMetadata) Clone() EmailMetadata {
-	copy := EmailMetadata{ID: m.ID, ReceivedAt: m.ReceivedAt, Keywords: make(map[string]bool, len(m.Keywords))}
+	copy := EmailMetadata{UserID: m.UserID, ID: m.ID, ReceivedAt: m.ReceivedAt, Keywords: make(map[string]bool, len(m.Keywords))}
 	for keyword, enabled := range m.Keywords {
 		if enabled {
 			copy.Keywords[keyword] = true
@@ -131,26 +137,26 @@ func (m EmailMetadata) Clone() EmailMetadata {
 	return copy
 }
 
-// MetadataStore stores JMAP-mappable per-email state. Get must return
-// "not found" as an EmptyEmailMetadata with no error: JMAP responses include
-// messages that predate the metadata store, and those must still be returned
-// without a fabricated receive time.
+// MetadataStore stores JMAP-mappable per-email state. Records are keyed by
+// user id and mail id. Get must return "not found" as an EmptyEmailMetadata
+// with no error: JMAP responses include messages that predate the metadata
+// store, and those must still be returned without a fabricated receive time.
 type MetadataStore interface {
 	// Name returns the name of the metadata store implementation.
 	Name() string
 
-	// Get retrieves the metadata for the given email ID.
-	Get(ctx context.Context, id string) (EmailMetadata, error)
+	// Get retrieves the metadata for the given user and mail ID.
+	Get(ctx context.Context, userID, mailID string) (EmailMetadata, error)
 
-	// Save stores the complete metadata for the given email ID.
+	// Save stores the complete metadata for the given record.
 	Save(ctx context.Context, metadata EmailMetadata) error
 
-	// Delete discards all state for the given id. Deleting an already
-	// absent id is not an error.
-	Delete(ctx context.Context, id string) error
+	// Delete discards all state for the given user/mail pair. Deleting an
+	// already absent record is not an error.
+	Delete(ctx context.Context, userID, mailID string) error
 
-	// List returns all stored metadata entries.
-	List(ctx context.Context) ([]EmailMetadata, error)
+	// List returns all stored metadata entries for the given user.
+	List(ctx context.Context, userID string) ([]EmailMetadata, error)
 }
 
 // NewStore selects a MetadataStore implementation by name. tableName is

@@ -145,12 +145,12 @@ func TestProcessMessageCreatesMetadataWithStorageID(t *testing.T) {
 		t.Fatalf("ListEmails() = %v, %v; want one delivered email", listed, err)
 	}
 	storageID := listed[0].Ref.ID
-	meta, err := metaStore.Get(context.Background(), storageID)
+	meta, err := metaStore.Get(context.Background(), "alice@example.com", storageID)
 	if err != nil {
 		t.Fatalf("Get(%q) error = %v", storageID, err)
 	}
-	if meta.ID != storageID {
-		t.Errorf("metadata id = %q, want storage id %q", meta.ID, storageID)
+	if meta.UserID != "alice@example.com" || meta.ID != storageID {
+		t.Errorf("metadata ids = %q/%q, want %q/%q", meta.UserID, meta.ID, "alice@example.com", storageID)
 	}
 	if len(meta.Keywords) != 0 {
 		t.Errorf("new delivery should have no keywords, got %+v", meta.Keywords)
@@ -162,7 +162,7 @@ func TestProcessMessageCreatesMetadataWithStorageID(t *testing.T) {
 	} else if time.Since(received) > time.Minute {
 		t.Errorf("receivedAt %q is not from this delivery", meta.ReceivedAt)
 	}
-	entries, err := metaStore.List(context.Background())
+	entries, err := metaStore.List(context.Background(), "alice@example.com")
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}

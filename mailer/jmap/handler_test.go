@@ -39,7 +39,7 @@ func TestHandler_EmailGet(t *testing.T) {
 
 	// Create test metadata
 	memMeta := metadata.NewMemoryMetadata()
-	if err := memMeta.Save(ctx, metadata.NewEmailMetadata("test1", metadata.KeywordFlagged)); err != nil {
+	if err := memMeta.Save(ctx, metadata.NewEmailMetadata("test", "test1", metadata.KeywordFlagged)); err != nil {
 		t.Fatalf("Failed to save metadata: %v", err)
 	}
 
@@ -198,7 +198,7 @@ func TestEmailQuerySortsByStoredReceivedAt(t *testing.T) {
 		"older": "2026-11-17T12:00:00Z",
 		"newer": "2026-11-18T12:00:00Z",
 	} {
-		meta := metadata.NewEmailMetadata(id)
+		meta := metadata.NewEmailMetadata("alice@example.com", id)
 		meta.ReceivedAt = receivedAt
 		if err := metaStore.Save(ctx, meta); err != nil {
 			t.Fatalf("Save(%q) error = %v", id, err)
@@ -358,7 +358,7 @@ func TestEmailSetCreateIgnoresClientReceivedAt(t *testing.T) {
 	if err := json.Unmarshal(result, &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	meta, err := metaStore.Get(ctx, resp.Created["c1"].ID)
+	meta, err := metaStore.Get(ctx, "alice@example.com", resp.Created["c1"].ID)
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -689,7 +689,7 @@ func TestToJMAPEmailStitchesAllKeywords(t *testing.T) {
 		metadata.KeywordPhishing,
 	}
 	metaStore := metadata.NewMemoryMetadata()
-	if err := metaStore.Save(ctx, metadata.NewEmailMetadata("email-1", allKeywords...)); err != nil {
+	if err := metaStore.Save(ctx, metadata.NewEmailMetadata("alice@example.com", "email-1", allKeywords...)); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 	handler := NewHandler(store, metaStore,
@@ -729,7 +729,7 @@ func TestEmailGetUsesStoredReceivedAt(t *testing.T) {
 	store := storage.NewMemoryStorage()
 	addTestEmail(store, "email-1", accountID, "inbox", &email.UserEmail{Subject: "test", Date: messageDate})
 	metaStore := metadata.NewMemoryMetadata()
-	meta := metadata.NewEmailMetadata("email-1")
+	meta := metadata.NewEmailMetadata("alice@example.com", "email-1")
 	meta.ReceivedAt = receivedAt
 	if err := metaStore.Save(ctx, meta); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -825,7 +825,7 @@ func TestApplyKeywordPatch(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			current := metadata.NewEmailMetadata("email-1", metadata.KeywordSeen, metadata.KeywordFlagged)
+			current := metadata.NewEmailMetadata("alice@example.com", "email-1", metadata.KeywordSeen, metadata.KeywordFlagged)
 			got, ok, errType := applyKeywordPatch(current, tc.patch)
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v, want %v (error type %q)", ok, tc.wantOK, errType)
@@ -896,7 +896,7 @@ func TestEmailSetKeywordUpdates(t *testing.T) {
 	if len(updated) != 1 || len(notUpdated) != 0 {
 		t.Fatalf("updated = %+v, notUpdated = %+v", updated, notUpdated)
 	}
-	meta, err := metaStore.Get(ctx, id)
+	meta, err := metaStore.Get(ctx, "alice@example.com", id)
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -911,7 +911,7 @@ func TestEmailSetKeywordUpdates(t *testing.T) {
 	if len(updated) != 1 || len(notUpdated) != 0 {
 		t.Fatalf("updated = %+v, notUpdated = %+v", updated, notUpdated)
 	}
-	meta, _ = metaStore.Get(ctx, id)
+	meta, _ = metaStore.Get(ctx, "alice@example.com", id)
 	if meta.HasKeyword(metadata.KeywordSeen) {
 		t.Error("$seen still set after null patch")
 	}
@@ -958,10 +958,10 @@ func TestCountUnreadInMailboxUsesKeywords(t *testing.T) {
 		addTestEmail(store, id, accountID, "inbox", &email.UserEmail{Subject: id})
 	}
 	metaStore := metadata.NewMemoryMetadata()
-	if err := metaStore.Save(ctx, metadata.NewEmailMetadata("seen", metadata.KeywordSeen)); err != nil {
+	if err := metaStore.Save(ctx, metadata.NewEmailMetadata("alice@example.com", "seen", metadata.KeywordSeen)); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	if err := metaStore.Save(ctx, metadata.NewEmailMetadata("draft", metadata.KeywordDraft)); err != nil {
+	if err := metaStore.Save(ctx, metadata.NewEmailMetadata("alice@example.com", "draft", metadata.KeywordDraft)); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 	handler := NewHandler(store, metaStore,

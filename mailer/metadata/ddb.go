@@ -27,11 +27,12 @@ func NewDdbMetadata(tableName, region string) (*DdbMetadata, error) {
 	}, nil
 }
 
-func (d *DdbMetadata) Get(ctx context.Context, id string) (EmailMetadata, error) {
+func (d *DdbMetadata) Get(ctx context.Context, userID, mailID string) (EmailMetadata, error) {
 	output, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(d.tableName),
 		Key: map[string]types.AttributeValue{
-			"id": &types.AttributeValueMemberS{Value: id},
+			"userId": &types.AttributeValueMemberS{Value: userID},
+			"id":     &types.AttributeValueMemberS{Value: mailID},
 		},
 	})
 	if err != nil {
@@ -40,12 +41,18 @@ func (d *DdbMetadata) Get(ctx context.Context, id string) (EmailMetadata, error)
 
 	if output.Item == nil {
 		// Older messages may have no metadata record.
-		return EmptyEmailMetadata(id), nil
+		return EmptyEmailMetadata(userID, mailID), nil
 	}
 
 	var metadata EmailMetadata
 	if err := attributevalue.UnmarshalMap(output.Item, &metadata); err != nil {
 		return EmailMetadata{}, fmt.Errorf("failed to unmarshal: %w", err)
+	}
+	if metadata.UserID == "" {
+		metadata.UserID = userID
+	}
+	if metadata.ID == "" {
+		metadata.ID = mailID
 	}
 	return metadata.Clone(), nil
 }
@@ -54,13 +61,14 @@ func (d *DdbMetadata) Save(ctx context.Context, metadata EmailMetadata) error {
 	return d.put(ctx, metadata)
 }
 
-// Delete removes the item for the given id. DynamoDB deletes are
-// idempotent, so an absent id is not an error.
-func (d *DdbMetadata) Delete(ctx context.Context, id string) error {
+// Delete removes the item for the given user/mail pair. DynamoDB deletes are
+// idempotent, so an absent record is not an error.
+func (d *DdbMetadata) Delete(ctx context.Context, userID, mailID string) error {
 	_, err := d.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(d.tableName),
 		Key: map[string]types.AttributeValue{
-			"id": &types.AttributeValueMemberS{Value: id},
+			"userId": &types.AttributeValueMemberS{Value: userID},
+			"id":     &types.AttributeValueMemberS{Value: mailID},
 		},
 	})
 	if err != nil {
@@ -82,17 +90,44 @@ func (d *DdbMetadata) put(ctx context.Context, metadata EmailMetadata) error {
 	return err
 }
 
-func (d *DdbMetadata) List(ctx context.Context) ([]EmailMetadata, error) {
-	output, err := d.client.Scan(ctx, &dynamodb.ScanInput{
-		TableName: aws.String(d.tableName),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to scan: %w", err)
+func (d *DdbMetadata) List(ctx context.Context, userID string) ([]EmailMetadata, error) {
+	input := &dynamodb.QueryInput{
+		TableName:              aws.String(d.tableName),
+		KeyConditionExpression: aws.String("#userId = :userId"),
+		ExpressionAttributeNames: map[string]string{
+			"#userId": "userId",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":userId": &types.AttributeValueMemberS{Value: userID},
+		},
 	}
 
 	var result []EmailMetadata
-	if err := attributevalue.UnmarshalListOfMaps(output.Items, &result); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal list: %w", err)
+	for {
+		output, err := d.client.Query(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query: %w", err)
+		}
+
+		var page []EmailMetadata
+		if err := attributevalue.UnmarshalListOfMaps(output.Items, &page); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal list: %w", err)
+		}
+		for i := range page {
+			if page[i].UserID == "" {
+				page[i].UserID = userID
+			}
+		}
+		result = append(result, page...)
+
+		if len(output.LastEvaluatedKey) == 0 {
+			break
+		}
+		input.ExclusiveStartKey = output.LastEvaluatedKey
+	}
+
+	if result == nil {
+		result = []EmailMetadata{}
 	}
 	return result, nil
 }

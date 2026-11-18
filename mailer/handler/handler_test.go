@@ -50,7 +50,7 @@ type failingDeleteMetadata struct {
 	err error
 }
 
-func (m *failingDeleteMetadata) Delete(_ context.Context, _ string) error { return m.err }
+func (m *failingDeleteMetadata) Delete(_ context.Context, _, _ string) error { return m.err }
 
 type testUserManager struct {
 	adminUsername string
@@ -603,14 +603,14 @@ func TestDeleteEmailAlsoDeletesMetadata(t *testing.T) {
 	jmapDelete(t, h, token, receivedID)
 
 	// Verify metadata is cleared
-	meta, err := metaStore.Get(context.Background(), receivedID)
+	meta, err := metaStore.Get(context.Background(), "bob@example.com", receivedID)
 	if err != nil {
 		t.Fatalf("metadata Get() error = %v", err)
 	}
 	if len(meta.Keywords) != 0 {
 		t.Errorf("metadata after delete = %+v, want no keywords", meta)
 	}
-	list, err := metaStore.List(context.Background())
+	list, err := metaStore.List(context.Background(), "bob@example.com")
 	if err != nil {
 		t.Fatalf("metadata List() error = %v", err)
 	}

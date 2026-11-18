@@ -342,7 +342,8 @@ async function emailClientStack(
   if (usesDdbMetadata) {
     const metadataTable = new dynamodb.Table(stack, 'emissary-metadata', {
       tableName: metadataTableName,
-      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'id', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     })

@@ -7,52 +7,64 @@ import (
 
 type MemoryMetadata struct {
 	mu   sync.RWMutex
-	data map[string]EmailMetadata
+	data map[string]map[string]EmailMetadata // userID -> mailID -> metadata
 }
 
 func NewMemoryMetadata() *MemoryMetadata {
 	return &MemoryMetadata{
-		data: make(map[string]EmailMetadata),
+		data: make(map[string]map[string]EmailMetadata),
 	}
 }
 
 func (m *MemoryMetadata) Name() string { return "memory" }
 
-func (m *MemoryMetadata) Get(ctx context.Context, id string) (EmailMetadata, error) {
+func (m *MemoryMetadata) Get(ctx context.Context, userID, mailID string) (EmailMetadata, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	metadata, ok := m.data[id]
-	if !ok {
-		// Missing metadata is normal for older messages: JMAP must still
-		// return the email, with no keywords and no fabricated receive time.
-		return EmptyEmailMetadata(id), nil
+	if byUser, ok := m.data[userID]; ok {
+		if metadata, ok := byUser[mailID]; ok {
+			return metadata.Clone(), nil
+		}
 	}
-	return metadata.Clone(), nil
+	// Missing metadata is normal for older messages: JMAP must still return
+	// the email, with no keywords and no fabricated receive time.
+	return EmptyEmailMetadata(userID, mailID), nil
 }
 
 func (m *MemoryMetadata) Save(ctx context.Context, metadata EmailMetadata) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.data[metadata.ID] = metadata.Clone()
+	byUser, ok := m.data[metadata.UserID]
+	if !ok {
+		byUser = make(map[string]EmailMetadata)
+		m.data[metadata.UserID] = byUser
+	}
+	byUser[metadata.ID] = metadata.Clone()
 	return nil
 }
 
-func (m *MemoryMetadata) Delete(ctx context.Context, id string) error {
+func (m *MemoryMetadata) Delete(ctx context.Context, userID, mailID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	delete(m.data, id)
+	if byUser, ok := m.data[userID]; ok {
+		delete(byUser, mailID)
+		if len(byUser) == 0 {
+			delete(m.data, userID)
+		}
+	}
 	return nil
 }
 
-func (m *MemoryMetadata) List(ctx context.Context) ([]EmailMetadata, error) {
+func (m *MemoryMetadata) List(ctx context.Context, userID string) ([]EmailMetadata, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	result := make([]EmailMetadata, 0, len(m.data))
-	for _, v := range m.data {
+	byUser := m.data[userID]
+	result := make([]EmailMetadata, 0, len(byUser))
+	for _, v := range byUser {
 		result = append(result, v.Clone())
 	}
 	return result, nil

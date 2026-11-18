@@ -56,12 +56,15 @@ func TestNormalizeKeyword(t *testing.T) {
 }
 
 func TestNewEmailMetadataFromMap(t *testing.T) {
-	m := NewEmailMetadataFromMap("email-1", map[string]bool{
+	m := NewEmailMetadataFromMap("alice@example.com", "email-1", map[string]bool{
 		"$Seen":    true,
 		"$flagged": true,
 		"$draft":   false,
 		"invalid":  true,
 	})
+	if m.UserID != "alice@example.com" || m.ID != "email-1" {
+		t.Fatalf("ids = %q/%q", m.UserID, m.ID)
+	}
 	if !m.HasKeyword(KeywordSeen) || !m.HasKeyword(KeywordFlagged) {
 		t.Errorf("expected $seen and $flagged, got %+v", m.Keywords)
 	}
@@ -74,10 +77,15 @@ func TestNewEmailMetadataFromMap(t *testing.T) {
 }
 
 func TestCloneIsIndependent(t *testing.T) {
-	m := NewEmailMetadata("email-1", KeywordSeen)
+	m := NewEmailMetadata("alice@example.com", "email-1", KeywordSeen)
 	clone := m.Clone()
+	clone.UserID = "bob@example.com"
+	clone.ID = "email-2"
 	clone.Keywords[KeywordFlagged] = true
 	delete(clone.Keywords, KeywordSeen)
+	if m.UserID != "alice@example.com" || m.ID != "email-1" {
+		t.Errorf("mutating a clone changed ids: %q/%q", m.UserID, m.ID)
+	}
 	if !m.HasKeyword(KeywordSeen) || m.HasKeyword(KeywordFlagged) {
 		t.Errorf("mutating a clone changed the original: %+v", m.Keywords)
 	}
@@ -88,7 +96,7 @@ func TestCloneIsIndependent(t *testing.T) {
 
 func TestNewEmailMetadataStampsReceivedAt(t *testing.T) {
 	before := time.Now().UTC().Add(-time.Second)
-	m := NewEmailMetadata("email-1")
+	m := NewEmailMetadata("alice@example.com", "email-1")
 	after := time.Now().UTC().Add(time.Second)
 
 	if m.ReceivedAt == "" {
@@ -107,9 +115,9 @@ func TestNewEmailMetadataStampsReceivedAt(t *testing.T) {
 }
 
 func TestEmptyEmailMetadataHasNoReceivedAt(t *testing.T) {
-	m := EmptyEmailMetadata("email-1")
-	if m.ID != "email-1" || m.ReceivedAt != "" {
-		t.Errorf("EmptyEmailMetadata() = %+v, want id with no receivedAt", m)
+	m := EmptyEmailMetadata("alice@example.com", "email-1")
+	if m.UserID != "alice@example.com" || m.ID != "email-1" || m.ReceivedAt != "" {
+		t.Errorf("EmptyEmailMetadata() = %+v, want ids with no receivedAt", m)
 	}
 	if m.Keywords == nil {
 		t.Error("EmptyEmailMetadata() should return an initialized keyword map")
@@ -122,7 +130,7 @@ func TestFileMetadataPersistsReceivedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileMetadata() error = %v", err)
 	}
-	stored := NewEmailMetadata("email-1", KeywordSeen)
+	stored := NewEmailMetadata("alice@example.com", "email-1", KeywordSeen)
 	stored.ReceivedAt = FormatReceivedAt(time.Date(2026, time.November, 18, 1, 2, 3, 0, time.UTC))
 	if err := m.Save(context.Background(), stored); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -132,9 +140,12 @@ func TestFileMetadataPersistsReceivedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileMetadata() reopen error = %v", err)
 	}
-	got, err := reopened.Get(context.Background(), "email-1")
+	got, err := reopened.Get(context.Background(), "alice@example.com", "email-1")
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
+	}
+	if got.UserID != "alice@example.com" || got.ID != "email-1" {
+		t.Errorf("ids = %q/%q", got.UserID, got.ID)
 	}
 	if got.ReceivedAt != stored.ReceivedAt {
 		t.Errorf("receivedAt = %q, want %q", got.ReceivedAt, stored.ReceivedAt)
@@ -146,11 +157,11 @@ func TestMemoryMetadata(t *testing.T) {
 	ctx := context.Background()
 
 	// A missing record is an empty keyword set, not an error.
-	meta, err := m.Get(ctx, "email-1")
+	meta, err := m.Get(ctx, "alice@example.com", "email-1")
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	if meta.ID != "email-1" || len(meta.Keywords) != 0 || meta.IsRead() {
+	if meta.UserID != "alice@example.com" || meta.ID != "email-1" || len(meta.Keywords) != 0 || meta.IsRead() {
 		t.Errorf("Get() for missing record = %+v, want empty keywords", meta)
 	}
 	if meta.ReceivedAt != "" {
@@ -163,12 +174,21 @@ func TestMemoryMetadata(t *testing.T) {
 		t.Fatalf("Save() error = %v", err)
 	}
 
-	meta, err = m.Get(ctx, "email-1")
+	meta, err = m.Get(ctx, "alice@example.com", "email-1")
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
 	if !meta.IsRead() {
 		t.Error("Get() should return $seen after Save")
+	}
+
+	// Different user does not see it.
+	other, err := m.Get(ctx, "bob@example.com", "email-1")
+	if err != nil {
+		t.Fatalf("Get(other) error = %v", err)
+	}
+	if other.IsRead() || other.ReceivedAt != "" {
+		t.Errorf("other user metadata leaked: %+v", other)
 	}
 
 	// Mark unread by removing the keyword
@@ -177,7 +197,7 @@ func TestMemoryMetadata(t *testing.T) {
 		t.Fatalf("Save() error = %v", err)
 	}
 
-	meta, err = m.Get(ctx, "email-1")
+	meta, err = m.Get(ctx, "alice@example.com", "email-1")
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -193,7 +213,7 @@ func TestMemoryMetadata_Concurrent(t *testing.T) {
 
 	for i := 0; i < 50; i++ {
 		go func(id string) {
-			meta, _ := m.Get(ctx, id)
+			meta, _ := m.Get(ctx, "alice@example.com", id)
 			meta.Keywords[KeywordSeen] = true
 			m.Save(ctx, meta)
 			done <- true
@@ -202,7 +222,7 @@ func TestMemoryMetadata_Concurrent(t *testing.T) {
 
 	for i := 0; i < 50; i++ {
 		go func(id string) {
-			m.Get(ctx, id)
+			m.Get(ctx, "alice@example.com", id)
 			done <- true
 		}("email-" + string(rune('0'+i%10)))
 	}
@@ -212,12 +232,12 @@ func TestMemoryMetadata_Concurrent(t *testing.T) {
 	}
 
 	// Saves must not share a keyword map with later readers.
-	meta, err := m.Get(ctx, "email-0")
+	meta, err := m.Get(ctx, "alice@example.com", "email-0")
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
 	meta.Keywords[KeywordFlagged] = true
-	again, err := m.Get(ctx, "email-0")
+	again, err := m.Get(ctx, "alice@example.com", "email-0")
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -230,22 +250,22 @@ func TestMemoryMetadata_Delete(t *testing.T) {
 	m := NewMemoryMetadata()
 	ctx := context.Background()
 
-	meta := NewEmailMetadata("email-1", KeywordSeen, KeywordFlagged)
+	meta := NewEmailMetadata("alice@example.com", "email-1", KeywordSeen, KeywordFlagged)
 	if err := m.Save(ctx, meta); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	if err := m.Delete(ctx, "email-1"); err != nil {
+	if err := m.Delete(ctx, "alice@example.com", "email-1"); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
 
-	meta, err := m.Get(ctx, "email-1")
+	meta, err := m.Get(ctx, "alice@example.com", "email-1")
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
 	if len(meta.Keywords) != 0 {
 		t.Errorf("Get() after delete = %+v, want no keywords", meta)
 	}
-	list, err := m.List(ctx)
+	list, err := m.List(ctx, "alice@example.com")
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -253,9 +273,27 @@ func TestMemoryMetadata_Delete(t *testing.T) {
 		t.Errorf("List() after delete = %v, want empty", list)
 	}
 
-	// Deleting an absent id is not an error.
-	if err := m.Delete(ctx, "absent"); err != nil {
+	// Deleting an absent record is not an error.
+	if err := m.Delete(ctx, "alice@example.com", "absent"); err != nil {
 		t.Errorf("Delete() absent error = %v, want nil", err)
+	}
+}
+
+func TestMemoryMetadata_ListScopedToUser(t *testing.T) {
+	m := NewMemoryMetadata()
+	ctx := context.Background()
+	if err := m.Save(ctx, NewEmailMetadata("alice@example.com", "email-1", KeywordSeen)); err != nil {
+		t.Fatalf("Save alice: %v", err)
+	}
+	if err := m.Save(ctx, NewEmailMetadata("bob@example.com", "email-2", KeywordSeen)); err != nil {
+		t.Fatalf("Save bob: %v", err)
+	}
+	list, err := m.List(ctx, "alice@example.com")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 || list[0].UserID != "alice@example.com" || list[0].ID != "email-1" {
+		t.Fatalf("List(alice) = %+v", list)
 	}
 }
 
@@ -269,11 +307,11 @@ func TestFileMetadata_Delete(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	meta := NewEmailMetadata("email-1", KeywordSeen)
+	meta := NewEmailMetadata("alice@example.com", "email-1", KeywordSeen)
 	if err := m.Save(ctx, meta); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	if err := m.Delete(ctx, "email-1"); err != nil {
+	if err := m.Delete(ctx, "alice@example.com", "email-1"); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
 
@@ -282,7 +320,7 @@ func TestFileMetadata_Delete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileMetadata() error = %v", err)
 	}
-	list, err := m2.List(ctx)
+	list, err := m2.List(ctx, "alice@example.com")
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -290,8 +328,8 @@ func TestFileMetadata_Delete(t *testing.T) {
 		t.Errorf("List() after delete = %v, want empty", list)
 	}
 
-	// Deleting an absent id is not an error.
-	if err := m2.Delete(ctx, "absent"); err != nil {
+	// Deleting an absent record is not an error.
+	if err := m2.Delete(ctx, "alice@example.com", "absent"); err != nil {
 		t.Errorf("Delete() absent error = %v, want nil", err)
 	}
 }
@@ -307,7 +345,7 @@ func TestFileMetadata(t *testing.T) {
 	ctx := context.Background()
 
 	// Missing metadata returns an empty keyword set.
-	meta, err := m.Get(ctx, "email-1")
+	meta, err := m.Get(ctx, "alice@example.com", "email-1")
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -320,7 +358,7 @@ func TestFileMetadata(t *testing.T) {
 		t.Fatalf("Save() error = %v", err)
 	}
 
-	meta, err = m.Get(ctx, "email-1")
+	meta, err = m.Get(ctx, "alice@example.com", "email-1")
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -334,7 +372,7 @@ func TestFileMetadata(t *testing.T) {
 		t.Fatalf("NewFileMetadata() error = %v", err)
 	}
 
-	meta, err = m2.Get(ctx, "email-1")
+	meta, err = m2.Get(ctx, "alice@example.com", "email-1")
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -347,7 +385,7 @@ func TestFileMetadata(t *testing.T) {
 		t.Fatalf("Save() error = %v", err)
 	}
 
-	meta, err = m2.Get(ctx, "email-1")
+	meta, err = m2.Get(ctx, "alice@example.com", "email-1")
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -368,7 +406,7 @@ func TestFileMetadata_EmptyFile(t *testing.T) {
 		t.Fatalf("NewFileMetadata() error = %v", err)
 	}
 
-	meta, err := m.Get(context.Background(), "email-1")
+	meta, err := m.Get(context.Background(), "alice@example.com", "email-1")
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -397,7 +435,7 @@ func TestFileMetadata_CreatesDirectory(t *testing.T) {
 		t.Fatalf("NewFileMetadata() error = %v", err)
 	}
 
-	if err := m.Save(context.Background(), NewEmailMetadata("email-1", KeywordSeen)); err != nil {
+	if err := m.Save(context.Background(), NewEmailMetadata("alice@example.com", "email-1", KeywordSeen)); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 
@@ -417,7 +455,7 @@ func TestFileMetadata_AtomicWrite(t *testing.T) {
 	// Write multiple times rapidly.
 	for i := 0; i < 100; i++ {
 		id := "email-" + string(rune('0'+i%10))
-		if err := m.Save(context.Background(), NewEmailMetadata(id, KeywordSeen)); err != nil {
+		if err := m.Save(context.Background(), NewEmailMetadata("alice@example.com", id, KeywordSeen)); err != nil {
 			t.Fatalf("Save() error = %v", err)
 		}
 	}

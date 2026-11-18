@@ -251,7 +251,7 @@ func (r *Receiver) deliverToRecipient(ctx context.Context, recipient string, mes
 	// metadata stays aligned with the stored message. NewEmailMetadata stamps
 	// the server-owned receivedAt at delivery time; a new delivery has no
 	// keywords and is unread and unflagged until a JMAP client changes it.
-	if err := r.cfg.Metadata.Save(ctx, metadata.NewEmailMetadata(id)); err != nil {
+	if err := r.cfg.Metadata.Save(ctx, metadata.NewEmailMetadata(recipient, id)); err != nil {
 		return fmt.Errorf("failed to save metadata for %s: %w", id, err)
 	}
 

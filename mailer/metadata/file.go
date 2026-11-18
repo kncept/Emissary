@@ -16,9 +16,9 @@ import (
 
 // FileMetadata has two on-disk layouts:
 //
-//   - directory mode: one JSON file per email, at <dir>/<id>.json. This is the
-//     default (METADATA=file with FILESYSTEM_DIR) and mirrors the filesystem
-//     storage and user-manager layouts.
+//   - directory mode: one JSON file per record, at <dir>/<userID>/<mailID>.json.
+//     This is the default (METADATA=file with FILESYSTEM_DIR) and mirrors the
+//     filesystem storage and user-manager layouts.
 //   - legacy file mode: one JSON array holding every record. A path with a
 //     .json suffix, or an existing regular file, keeps this old layout so
 //     existing METADATA_FILE deployments and data continue to work.
@@ -26,7 +26,7 @@ type FileMetadata struct {
 	path      string
 	directory bool
 	mu        sync.RWMutex
-	data      map[string]EmailMetadata // legacy file mode only
+	data      map[string]map[string]EmailMetadata // legacy file mode only: userID -> mailID -> metadata
 }
 
 func NewFileMetadata(path string) (*FileMetadata, error) {
@@ -40,7 +40,7 @@ func NewFileMetadata(path string) (*FileMetadata, error) {
 
 	fm := &FileMetadata{
 		path: expanded,
-		data: make(map[string]EmailMetadata),
+		data: make(map[string]map[string]EmailMetadata),
 	}
 	info, err := os.Stat(expanded)
 	switch {
@@ -82,7 +82,11 @@ func (f *FileMetadata) load() error {
 		return fmt.Errorf("failed to unmarshal metadata: %w", err)
 	}
 	for _, entry := range entries {
-		f.data[entry.ID] = entry.Clone()
+		m := entry.Clone()
+		if f.data[m.UserID] == nil {
+			f.data[m.UserID] = make(map[string]EmailMetadata)
+		}
+		f.data[m.UserID][m.ID] = m
 	}
 	return nil
 }
@@ -90,9 +94,24 @@ func (f *FileMetadata) load() error {
 // saveLocked persists the legacy whole-file layout. The caller must hold the
 // lock (read or write).
 func (f *FileMetadata) saveLocked() error {
-	entries := make([]EmailMetadata, 0, len(f.data))
-	for _, v := range f.data {
-		entries = append(entries, v)
+	var entries []EmailMetadata
+	users := make([]string, 0, len(f.data))
+	for u := range f.data {
+		users = append(users, u)
+	}
+	sort.Strings(users)
+	for _, u := range users {
+		ids := make([]string, 0, len(f.data[u]))
+		for id := range f.data[u] {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			entries = append(entries, f.data[u][id])
+		}
+	}
+	if entries == nil {
+		entries = []EmailMetadata{}
 	}
 
 	data, err := json.MarshalIndent(entries, "", "  ")
@@ -102,41 +121,64 @@ func (f *FileMetadata) saveLocked() error {
 	return fsutil.WriteFileAtomically(f.path, data, 0644)
 }
 
-func (f *FileMetadata) recordPath(id string) (string, error) {
-	key := strings.TrimPrefix(id, "/") + ".json"
+func (f *FileMetadata) recordPath(userID, mailID string) (string, error) {
+	key := filepath.ToSlash(filepath.Join(strings.TrimPrefix(userID, "/"), strings.TrimPrefix(mailID, "/"))) + ".json"
+	return fsutil.ResolveKey(f.path, key)
+}
+
+func (f *FileMetadata) legacyRecordPath(mailID string) (string, error) {
+	key := strings.TrimPrefix(mailID, "/") + ".json"
 	return fsutil.ResolveKey(f.path, key)
 }
 
 func (f *FileMetadata) Name() string { return "file" }
 
-func (f *FileMetadata) Get(ctx context.Context, id string) (EmailMetadata, error) {
+func (f *FileMetadata) Get(ctx context.Context, userID, mailID string) (EmailMetadata, error) {
 	if !f.directory {
 		f.mu.RLock()
 		defer f.mu.RUnlock()
-		m, ok := f.data[id]
-		if !ok {
-			// Older messages may have no metadata record.
-			return EmptyEmailMetadata(id), nil
+		if byUser, ok := f.data[userID]; ok {
+			if m, ok := byUser[mailID]; ok {
+				return m.Clone(), nil
+			}
 		}
-		return m.Clone(), nil
+		return EmptyEmailMetadata(userID, mailID), nil
 	}
 
-	path, err := f.recordPath(id)
+	path, err := f.recordPath(userID, mailID)
 	if err != nil {
-		return EmptyEmailMetadata(id), err
+		return EmptyEmailMetadata(userID, mailID), err
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return EmptyEmailMetadata(id), nil
+			// Backward compatibility: older directory-mode records were stored
+			// by mail id only.
+			legacyPath, lerr := f.legacyRecordPath(mailID)
+			if lerr == nil && legacyPath != path {
+				if lbody, lreadErr := os.ReadFile(legacyPath); lreadErr == nil {
+					body = lbody
+					err = nil
+				} else if os.IsNotExist(lreadErr) {
+					return EmptyEmailMetadata(userID, mailID), nil
+				} else {
+					return EmptyEmailMetadata(userID, mailID), fmt.Errorf("failed to read metadata for %q/%q: %w", userID, mailID, lreadErr)
+				}
+			} else {
+				return EmptyEmailMetadata(userID, mailID), nil
+			}
+		} else {
+			return EmptyEmailMetadata(userID, mailID), fmt.Errorf("failed to read metadata for %q/%q: %w", userID, mailID, err)
 		}
-		return EmptyEmailMetadata(id), fmt.Errorf("failed to read metadata for %q: %w", id, err)
 	}
 	var m EmailMetadata
 	if err := json.Unmarshal(body, &m); err != nil {
-		return EmptyEmailMetadata(id), fmt.Errorf("failed to unmarshal metadata for %q: %w", id, err)
+		return EmptyEmailMetadata(userID, mailID), fmt.Errorf("failed to unmarshal metadata for %q/%q: %w", userID, mailID, err)
 	}
-	m.ID = id
+	if m.UserID == "" {
+		m.UserID = userID
+	}
+	m.ID = mailID
 	return m.Clone(), nil
 }
 
@@ -144,11 +186,14 @@ func (f *FileMetadata) Save(ctx context.Context, metadata EmailMetadata) error {
 	if !f.directory {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		f.data[metadata.ID] = metadata.Clone()
+		if f.data[metadata.UserID] == nil {
+			f.data[metadata.UserID] = make(map[string]EmailMetadata)
+		}
+		f.data[metadata.UserID][metadata.ID] = metadata.Clone()
 		return f.saveLocked()
 	}
 
-	path, err := f.recordPath(metadata.ID)
+	path, err := f.recordPath(metadata.UserID, metadata.ID)
 	if err != nil {
 		return err
 	}
@@ -161,39 +206,53 @@ func (f *FileMetadata) Save(ctx context.Context, metadata EmailMetadata) error {
 	return fsutil.WriteFileAtomically(path, body, 0644)
 }
 
-func (f *FileMetadata) Delete(ctx context.Context, id string) error {
+func (f *FileMetadata) Delete(ctx context.Context, userID, mailID string) error {
 	if !f.directory {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		delete(f.data, id)
+		if byUser, ok := f.data[userID]; ok {
+			delete(byUser, mailID)
+			if len(byUser) == 0 {
+				delete(f.data, userID)
+			}
+		}
 		return f.saveLocked()
 	}
 
-	path, err := f.recordPath(id)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	path, err := f.recordPath(userID, mailID)
 	if err != nil {
 		return err
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to delete metadata for %q: %w", id, err)
+		return fmt.Errorf("failed to delete metadata for %q/%q: %w", userID, mailID, err)
+	}
+	legacyPath, lerr := f.legacyRecordPath(mailID)
+	if lerr == nil && legacyPath != path {
+		if err := os.Remove(legacyPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to delete metadata for %q/%q: %w", userID, mailID, err)
+		}
 	}
 	return nil
 }
 
-func (f *FileMetadata) List(ctx context.Context) ([]EmailMetadata, error) {
+func (f *FileMetadata) List(ctx context.Context, userID string) ([]EmailMetadata, error) {
 	if !f.directory {
 		f.mu.RLock()
 		defer f.mu.RUnlock()
-		result := make([]EmailMetadata, 0, len(f.data))
-		for _, v := range f.data {
+		byUser := f.data[userID]
+		result := make([]EmailMetadata, 0, len(byUser))
+		for _, v := range byUser {
 			result = append(result, v.Clone())
 		}
+		sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 		return result, nil
 	}
 
 	var result []EmailMetadata
-	err := filepath.WalkDir(f.path, func(p string, entry fs.DirEntry, walkErr error) error {
+	userDir := filepath.Join(f.path, filepath.FromSlash(strings.TrimPrefix(userID, "/")))
+	err := filepath.WalkDir(userDir, func(p string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if os.IsNotExist(walkErr) {
 				return nil
@@ -203,20 +262,23 @@ func (f *FileMetadata) List(ctx context.Context) ([]EmailMetadata, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			return nil
 		}
-		rel, err := filepath.Rel(f.path, p)
+		rel, err := filepath.Rel(userDir, p)
 		if err != nil {
 			return err
 		}
-		id := strings.TrimSuffix(filepath.ToSlash(rel), ".json")
+		mailID := strings.TrimSuffix(filepath.ToSlash(rel), ".json")
 		body, err := os.ReadFile(p)
 		if err != nil {
-			return fmt.Errorf("failed to read metadata for %q: %w", id, err)
+			return fmt.Errorf("failed to read metadata for %q/%q: %w", userID, mailID, err)
 		}
 		var m EmailMetadata
 		if err := json.Unmarshal(body, &m); err != nil {
-			return fmt.Errorf("failed to unmarshal metadata for %q: %w", id, err)
+			return fmt.Errorf("failed to unmarshal metadata for %q/%q: %w", userID, mailID, err)
 		}
-		m.ID = id
+		if m.UserID == "" {
+			m.UserID = userID
+		}
+		m.ID = mailID
 		result = append(result, m.Clone())
 		return nil
 	})
