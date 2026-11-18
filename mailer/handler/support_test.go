@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 )
 
 func decodeJSONBody(t *testing.T, body []byte, destination any) {
@@ -13,7 +17,70 @@ func decodeJSONBody(t *testing.T, body []byte, destination any) {
 	}
 }
 
-func TestSupportEndpointsRequireAdmin(t *testing.T) {
+// signedSupportToken builds a bearer token with the supplied claims using the
+// JWT secret configured by newHandlerForTest. Tests use it to exercise claim
+// combinations that cannot be produced by the configured user managers.
+func signedSupportToken(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	now := time.Now()
+	if _, ok := claims["sub"]; !ok {
+		claims["sub"] = "manager@example.com"
+	}
+	if _, ok := claims["iat"]; !ok {
+		claims["iat"] = now.Unix()
+	}
+	if _, ok := claims["exp"]; !ok {
+		claims["exp"] = now.Add(time.Hour).Unix()
+	}
+
+	header, err := json.Marshal(map[string]string{"alg": "HS256", "typ": "JWT"})
+	if err != nil {
+		t.Fatalf("marshal header: %v", err)
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("marshal claims: %v", err)
+	}
+	encoding := base64.RawURLEncoding
+	signingInput := encoding.EncodeToString(header) + "." + encoding.EncodeToString(payload)
+	mac := hmac.New(sha256.New, []byte("secret"))
+	mac.Write([]byte(signingInput))
+	return signingInput + "." + encoding.EncodeToString(mac.Sum(nil))
+}
+
+func TestSupportEndpointsUseSystemManagerClaim(t *testing.T) {
+	h, _, _ := newHandlerForTest(t, "secret")
+
+	systemManagerToken := signedSupportToken(t, map[string]any{"systemManager": true})
+	legacyAdminToken := signedSupportToken(t, map[string]any{"admin": true})
+
+	requests := []struct {
+		method string
+		target string
+		body   string
+	}{
+		{http.MethodGet, "/api/support/configurations", ""},
+		{http.MethodGet, "/api/support/configurations/storage", ""},
+		{http.MethodGet, "/api/support/bucket/root", ""},
+		{http.MethodPost, "/api/support/process-email", `{"id":"   "}`},
+	}
+	for _, test := range requests {
+		// A System Manager passes authorization; the response then reflects
+		// the configured (non-S3) storage backend or the invalid request.
+		w := request(t, h, test.method, test.target, test.body, systemManagerToken)
+		if w.Code == http.StatusForbidden {
+			t.Errorf("System Manager %s %s was denied: %s", test.method, test.target, w.Body.String())
+		}
+
+		// The removed admin claim no longer grants support access.
+		w = request(t, h, test.method, test.target, test.body, legacyAdminToken)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("legacy admin-only %s %s status = %d, want %d", test.method, test.target, w.Code, http.StatusForbidden)
+		}
+	}
+}
+
+func TestSupportEndpointsRequireSystemManager(t *testing.T) {
 	h, _, _ := newHandlerForTest(t, "secret")
 
 	status, adminToken, _ := login(t, h, "admin", "secret")

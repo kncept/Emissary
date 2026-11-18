@@ -11,10 +11,10 @@
  * may use a path under the prefix. This guarantees the documents never
  * overlap. See "Specs and path ownership" in docs/API.md.
  *
- * Every operation requires a valid bearer token whose `Admin` claim is
- * true. The non-admin visibility and data rules used elsewhere in the API
- * do not apply: support endpoints expose server configuration and the raw
- * contents of the inbound mail bucket, and `ProcessEmail` can move mail
+ * Every operation requires a valid bearer token whose `systemManager` claim
+ * is true. The ordinary per-user visibility and data rules used elsewhere in
+ * the API do not apply: support endpoints expose server configuration and the
+ * raw contents of the inbound mail bucket, and `ProcessEmail` can move mail
  * between the staging area and user mailboxes.
  *
  * Secrets (passwords, JWT signing secrets, LDAP bind passwords and AWS

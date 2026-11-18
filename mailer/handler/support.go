@@ -31,7 +31,7 @@ const (
 )
 
 // supportHandler implements the generated support API. All operations are
-// restricted to administrators; the generated security handler only validates
+// restricted to System Managers; the generated security handler only validates
 // the bearer token and stores the claims in the context.
 type supportHandler struct {
 	cfg      HandlerConfig
@@ -54,8 +54,8 @@ func newSupportHandler(cfg HandlerConfig, emailStore storage.Storage, metaStore 
 }
 
 // supportSecurityHandler validates the bearer token and makes the claims
-// available to the operation handlers. Admin enforcement happens in each
-// operation so an authenticated non-admin receives 403 rather than 401.
+// available to the operation handlers. System Manager enforcement happens in
+// each operation so an authenticated non-manager receives 403 rather than 401.
 type supportSecurityHandler struct {
 	authenticator *auth.Authenticator
 }
@@ -92,9 +92,9 @@ func supportErrorHandler(_ context.Context, w http.ResponseWriter, r *http.Reque
 	}
 }
 
-func isAdmin(ctx context.Context) bool {
+func isSystemManager(ctx context.Context) bool {
 	claims := currentClaimsFromContext(ctx)
-	return claims != nil && claims.Admin
+	return claims != nil && claims.SystemManager
 }
 
 func forbiddenError() *supportapi.Error {
@@ -102,7 +102,7 @@ func forbiddenError() *supportapi.Error {
 }
 
 func (h *supportHandler) ListConfigurations(ctx context.Context) (supportapi.ListConfigurationsRes, error) {
-	if !isAdmin(ctx) {
+	if !isSystemManager(ctx) {
 		return &supportapi.ListConfigurationsForbidden{Error: forbiddenError().Error}, nil
 	}
 
@@ -121,7 +121,7 @@ func (h *supportHandler) ListConfigurations(ctx context.Context) (supportapi.Lis
 }
 
 func (h *supportHandler) GetConfiguration(ctx context.Context, params supportapi.GetConfigurationParams) (supportapi.GetConfigurationRes, error) {
-	if !isAdmin(ctx) {
+	if !isSystemManager(ctx) {
 		return &supportapi.GetConfigurationForbidden{Error: forbiddenError().Error}, nil
 	}
 
@@ -134,7 +134,7 @@ func (h *supportHandler) GetConfiguration(ctx context.Context, params supportapi
 }
 
 func (h *supportHandler) ListBucketRoot(ctx context.Context) (supportapi.ListBucketRootRes, error) {
-	if !isAdmin(ctx) {
+	if !isSystemManager(ctx) {
 		return &supportapi.ListBucketRootForbidden{Error: forbiddenError().Error}, nil
 	}
 
@@ -169,7 +169,7 @@ func (h *supportHandler) ListBucketRoot(ctx context.Context) (supportapi.ListBuc
 }
 
 func (h *supportHandler) ProcessEmail(ctx context.Context, req *supportapi.ProcessEmailRequest) (supportapi.ProcessEmailRes, error) {
-	if !isAdmin(ctx) {
+	if !isSystemManager(ctx) {
 		return &supportapi.ProcessEmailForbidden{Error: forbiddenError().Error}, nil
 	}
 

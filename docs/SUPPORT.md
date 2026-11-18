@@ -2,8 +2,8 @@
 
 Emissary includes an administrative support surface for inspecting runtime
 configuration and working with the inbound mail staging area. It is available
-only to the built-in administrator and is reached from **Settings → Support**
-in the web client, or directly through the API under `/api/support/`.
+to System Managers and is reached from **Settings → Support** in the web
+client, or directly through the API under `/api/support/`.
 
 The wire contract is [`api/support.yaml`](../api/support.yaml); this document
 describes how the operations behave.
@@ -11,15 +11,16 @@ describes how the operations behave.
 ## Authorization
 
 Every support operation requires a bearer token from
-`POST /api/auth/login` whose `Admin` claim is true. The built-in
-`USERNAME`/`PASSWORD` administrator is the only principal with that claim;
-ordinary users and Emissary-managed administrators without the claim receive
-`403 insufficient permissions`.
+`POST /api/auth/login` whose `systemManager` claim is true. The built-in
+`USERNAME`/`PASSWORD` administrator always receives that claim; an
+Emissary-managed user receives it when their account has the System Manager
+role. Ordinary users receive `403 insufficient permissions`. The obsolete
+`admin` claim is no longer issued or checked.
 
 - Missing or invalid tokens receive `401 authentication required` and a
   `WWW-Authenticate: Bearer realm="emissary"` header.
-- Support endpoints ignore the ordinary per-user visibility rules. An
-  administrator can see server configuration and every staging object.
+- Support endpoints ignore the ordinary per-user visibility rules. A System
+  Manager can see server configuration and every staging object.
 - Response bodies use the shared `{"error": "<message>"}` convention from
   [API.md](API.md#conventions).
 
@@ -99,7 +100,7 @@ is configured:
 | `user-manager` | `ldapBindPasswordConfigured` |
 
 AWS credentials are never part of the configuration response. The `settings`
-object contains only values that are safe for an administrator to read;
+object contains only values that are safe for a System Manager to read;
 passwords, signing secrets, LDAP bind passwords and access keys are omitted.
 
 Because settings are string-valued, booleans are reported as `"true"` or
@@ -177,7 +178,7 @@ deleted after all deliveries and bounces have been attempted.
 ## Frontend
 
 The **Support** screen is reachable from Settings only when the signed-in user
-has the `Admin` claim. It shows:
+has the `systemManager` claim. It shows:
 
 - The configuration section list with its implementation; selecting a section
   shows its settings.
@@ -186,8 +187,9 @@ has the `Admin` claim. It shows:
   state. It does not use a browser dialog; see
   [DESIGN.md](DESIGN.md#frontend-ui-conventions) for the no-native-dialog rule.
 
-Non-admin users do not see the Settings entry and are redirected away from
-`/support`; the API also enforces the `Admin` claim regardless of the client.
+Users without System Manager permission do not see the Settings entry and are
+redirected away from `/support`; the API also enforces the `systemManager`
+claim regardless of the client.
 
 ## Related documentation
 

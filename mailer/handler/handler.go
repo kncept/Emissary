@@ -266,7 +266,7 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 
 	mux.Handle("GET /api/user/autocomplete", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims := currentClaims(r)
-		if claims == nil || !claims.Admin {
+		if claims == nil || !claims.SystemManager {
 			writeError(w, http.StatusForbidden, "insufficient permissions")
 			return
 		}
@@ -298,8 +298,8 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 	if err != nil {
 		log.Printf("failed to create support server: %v", err)
 	} else {
-		// Register per-method prefixes so the admin routes coexist with the
-		// method-specific JMAP catch-all (POST /api/jmap/).
+		// Register per-method prefixes so the System Manager routes coexist
+		// with the method-specific JMAP catch-all (POST /api/jmap/).
 		mux.Handle("GET /api/support/", supportServer)
 		mux.Handle("POST /api/support/", supportServer)
 	}

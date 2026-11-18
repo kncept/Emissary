@@ -32,7 +32,7 @@ never overlap:
   prefix is owned exclusively by this document: it never defines
   operations outside the prefix, and no other document may define a
   path under it.
-- [`api/users.yaml`](../api/users.yaml) — user management (admin only).
+- [`api/users.yaml`](../api/users.yaml) — user management.
   **Every operation lives under the reserved URL prefix `/api/user/`.**
   The prefix is owned exclusively by this document: it never defines
   operations outside the prefix, and no other document may define a
@@ -44,11 +44,11 @@ never overlap:
   none of its paths may fall under `/api/auth/`, `/api/user/` or
   `/api/support/`.
 - [`api/support.yaml`](../api/support.yaml) — administrative support and
-  diagnostics (admin only). **Every operation lives under the reserved
+  diagnostics (System Managers only). **Every operation lives under the reserved
   URL prefix `/api/support/`.** The prefix is owned exclusively by this
   document: it never defines operations outside the prefix, and no other
   document may define a path under it. These endpoints require the
-  `Admin` JWT claim; see [SUPPORT.md](SUPPORT.md).
+  `systemManager` JWT claim; see [SUPPORT.md](SUPPORT.md).
 
 The rule is enforced by `api/spec_test.go` (run by `./run.sh test`):
 every path in `auth.yaml` must start with `/api/auth/`, every path in
@@ -102,7 +102,7 @@ not generated from `users.yaml`: it is served directly by the configured
 
 † Any authenticated user can change their own password. Administrators with `EmissaryUserManagement` can change any user's password. Requires Emissary-mastered user manager (`ddb` backend).
 
-‡ Requires the `Admin` JWT claim (the built-in administrator). See [SUPPORT.md](SUPPORT.md).
+‡ Requires the `systemManager` JWT claim. See [SUPPORT.md](SUPPORT.md).
 
 ## JMAP Mail Operations
 
@@ -115,10 +115,10 @@ JMAP mailbox such as `inbox`, `sent`, `drafts`, `trash`, `archive` or
 
 ### Account selection and masquerade
 
-The default `accountId` is the authenticated JWT `sub`. A non-admin call
-that supplies a different `accountId` is rejected. An administrator may
-supply any `accountId` to read or act in that account's mailbox
-(masquerade); this applies to `Email/query`, `Email/get`, `Email/set`
+The default `accountId` is the authenticated JWT `sub`. A call without
+System Manager permission that supplies a different `accountId` is rejected.
+A System Manager may supply any `accountId` to read or act in that account's
+mailbox (masquerade); this applies to `Email/query`, `Email/get`, `Email/set`
 and `EmailSubmission/set`.
 
 ### List Emails
@@ -175,9 +175,9 @@ exists as a stable hook for future revocation. Returns
 
 ## `GET /api/user/autocomplete`
 
-Searches user IDs (email addresses) for admin masquerade. The endpoint is
-backed by `UserManager.Autocomplete`, not by the generated management
-server, and is available to administrators.
+Searches user IDs (email addresses) for System Manager masquerade. The
+endpoint is backed by `UserManager.Autocomplete`, not by the generated
+management server, and is available to System Managers.
 
 Query parameter `q` is required and must be at least 3 characters.
 
@@ -198,7 +198,7 @@ Returns up to 10 matches. An empty list means there are no matches (not a
 ## Support API
 
 The administrative support endpoints under `/api/support/` are documented in
-[SUPPORT.md](SUPPORT.md). They require the `Admin` JWT claim and expose:
+[SUPPORT.md](SUPPORT.md). They require the `systemManager` JWT claim and expose:
 
 - `GET /api/support/configurations` — configuration sections and their
   implementations.

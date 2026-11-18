@@ -23,7 +23,7 @@
  *   address of the user; `sid` - a session id (used to ensure strict
  *   access/refresh token stepping). In addition to standard claims,
  *   the JWT MAY have the following attributes: `Subscribed`
- *   (boolean), `Admin` (boolean), `EmissaryUserManagement`
+ *   (boolean), `systemManager` (boolean), `EmissaryUserManagement`
  *   (boolean).
  * - the **refresh token**, with a duration of 30 days. It is only
  *   ever sent to `POST /api/auth/refresh`, never as a bearer token.
@@ -52,8 +52,8 @@ export interface TokenResponse {
      * `sid` (a session id, used to ensure strict
      * access/refresh token stepping) must always be present.
      * In addition to standard claims, the JWT MAY have the
-     * following attributes: `Subscribed` (boolean), `Admin`
-     * (boolean), `EmissaryUserManagement` (boolean).
+     * following attributes: `Subscribed` (boolean),
+     * `systemManager` (boolean), `EmissaryUserManagement` (boolean).
      * @minLength 1
      */
   accessToken: string;

@@ -92,7 +92,7 @@ type TokenResponse struct {
 	// `Authorization: Bearer <accessToken>` on other endpoints. The claims `sub` (the email address of the
 	// user) and `sid` (a session id, used to ensure strict access/refresh token stepping) must always be
 	// present. In addition to standard claims, the JWT MAY have the following attributes: `Subscribed`
-	// (boolean), `Admin` (boolean), `EmissaryUserManagement` (boolean).
+	// (boolean), `systemManager` (boolean), `EmissaryUserManagement` (boolean).
 	AccessToken string `json:"accessToken"`
 	// A signed JWT with a duration of 30 days, exchanged at `/api/auth/refresh`. It must contain: `sub` -
 	// the email address of the user (used to double-check the session); `sid` - the session id; `issue` -

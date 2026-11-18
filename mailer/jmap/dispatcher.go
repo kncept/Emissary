@@ -88,9 +88,21 @@ type Response struct {
 	SessionState    string            `json:"sessionState"`
 }
 
+type claimsContextKey struct{}
+
+// systemManagerFromContext reports whether the requesting token has system
+// management privileges. Method handlers use this for operations where the
+// caller's privileges matter, rather than the privileges of the account being
+// accessed.
+func systemManagerFromContext(ctx context.Context) bool {
+	claims, _ := ctx.Value(claimsContextKey{}).(*auth.Claims)
+	return claims != nil && claims.SystemManager
+}
+
 // DispatchRequest processes a batch of method calls and returns the responses.
 func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID string, claims *auth.Claims, req *Request) (*Response, error) {
 	responses := make([]Invocation, 0, len(req.MethodCalls))
+	requestCtx := context.WithValue(ctx, claimsContextKey{}, claims)
 
 	for _, call := range req.MethodCalls {
 		// Extract accountId from method arguments, fallback to default
@@ -104,14 +116,15 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 			}
 		}
 
-		// Validate accountId: non-admin users can only access their own account
-		if claims != nil && !claims.Admin && accountID != claims.Subject {
+		// Validate accountId: users without System Manager permission can only
+		// access their own account.
+		if claims != nil && !claims.SystemManager && accountID != claims.Subject {
 			resp := d.errorResponse(call, fmt.Errorf("forbidden: insufficient permissions to access account %s", accountID))
 			responses = append(responses, resp)
 			continue
 		}
 
-		resp, err := d.dispatchCall(ctx, accountID, call)
+		resp, err := d.dispatchCall(requestCtx, accountID, call)
 		if err != nil {
 			// Return an error response for this method call
 			resp = d.errorResponse(call, err)

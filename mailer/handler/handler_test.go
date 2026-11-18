@@ -373,7 +373,7 @@ func TestUserReadsOnlyOwnMailbox(t *testing.T) {
 	}
 }
 
-func TestAdminMasqueradesViaAccountID(t *testing.T) {
+func TestSystemManagerMasqueradesViaAccountID(t *testing.T) {
 	h, store, _ := newHandlerForTest(t, "secret")
 	addEmail(store, "received", "alice@example.com", "bob@example.com")
 	addEmail(store, "sent", "bob@example.com", "carol@example.com")
@@ -384,14 +384,14 @@ func TestAdminMasqueradesViaAccountID(t *testing.T) {
 		t.Fatalf("admin login status = %d, want %d", status, http.StatusOK)
 	}
 
-	// Verify the token has admin claim.
+	// Verify the token has the System Manager claim.
 	authenticator := auth.New("admin", "secret", "secret", time.Hour, "", "")
 	claims, err := authenticator.ValidateClaims(token)
 	if err != nil {
 		t.Fatalf("validate admin token: %v", err)
 	}
-	if !claims.Admin {
-		t.Errorf("admin flag = %v, want true", claims.Admin)
+	if !claims.SystemManager {
+		t.Errorf("systemManager = %v, want true", claims.SystemManager)
 	}
 
 	cases := map[string]string{
@@ -415,6 +415,43 @@ func TestAdminMasqueradesViaAccountID(t *testing.T) {
 		if len(ids) != 1 || !ids[wantID] {
 			t.Errorf("account %s ids = %v, want only %s", accountID, ids, wantID)
 		}
+	}
+}
+
+func TestSystemManagerClaimAllowsMasqueradeWithoutAdminClaim(t *testing.T) {
+	h, store, _ := newHandlerForTest(t, "secret")
+	addEmail(store, "received", "alice@example.com", "bob@example.com")
+
+	systemManagerToken := signedSupportToken(t, map[string]any{
+		"sub":           "manager@example.com",
+		"systemManager": true,
+	})
+	emails := getEmailsJMAP(t, h, systemManagerToken, "bob@example.com")
+	if len(emails) != 1 || emails[0].ID != "received" {
+		t.Errorf("System Manager masquerade emails = %v, want bob's received email", emails)
+	}
+
+	legacyAdminToken := signedSupportToken(t, map[string]any{
+		"sub":   "manager@example.com",
+		"admin": true,
+	})
+	emails = getEmailsJMAP(t, h, legacyAdminToken, "bob@example.com")
+	if len(emails) != 0 {
+		t.Errorf("legacy admin-only token could masquerade: emails = %v", emails)
+	}
+}
+
+func TestAutocompleteRequiresSystemManagerClaim(t *testing.T) {
+	h, _, _ := newHandlerForTest(t, "secret")
+
+	systemManagerToken := signedSupportToken(t, map[string]any{"systemManager": true})
+	if w := request(t, h, http.MethodGet, "/api/user/autocomplete?q=alice", "", systemManagerToken); w.Code != http.StatusOK {
+		t.Errorf("System Manager autocomplete status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	legacyAdminToken := signedSupportToken(t, map[string]any{"admin": true})
+	if w := request(t, h, http.MethodGet, "/api/user/autocomplete?q=alice", "", legacyAdminToken); w.Code != http.StatusForbidden {
+		t.Errorf("legacy admin-only autocomplete status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 }
 
@@ -553,23 +590,26 @@ func TestDeleteEmailAlsoDeletesMetadata(t *testing.T) {
 	}
 }
 
-func TestJWTIncludesUserIDAndAdminOnlyForAdmin(t *testing.T) {
+func TestJWTIncludesUserIDAndSystemManagerOnlyForAdmin(t *testing.T) {
 	h, _, _ := newHandlerForTest(t, "secret")
 
 	_, adminToken, _ := login(t, h, "admin", "secret")
 	_, userToken, _ := login(t, h, "alice@example.com", "")
 
 	adminClaims := decodeClaims(t, adminToken)
-	if adminClaims["sub"] != "admin" || adminClaims["admin"] != true {
-		t.Errorf("admin claims = %v, want sub admin and admin true", adminClaims)
+	if adminClaims["sub"] != "admin" || adminClaims["systemManager"] != true {
+		t.Errorf("admin claims = %v, want sub admin and systemManager true", adminClaims)
+	}
+	if _, ok := adminClaims["admin"]; ok {
+		t.Errorf("obsolete admin claim must not be emitted: %v", adminClaims)
 	}
 
 	userClaims := decodeClaims(t, userToken)
 	if userClaims["sub"] != "alice@example.com" {
 		t.Errorf("user sub = %v, want alice@example.com", userClaims["sub"])
 	}
-	if _, ok := userClaims["admin"]; ok {
-		t.Errorf("ordinary user claims should not include admin: %v", userClaims)
+	if _, ok := userClaims["systemManager"]; ok {
+		t.Errorf("ordinary user claims should not include systemManager: %v", userClaims)
 	}
 }
 

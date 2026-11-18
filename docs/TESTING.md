@@ -128,11 +128,11 @@ it. When renaming tests, keep this table in sync.
 | --- | --- |
 | Ordinary users read only their own account's mailbox | `handler` `TestUserReadsOnlyOwnMailbox`, `jmap` `TestHandler_EmailQueryScopesToAccountAndMailbox` |
 | Cross-account mail is absent from queries and `notFound` in `Email/get` (no existence leak) | `jmap` `TestHandler_EmailQueryScopesToAccountAndMailbox` |
-| A non-admin cannot access another `accountId` | `handler` `TestNonAdminCannotReadAnotherAccount` |
-| Admins masquerade by supplying the target `accountId` | `handler` `TestAdminMasqueradesViaAccountID` |
-| JWT `sub` is the user id (the user's email address); `admin: true` only for the built-in admin | `handler` `TestJWTIncludesUserIDAndAdminOnlyForAdmin`, `auth` tests |
+| A user without System Manager permission cannot access another `accountId` | `handler` `TestNonAdminCannotReadAnotherAccount` |
+| System Managers masquerade by supplying the target `accountId` | `handler` `TestSystemManagerMasqueradesViaAccountID`, `TestSystemManagerClaimAllowsMasqueradeWithoutAdminClaim` |
+| JWT `sub` is the user id (the user's email address); `systemManager: true` for the built-in admin and System Manager users; no `admin` claim | `handler` `TestJWTIncludesUserIDAndSystemManagerOnlyForAdmin`, `auth` tests |
 | Blank `PASSWORD` disables admin login without affecting other managers | `handler` `TestBlankAdminPasswordDisablesAdminLogin`, `usermanager` tests |
-| Ordinary users always send as themselves; admins as anyone; replies default to the original recipient | `handler` `TestSendEmailFromRules` |
+| Ordinary users always send as themselves; System Managers may use a custom envelope sender; replies default to the original recipient | `handler` `TestSendEmailFromRules` |
 | Deleting an email also removes its metadata | `handler` `TestDeleteEmailAlsoDeletesMetadata` |
 | Expired, future and wrong-audience/issuer tokens are rejected | `auth` `TestAuthenticator_Validate_*` |
 | Delivered ids are full object keys (timestamp + `.eml`) and account/mailbox are derived from them | `email` `TestMailboxFromID`, `TestParse_DerivesAccountAndMailboxFromDeliveredKey`, `storage` `TestS3StorageListAccountEmails*` |

@@ -34,14 +34,13 @@ type jwtHeader struct {
 	Type      string `json:"typ"`
 }
 
-// Claims is the verified content of an Emissary JWT. Subject is the user id;
-// Admin is present (and true) only for the built-in administrator.
-// SystemManager indicates the user has system management privileges.
-// EmissaryUserManagement indicates the user can manage other users (requires Emissary-mastered backend).
+// Claims is the verified content of an Emissary JWT. Subject is the user id.
+// SystemManager indicates the user has system management privileges (support
+// tools, masquerading, etc.). EmissaryUserManagement indicates the user can
+// manage other users (requires an Emissary-mastered backend).
 type Claims struct {
 	Subject                string `json:"sub"`
 	SID                    string `json:"sid,omitempty"`
-	Admin                  bool   `json:"admin,omitempty"`
 	SystemManager          bool   `json:"systemManager,omitempty"`
 	EmissaryUserManagement bool   `json:"EmissaryUserManagement,omitempty"`
 	Issue                  int    `json:"issue,omitempty"`
@@ -246,7 +245,6 @@ func (a *Authenticator) issueTokens(ctx context.Context, user *usermanager.User)
 	accessToken, err := a.signToken(Claims{
 		Subject:                user.ID,
 		SID:                    sid,
-		Admin:                  user.Admin,
 		SystemManager:          systemManager,
 		EmissaryUserManagement: emissaryUserMgmt,
 		IssuedAt:               now.Unix(),
@@ -302,7 +300,7 @@ func (a *Authenticator) ValidateRefreshToken(token string) (*Claims, error) {
 }
 
 // Validate verifies a token and returns its subject. It is retained for
-// callers that only need the user id; use ValidateClaims for the admin flag.
+// callers that only need the user id; use ValidateClaims for permission claims.
 func (a *Authenticator) Validate(token string) (string, error) {
 	claims, err := a.ValidateClaims(token)
 	if err != nil {

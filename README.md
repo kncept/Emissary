@@ -42,9 +42,10 @@ when `STORAGE=s3` and no backend is chosen):
 | `ldap` | Reserved for proxying authentication to an LDAP server. |
 
 The JWT carries the user id (the user's email address) in the `sub` claim and
-only includes `admin: true` for the built-in administrator. Mail is exposed
-through JMAP as per-user **mailboxes**: ordinary users read only their own
-`accountId`, while an administrator can pass another account's `accountId` on a
-JMAP method call to masquerade for support. Administrators can send as any
-address. See [API.md](docs/API.md#jmap-mail-operations) and
-[S3.md](docs/S3.md#bucket-layout) for details.
+includes `systemManager: true` for the built-in administrator and users with
+the System Manager role. Mail is exposed through JMAP as per-user **mailboxes**:
+ordinary users read only their own `accountId`, while a System Manager can pass
+another account's `accountId` on a JMAP method call to masquerade for support.
+System Managers can send with a custom envelope sender. See
+[API.md](docs/API.md#jmap-mail-operations) and [S3.md](docs/S3.md#bucket-layout)
+for details.

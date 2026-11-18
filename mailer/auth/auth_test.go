@@ -371,10 +371,10 @@ func TestAuthenticator_Validate_AudienceAndIssuerMatch(t *testing.T) {
 	}
 }
 
-func TestAuthenticator_IssueUser_AdminClaim(t *testing.T) {
+func TestAuthenticator_IssueUser_SystemManagerClaim(t *testing.T) {
 	a := New("admin", "pass", "secret", time.Hour, "", "")
 
-	// Test admin login
+	// The built-in administrator is a System Manager.
 	adminResult, err := a.Login(context.Background(), "admin", "pass")
 	if err != nil {
 		t.Fatalf("Login() error = %v", err)
@@ -384,8 +384,8 @@ func TestAuthenticator_IssueUser_AdminClaim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateClaims() error = %v", err)
 	}
-	if claims.Subject != "admin" || !claims.Admin {
-		t.Errorf("admin claims = %+v, want subject admin and admin true", claims)
+	if claims.Subject != "admin" || !claims.SystemManager {
+		t.Errorf("admin claims = %+v, want subject admin and systemManager true", claims)
 	}
 
 	// Test that we can't login as non-admin user with "none" user manager
@@ -398,9 +398,8 @@ func TestAuthenticator_IssueUser_AdminClaim(t *testing.T) {
 		t.Errorf("Login() error = %v, want %v", err, ErrInvalidCredentials)
 	}
 
-	// The admin claim must not be emitted for ordinary users (if they existed).
-	// We can't easily test this with the "none" user manager, but we can verify
-	// the admin token has the admin claim.
+	// The obsolete admin claim must not be emitted; System Manager is the
+	// single privilege claim for support and masquerade access.
 	parts := strings.Split(adminToken, ".")
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
@@ -410,8 +409,11 @@ func TestAuthenticator_IssueUser_AdminClaim(t *testing.T) {
 	if err := json.Unmarshal(payload, &raw); err != nil {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
-	if !raw["admin"].(bool) {
-		t.Errorf("admin claim should be present for admin user, got %v", raw)
+	if _, ok := raw["admin"]; ok {
+		t.Errorf("obsolete admin claim must not be emitted, got %v", raw)
+	}
+	if raw["systemManager"] != true {
+		t.Errorf("systemManager claim = %v, want true", raw["systemManager"])
 	}
 }
 

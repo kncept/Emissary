@@ -57,14 +57,15 @@ application.
 ## Visibility and authorization model
 
 Authentication produces a JWT (HS256, Bearer token) whose `sub` claim is
-the user id (the user's email address) and which carries `admin: true`
-only for the built-in administrator. Authorization is enforced at both
-the JMAP dispatcher and the storage boundary:
+the user id (the user's email address) and which carries
+`systemManager: true` for the built-in administrator and users with the
+System Manager role. Authorization is enforced at both the JMAP dispatcher
+and the storage boundary:
 
 - The default `accountId` for a JMAP call is the authenticated `sub`.
-  Non-admins may not supply a different `accountId`; the dispatcher
-  rejects the call.
-- Administrators may masquerade by supplying any `accountId`. Listing,
+  Users without System Manager permission may not supply a different
+  `accountId`; the dispatcher rejects the call.
+- System Managers may masquerade by supplying any `accountId`. Listing,
   getting, deleting and submitting are all scoped to that account.
 - `Email/query` reads only the selected account's mailbox prefix. An
   `inMailbox` filter narrows it to one JMAP mailbox; without the filter

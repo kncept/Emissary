@@ -14,7 +14,7 @@ import (
 // SecurityHandler is handler for security parameters.
 type SecurityHandler interface {
 	// HandleBearerAuth handles bearerAuth security.
-	// The access token from login or refresh (requires the Admin claim).
+	// The access token from login or refresh (requires the systemManager claim).
 	HandleBearerAuth(ctx context.Context, operationName OperationName, t BearerAuth) (context.Context, error)
 }
 
@@ -82,7 +82,7 @@ func (s *Server) securityBearerAuth(ctx context.Context, operationName Operation
 // SecuritySource is provider of security values (tokens, passwords, etc.).
 type SecuritySource interface {
 	// BearerAuth provides bearerAuth security value.
-	// The access token from login or refresh (requires the Admin claim).
+	// The access token from login or refresh (requires the systemManager claim).
 	BearerAuth(ctx context.Context, operationName OperationName) (BearerAuth, error)
 }
 

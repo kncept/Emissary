@@ -999,11 +999,9 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 		return nil, err
 	}
 
-	// Check if the user is admin
-	isAdmin := false
-	if user, err := h.userMgr.Lookup(ctx, accountID); err == nil {
-		isAdmin = user.Admin
-	}
+	// System Managers may supply a custom envelope sender. Ordinary users
+	// must send as the account they are acting for.
+	isSystemManager := systemManagerFromContext(ctx)
 
 	created := make(map[string]interface{})
 	notCreated := make(map[string]interface{})
@@ -1020,8 +1018,8 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 
 		// Determine from address
 		var from string
-		if isAdmin {
-			// Admins can use custom from address from envelope
+		if isSystemManager {
+			// System Managers can use a custom from address from the envelope
 			if submission.Envelope != nil && submission.Envelope.MailFrom.Email != "" {
 				from = submission.Envelope.MailFrom.Email
 			} else if emailMsg.From.Address != "" {
