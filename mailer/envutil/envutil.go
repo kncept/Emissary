@@ -15,7 +15,7 @@ var CommitHash string = "unknown"
 var BuildTime string = "unknown"
 
 // StartupMessage returns the startup log line for a binary:
-// "<name> <commit hash> <build time>".
+// "<name> (<commit hash>) built: <build time>".
 func StartupMessage(name string) string {
 	return fmt.Sprintf("%s (%s) built: %s\n", name, CommitHash, formatBuildTime(BuildTime))
 }

@@ -16,17 +16,17 @@ func TestStartupMessage(t *testing.T) {
 		{
 			name:      "ISO 8601 build time",
 			buildTime: "2026-11-20T08:17:12Z",
-			want:      "s3-receiver b3edad7 20/11/2026 08:17:12",
+			want:      "s3-receiver (b3edad7) built: 20/11/2026 08:17:12\n",
 		},
 		{
 			name:      "already formatted build time",
 			buildTime: "20/11/2026 08:17:12",
-			want:      "s3-receiver b3edad7 20/11/2026 08:17:12",
+			want:      "s3-receiver (b3edad7) built: 20/11/2026 08:17:12\n",
 		},
 		{
 			name:      "unset build time",
 			buildTime: "unknown",
-			want:      "s3-receiver b3edad7 unknown",
+			want:      "s3-receiver (b3edad7) built: unknown\n",
 		},
 	}
 
