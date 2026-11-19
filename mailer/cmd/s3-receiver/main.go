@@ -10,6 +10,7 @@ import (
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	mailerconfig "github.com/kncept/Emissary/mailer/config"
+	"github.com/kncept/Emissary/mailer/envutil"
 	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/receiver"
 	"github.com/kncept/Emissary/mailer/sender"
@@ -18,6 +19,8 @@ import (
 )
 
 func main() {
+	log.Print(envutil.StartupMessage("s3-receiver"))
+
 	lambda.Start(handler)
 }
 
@@ -147,9 +150,14 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 			continue
 		}
 
+		if bucket != cfg.Storage.S3Bucket {
+			log.Printf("Failed to process message %s: bucket mismatch: expected %s, got %s", key, cfg.Storage.S3Bucket, bucket)
+			continue
+		}
+
 		log.Printf("Processing S3 object: bucket=%s key=%s", bucket, key)
 
-		if err := rcvr.ProcessS3Event(ctx, bucket, key); err != nil {
+		if err := rcvr.ProcessS3Event(ctx, key); err != nil {
 			log.Printf("Failed to process message %s: %v", key, err)
 			// Continue processing other records
 			continue

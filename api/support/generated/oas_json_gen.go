@@ -1170,6 +1170,8 @@ func (s *HandlerRule) Decode(d *jx.Decoder) error {
 		*s = HandlerRuleDeliverToMailIdentity
 	case HandlerRuleBounce:
 		*s = HandlerRuleBounce
+	case HandlerRuleDrop:
+		*s = HandlerRuleDrop
 	default:
 		*s = HandlerRule(v)
 	}

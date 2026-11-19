@@ -130,16 +130,17 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 		return fmt.Errorf("failed to read object %s: %w", key, err)
 	}
 
-	// Parse the email
-	parsedEmail, err := email.Parse(key, strings.NewReader(string(rawMessage)))
-	if err != nil {
-		return fmt.Errorf("failed to parse email %s: %w", key, err)
-	}
+	// The staged object is the raw RFC 5322 message accepted by SES. Parse it
+	// with the wire-format type so the Received headers survive: UserEmail is
+	// the simplified type used for delivered .eml files and drops them.
+	wireEmail := email.ParseWireFormat(key, strings.NewReader(string(rawMessage)))
+	parsedEmail := wireEmail.ToUserEmail()
 
-	// Extract all recipients from To, Cc, Bcc
-	recipients := r.extractRecipients(parsedEmail)
+	// Route on the SMTP envelope recipient (RCPT TO) recorded in the Received
+	// header, not on the sender-controlled To/Cc/Bcc headers.
+	recipients := email.EnvelopeRecipients(wireEmail)
 	if len(recipients) == 0 {
-		log.Printf("receiver: no recipients found in message %s", key)
+		log.Printf("receiver: no envelope recipients found in message %s", key)
 		// Still delete the staging object to avoid reprocessing
 		if err := r.deleteStagingObject(ctx, key); err != nil {
 			return fmt.Errorf("failed to delete staging object after no recipients: %w", err)
@@ -149,44 +150,81 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 
 	log.Printf("receiver: message %s has %d recipient(s): %s", key, len(recipients), strings.Join(recipients, ", "))
 
-	// Resolve an action for each recipient by evaluating its configured
-	// handler rules in order. The first rule that applies wins.
-	var plans []recipientPlan
-	for _, recipient := range recipients {
-		rules, err := r.cfg.IdentityConfig.GetByRecipient(recipient)
-		if err != nil {
-			log.Printf("receiver: no routing rules for %s: %v (bouncing)", recipient, err)
-			plans = append(plans, recipientPlan{recipient: recipient, action: Bounce})
-			continue
-		}
-		plan, ok := r.planRecipient(ctx, recipient, rules)
-		if !ok {
-			// No rule handled the recipient. Bounce instead of silently
-			// dropping the message, which is what the default fallback does.
-			log.Printf("receiver: no handler rule matched %s; bouncing", recipient)
-			plan = recipientPlan{recipient: recipient, action: Bounce}
-		}
-		plans = append(plans, plan)
-	}
-
-	// Delivery results
+	// Resolve and apply the rules for each recipient in one pass. Every lookup
+	// is keyed by the recipient's mail identity. An identity's rules are tried
+	// in their configured order; processing stops at the first one that applies.
 	var deliveryErrors []error
 	var bounceErrors []error
-
 	bounceSender := fmt.Sprintf("mailer-daemon@%s", r.cfg.Domain)
-	for _, plan := range plans {
-		switch plan.action {
-		case DeliverToUser, DeliverToMailIdentity:
-			if err := r.deliverToRecipient(ctx, plan.mailbox, parsedEmail); err != nil {
-				log.Printf("receiver: failed to deliver to %s: %v", plan.mailbox, err)
-				deliveryErrors = append(deliveryErrors, fmt.Errorf("delivery to %s failed: %w", plan.mailbox, err))
+
+	for _, recipient := range recipients {
+		identity := MailIdentityForRecipient(recipient)
+		rules, err := r.cfg.IdentityConfig.GetByIdentity(identity)
+		if err != nil {
+			log.Printf("receiver: no routing rules for %s via mail identity %s: %v (bouncing)", recipient, identity, err)
+			if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
+				log.Printf("receiver: failed to send bounce to %s: %v", recipient, err)
+				bounceErrors = append(bounceErrors, fmt.Errorf("bounce to %s failed: %w", recipient, err))
 			}
-		case Bounce:
-			if err := r.sendBounce(ctx, key, parsedEmail, plan.recipient, bounceSender); err != nil {
-				log.Printf("receiver: failed to send bounce to %s: %v", plan.recipient, err)
-				bounceErrors = append(bounceErrors, fmt.Errorf("bounce to %s failed: %w", plan.recipient, err))
-			} else {
-				log.Printf("receiver: sent bounce for %s", plan.recipient)
+			continue
+		}
+
+		applied := false
+		for _, rule := range rules.Rules {
+			fmt.Printf("Evaluating rule %v from mailbox %s for user %s\n", rule, rules.MailIdentity, recipient)
+			switch rule {
+			case DeliverToUser:
+				user, err := r.cfg.UserManager.Lookup(ctx, recipient)
+				if err != nil || user == nil {
+					// This rule does not apply: keep trying the remaining rules
+					// in order instead of deciding the recipient's fate here.
+					log.Printf("receiver: recipient %s is not a user (rule %s)", recipient, rule)
+					continue
+				}
+				if err := r.deliverToRecipient(ctx, recipient, parsedEmail); err != nil {
+					log.Printf("receiver: failed to deliver to %s: %v", recipient, err)
+					deliveryErrors = append(deliveryErrors, fmt.Errorf("delivery to %s failed: %w", recipient, err))
+				}
+				applied = true
+			case DeliverToMailIdentity:
+				mailbox := rules.deliveryIdentity(recipient)
+				log.Printf("receiver: recipient %s routed to mail identity %s", recipient, mailbox)
+				if err := r.deliverToRecipient(ctx, mailbox, parsedEmail); err != nil {
+					log.Printf("receiver: failed to deliver to %s: %v", mailbox, err)
+					deliveryErrors = append(deliveryErrors, fmt.Errorf("delivery to %s failed: %w", mailbox, err))
+				}
+				applied = true
+			case Bounce:
+				if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
+					log.Printf("receiver: failed to send bounce to %s: %v", recipient, err)
+					bounceErrors = append(bounceErrors, fmt.Errorf("bounce to %s failed: %w", recipient, err))
+				} else {
+					log.Printf("receiver: sent bounce for %s", recipient)
+				}
+				applied = true
+			case Drop:
+				// Explicitly configured Drop is the only path that discards a
+				// recipient without a bounce. It is logged so operators can see
+				// where mail was intentionally dropped.
+				log.Printf("receiver: dropped message %s for %s", key, recipient)
+				applied = true
+			default:
+				// Validate should reject unknown rules, but never lose mail if a
+				// config was built without going through NewReceiver.
+				log.Printf("receiver: ignoring unknown handler rule %q for %s", rule, recipient)
+			}
+			if applied {
+				// First applicable rule wins; do not try the remaining rules.
+				break
+			}
+		}
+		if !applied {
+			// No rule applied. Bounce rather than discard: dropping is only
+			// ever the result of an explicit Drop rule.
+			log.Printf("receiver: no handler rule matched %s; bouncing", recipient)
+			if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
+				log.Printf("receiver: failed to send bounce to %s: %v", recipient, err)
+				bounceErrors = append(bounceErrors, fmt.Errorf("bounce to %s failed: %w", recipient, err))
 			}
 		}
 	}
@@ -208,73 +246,6 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 	return nil
 }
 
-// recipientPlan is the terminal action selected for one recipient after
-// evaluating its handler rules. mailbox is the delivery target for the
-// DeliverToMailIdentity rule.
-type recipientPlan struct {
-	recipient string
-	action    HandlerRule
-	mailbox   string
-}
-
-// planRecipient evaluates the identity's rules in order and returns the first
-// action that applies. DeliverToUser only applies when the user exists; a
-// failed lookup falls through to the next rule instead of deciding the outcome.
-func (r *Receiver) planRecipient(ctx context.Context, recipient string, rules HandlerRules) (recipientPlan, bool) {
-	for _, rule := range rules.Rules {
-		switch rule {
-		case DeliverToUser:
-			user, err := r.cfg.UserManager.Lookup(ctx, recipient)
-			if err != nil || user == nil {
-				log.Printf("receiver: recipient %s is not a user (rule %s)", recipient, rule)
-				continue
-			}
-			return recipientPlan{recipient: recipient, action: DeliverToUser, mailbox: recipient}, true
-		case DeliverToMailIdentity:
-			identity := rules.deliveryIdentity(recipient)
-			log.Printf("receiver: recipient %s routed to mail identity %s", recipient, identity)
-			return recipientPlan{recipient: recipient, action: DeliverToMailIdentity, mailbox: identity}, true
-		case Bounce:
-			return recipientPlan{recipient: recipient, action: Bounce}, true
-		default:
-			// Validate should reject unknown rules, but never lose mail if a
-			// config was built without going through NewReceiver.
-			log.Printf("receiver: ignoring unknown handler rule %q for %s", rule, recipient)
-		}
-	}
-	return recipientPlan{}, false
-}
-
-// extractRecipients extracts all unique recipient addresses from To, Cc, and Bcc headers.
-func (r *Receiver) extractRecipients(parsedEmail *email.UserEmail) []string {
-	seen := make(map[string]bool)
-	var recipients []string
-
-	for _, addr := range parsedEmail.To {
-		normalized := strings.ToLower(strings.TrimSpace(addr.Address))
-		if normalized != "" && !seen[normalized] {
-			seen[normalized] = true
-			recipients = append(recipients, normalized)
-		}
-	}
-	for _, addr := range parsedEmail.Cc {
-		normalized := strings.ToLower(strings.TrimSpace(addr.Address))
-		if normalized != "" && !seen[normalized] {
-			seen[normalized] = true
-			recipients = append(recipients, normalized)
-		}
-	}
-	for _, addr := range parsedEmail.Bcc {
-		normalized := strings.ToLower(strings.TrimSpace(addr.Address))
-		if normalized != "" && !seen[normalized] {
-			seen[normalized] = true
-			recipients = append(recipients, normalized)
-		}
-	}
-
-	return recipients
-}
-
 // deliverToRecipient stores the parsed message using the configured storage.
 // Storage owns the generated id and mailbox placement; the receiver only uses
 // the returned id to initialize the message's JMAP metadata.
@@ -293,7 +264,7 @@ func (r *Receiver) deliverToRecipient(ctx context.Context, recipient string, mes
 		return fmt.Errorf("failed to save metadata for %s: %w", id, err)
 	}
 
-	log.Printf("receiver: delivered message %s to %s", id, recipient)
+	log.Printf("receiver: delivered message id %s  (smtp id %s) to %s", id, message.MessageID, recipient)
 	return nil
 }
 
@@ -328,12 +299,6 @@ func (r *Receiver) deleteStagingObject(ctx context.Context, key string) error {
 
 // ProcessS3Event processes an S3 event notification (from Lambda).
 // This is the main entry point for the s3-receiver Lambda.
-func (r *Receiver) ProcessS3Event(ctx context.Context, bucket, key string) error {
-	// Verify the bucket matches our configured bucket
-	if bucket != r.cfg.Bucket {
-		return fmt.Errorf("bucket mismatch: expected %s, got %s", r.cfg.Bucket, bucket)
-	}
-
-	// Process the message
+func (r *Receiver) ProcessS3Event(ctx context.Context, key string) error {
 	return r.ProcessMessage(ctx, key)
 }

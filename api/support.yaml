@@ -632,11 +632,12 @@ components:
       additionalProperties: false
     HandlerRule:
       type: string
-      description: One receiver rule. `DeliverToUser` falls through when the user does not exist.
+      description: One receiver rule. `DeliverToUser` falls through when the user does not exist; `Drop` discards the message without a bounce.
       enum:
       - DeliverToUser
       - DeliverToMailIdentity
       - Bounce
+      - Drop
     Error:
       type: object
       required:

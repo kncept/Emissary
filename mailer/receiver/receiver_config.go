@@ -21,6 +21,9 @@ const DeliverToMailIdentity HandlerRule = "DeliverToMailIdentity"
 // sends a standard bounce
 const Bounce HandlerRule = "Bounce"
 
+// discards the message without delivering it or notifying the sender
+const Drop HandlerRule = "Drop"
+
 // ErrIdentityConfigNotFound is returned when a store has no configuration for
 // an identity. LoadMailIdentityConfig treats it as "seed the base fallback".
 var ErrIdentityConfigNotFound = errors.New("mail identity config not found")
@@ -49,7 +52,7 @@ func (h HandlerRules) Validate() error {
 	}
 	for _, rule := range h.Rules {
 		switch rule {
-		case DeliverToUser, DeliverToMailIdentity, Bounce:
+		case DeliverToUser, DeliverToMailIdentity, Bounce, Drop:
 		default:
 			return fmt.Errorf("unknown handler rule %q", rule)
 		}
@@ -87,15 +90,16 @@ func BaseMailIdentityConfig() MailIdentityConfig {
 	}
 }
 
-// GetByRecipient returns the rules for the mail identity of recipient, which
-// is the hostname after the last "@" in the address. A recipient without a
-// hostname uses the fallback entry, just like an unconfigured identity.
-func (c MailIdentityConfig) GetByRecipient(recipient string) (HandlerRules, error) {
+// MailIdentityForRecipient returns the mail identity whose rules apply to
+// recipient: the hostname after the last "@", normalised for case and space.
+// A recipient without a hostname uses the fallback identity. Callers must use
+// this value with GetByIdentity, so every rule lookup is keyed by mail identity.
+func MailIdentityForRecipient(recipient string) string {
 	at := strings.LastIndex(recipient, "@")
 	if at < 0 || at == len(recipient)-1 {
-		return c.GetByIdentity("")
+		return FallbackIdentity
 	}
-	return c.GetByIdentity(recipient[at+1:])
+	return normalizeIdentity(recipient[at+1:])
 }
 
 // GetByIdentity returns the rules for identity. Matching is case-insensitive,

@@ -19,6 +19,7 @@ const RULE_OPTIONS: HandlerRule[] = [
   HandlerRule.DeliverToUser,
   HandlerRule.DeliverToMailIdentity,
   HandlerRule.Bounce,
+  HandlerRule.Drop,
 ];
 
 function sortRules(rules: ReceiverDomainRules[]): ReceiverDomainRules[] {

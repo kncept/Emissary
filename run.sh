@@ -28,10 +28,10 @@ Commands:
   build:lambda  Build only the Lambda binary (bootstrap), for linux/amd64
   test          Run the test suite (Go and TypeScript)
   run           Build and run the frontend server
-  deploy        Deploy all stacks (id, in, client)
+  deploy        Build app assets and deploy all stacks (id, in, client)
   deploy:id     Deploy the email identity stack (SES verification, DKIM, MX, SPF, DMARC)
   deploy:in     Deploy the email identity and inbound stacks (id + in)
-  deploy:client Deploy the application stack (Lambda, API Gateway, DynamoDB)
+  deploy:client Build app assets and deploy the application stack (Lambda, API Gateway, DynamoDB)
   deploy:init   Initialize the deploy directory (run npm ci)
   deploy:list   List CDK stacks (runs deploy:init then cdk ls)
 EOF
@@ -186,10 +186,17 @@ deploy_list() {
 	)
 }
 
+# Build the binaries used by the client stack's Lambda assets.
+build_deploy_assets() {
+	build_frontend
+	build_lambda
+}
+
 # Deploy all stacks
 deploy_all() {
 	deploy_show_env
 	deploy_init
+	build_deploy_assets
 	(
 		cd deploy
 		npm run cdk -- deploy --all
@@ -220,8 +227,7 @@ deploy_in() {
 deploy_client() {
 	deploy_show_env
 	deploy_init
-	build_frontend
-	build_lambda
+	build_deploy_assets
 	(
 		cd deploy
 		npm run cdk -- deploy emissary-client-*
@@ -280,6 +286,7 @@ run() {
 	echo ""
 
 	# Run the frontend binary, passing through any additional arguments
+	echo "+ .build/frontend $*"
 	exec .build/frontend "$@"
 }
 

@@ -82,6 +82,15 @@ inbound mail or deleted by the message consumer. DynamoDB tables are created at
 deploy time from `TABLE_PREFIX` without per-table CREATE permissions at
 runtime, so the table must exist before the app starts.
 
+The allowed rules are `DeliverToUser`, `DeliverToMailIdentity`, `Bounce` and
+`Drop`. Rules are tried in order until one applies: `DeliverToUser` only
+matches when the recipient is a known user, `DeliverToMailIdentity` delivers
+to the identity's mailbox, `Bounce` notifies the sender, and `Drop` discards
+the message for that recipient without delivering it or sending a bounce.
+Because `Drop` is terminal, place it after any rule that should take
+precedence. No rule matching leaves the receiver bouncing rather than
+discarding the message.
+
 ## Metadata (JMAP keywords and received time)
 
 | Variable | Default | Description |

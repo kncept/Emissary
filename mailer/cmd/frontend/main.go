@@ -10,10 +10,13 @@ import (
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 	"github.com/kncept/Emissary/mailer/awsutil"
 	"github.com/kncept/Emissary/mailer/config"
+	"github.com/kncept/Emissary/mailer/envutil"
 	"github.com/kncept/Emissary/mailer/handler"
 )
 
 func main() {
+	log.Print(envutil.StartupMessage("frontend"))
+
 	ctx := context.Background()
 
 	// Load configuration using the config package

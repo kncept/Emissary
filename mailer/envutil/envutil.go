@@ -2,15 +2,36 @@ package envutil
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kncept/Emissary/mailer/awsutil"
 )
 
 var CommitHash string = "unknown"
 var BuildTime string = "unknown"
+
+// StartupMessage returns the startup log line for a binary:
+// "<name> <commit hash> <build time>".
+func StartupMessage(name string) string {
+	return fmt.Sprintf("%s (%s) built: %s\n", name, CommitHash, formatBuildTime(BuildTime))
+}
+
+// formatBuildTime renders the ldflag-provided timestamp as DD/MM/YYYY HH:MM:SS.
+// Values that are already in that format, or that cannot be parsed, are passed
+// through unchanged.
+func formatBuildTime(buildTime string) string {
+	const displayLayout = "02/01/2006 15:04:05"
+	for _, layout := range []string{time.RFC3339, displayLayout} {
+		if t, err := time.Parse(layout, buildTime); err == nil {
+			return t.Format(displayLayout)
+		}
+	}
+	return buildTime
+}
 
 // cache holds the environment variable cache.
 // It is populated lazily and shared across calls.

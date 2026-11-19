@@ -176,16 +176,20 @@ Example response (`200`):
 {
   "rules": [
     { "domain": "_", "rules": ["DeliverToUser", "Bounce"] },
-    { "domain": "news.example.com", "rules": ["DeliverToMailIdentity", "Bounce"] }
+    { "domain": "news.example.com", "rules": ["DeliverToMailIdentity", "Bounce"] },
+    { "domain": "blocked.example.com", "rules": ["Drop"] }
   ]
 }
 ```
 
 `domain` is the receiving identity and maps directly onto the list above. The
-allowed rules are `DeliverToUser`, `DeliverToMailIdentity` and `Bounce`.
-`DeliverToMailIdentity` delivers to the identity's own mailbox, even when no
-user account exists (administrators can open it via masquerade); the `_`
-fallback and a `*` key both mean the recipient's own mailbox. See
+allowed rules are `DeliverToUser`, `DeliverToMailIdentity`, `Bounce` and
+`Drop`. `DeliverToMailIdentity` delivers to the identity's own mailbox, even
+when no user account exists (administrators can open it via masquerade); the
+`_` fallback and a `*` key both mean the recipient's own mailbox. `Bounce`
+sends a standard bounce; `Drop` discards the message for that recipient with
+no delivery and no bounce. Both are terminal, so order them after any rule
+that should take precedence. See
 [CONFIGURATION.md](CONFIGURATION.md#receiver-inbound-routing-rules) for the
 backend settings.
 
@@ -272,7 +276,10 @@ S3/SNS receivers on one object from the bucket root:
 
 The `id` is the `key` reported by `GET /api/support/bucket/root`. Processing:
 
-1. Parses the raw message and extracts recipients from `To`, `Cc` and `Bcc`.
+1. Parses the raw message and extracts the SMTP envelope recipients from the
+   `for <address>` clauses of its topmost `Received` header (the addresses SES
+   accepted via `RCPT TO`), not from `To`, `Cc` or `Bcc`. A staged message with
+   no envelope recipient is skipped.
 2. Validates each recipient with the configured user manager.
 3. Copies the message into each valid recipient's inbox at
    `users/<recipient>/inbox/<timestamp>_<ses-message-id>.eml`, where

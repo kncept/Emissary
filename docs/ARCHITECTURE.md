@@ -153,30 +153,35 @@ When an inbound message is processed for delivery (by a consumer
 Lambda or scheduled job reading from the S3 bucket staging area), the following
 validation and delivery process applies:
 
-1. **Extract recipients** — Parse the message (`email.Parse`) and
-   collect all envelope recipients from `To`, `Cc`, and `Bcc` headers.
+1. **Extract recipients** — Parse the staged object with
+   `email.ParseWireFormat` (the raw wire-format type, unlike the simplified
+   `UserEmail` used for delivered `.eml` files) and collect the SMTP envelope
+   recipients from the `for <address>` clauses of the topmost `Received`
+   header. SES writes one for each `RCPT TO` when it stores the message.
+   `To`, `Cc`, and `Bcc` are sender-controlled and are never used for routing;
+   messages without a usable envelope recipient are skipped.
 
-2. **Validate each recipient** — For each recipient address, call
-   `UserManager.Lookup(ctx, address)` using the configured user manager
-   (see [Pluggable components](#pluggable-components)). This checks
-   whether the address corresponds to a known user in the system
-   (including the built-in administrator).
+2. **Resolve routing rules** — For each recipient, load the ordered
+   `HandlerRules` for its mail identity (the hostname after `@`) from the
+   receiver config store, falling back to the `_` entry. Rules are tried in
+   order until one applies:
 
-   - The `ddb` backend checks the DynamoDB users table.
-   - The `none` backend accepts only the administrator.
+   - `DeliverToUser` applies only when `UserManager.Lookup(ctx, address)`
+     returns a known user (including the built-in administrator).
+   - `DeliverToMailIdentity` delivers to the identity's mailbox without
+     requiring a user account.
+   - `Bounce` sends a standard bounce via `sender.Sender` with the original
+     message ID, a `BounceSender` address (e.g. `mailer-daemon@<DOMAIN>`),
+     the failed recipient and a `UserUnknown` bounce type, over the
+     configured transport (SES or log).
+   - `Drop` discards the message for that recipient: no delivery and no
+     bounce. This is the only path that silently discards mail.
 
-3. **Handle invalid recipients** — If a recipient is not found
-   (`ErrInvalidCredentials` / `ErrUserNotFound`), the message is
-   bounced:
-   - Construct a bounce message using the `sender.Sender` interface.
-   - Call `sender.Send(ctx, bounceMessage)` where the bounce message
-     includes the original message ID, a `BounceSender` address
-     (e.g., `mailer-daemon@<DOMAIN>`), the failed recipient, and an
-     appropriate bounce type (e.g., `UserUnknown`).
-   - The bounce is sent via the configured outbound transport (SES or
-     log).
+   When no rule applies, or no rules can be loaded, the receiver bounces
+   instead of discarding the message.
 
-4. **Deliver to valid recipients** — For each valid recipient:
+3. **Deliver to selected recipients** — For each recipient whose rule
+   selected delivery:
    - Call `Storage.AddEmail(ctx, recipient, parsedEmail)` on the configured
      store. The store assigns the id and writes to the recipient's `inbox`;
      the receiver does not construct mailbox keys.
@@ -187,15 +192,16 @@ validation and delivery process applies:
      set and a server-stamped `receivedAt`.
    - Each recipient gets their own copy in their `inbox` mailbox
 
-5. **Mixed validity** — If some recipients are valid and others are not:
-   - Valid recipients each receive their own copy in their inbox.
-   - Invalid recipients each generate a separate bounce.
-   - The staging object is deleted after all deliveries and bounces complete.
+4. **Mixed outcomes** — Different recipients of one message can take
+   different paths: delivery targets each get their own copy, bounced
+   recipients each generate a separate bounce, and dropped recipients get
+   neither. The staging object is deleted after all deliveries and bounces
+   complete.
 
-This process ensures that mail is only delivered to known users while
-providing proper SMTP bounce semantics for unknown addresses. Each user
-has their own physical copy of the message in their mailbox structure,
-enabling independent management (move, delete, flag) per user.
+Each delivery target has their own physical copy of the message in their
+mailbox structure, enabling independent management (move, delete, flag) per
+user. Delivery, bouncing and dropping are decided independently for every
+recipient by the configured rules for its domain.
 
 ## Outbound mail flow
 

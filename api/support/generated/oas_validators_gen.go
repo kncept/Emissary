@@ -124,6 +124,8 @@ func (s HandlerRule) Validate() error {
 		return nil
 	case "Bounce":
 		return nil
+	case "Drop":
+		return nil
 	default:
 		return errors.Errorf("invalid value: %v", s)
 	}

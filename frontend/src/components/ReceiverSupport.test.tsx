@@ -148,6 +148,7 @@ describe('Receiver rules editor', () => {
 
     const selects = container.querySelectorAll<HTMLSelectElement>('.receiver-rule-row select');
     expect(Array.from(selects).map((node) => node.value)).toEqual(['DeliverToUser', 'Bounce']);
+    expect(Array.from(selects[0].options).map((option) => option.value)).toContain('Drop');
 
     // Move Bounce above DeliverToUser.
     click(container.querySelector('button[title="Move rule up"]:not([disabled])')!);

@@ -19,12 +19,16 @@ rules are region-specific.
 
 | Command | Effect |
 | --- | --- |
-| `./run.sh deploy` | Deploy **all** stacks (`cdk deploy --all`). |
+| `./run.sh deploy` | Build the frontend and Lambda binaries, then deploy **all** stacks (`cdk deploy --all`). |
 | `./run.sh deploy:id` | Deploy only the identity stack. |
 | `./run.sh deploy:in` | Deploy the identity + inbound stacks. |
-| `./run.sh deploy:client` | Deploy only the application stack. |
+| `./run.sh deploy:client` | Build the frontend and Lambda binaries, then deploy only the application stack. |
 | `./run.sh deploy:init` | Install the CDK dependencies (`npm install` in `deploy/`). |
 | `./run.sh deploy:list` | Install dependencies and list the stacks (`cdk ls`). |
+
+`./run.sh run` only builds and starts the local frontend; it does not deploy
+anything to AWS. To update a deployed Lambda, use `./run.sh deploy:client` (or
+`./run.sh deploy`), which rebuilds both `bootstrap` binaries before CDK deploy.
 
 Stacks are named with the domain, dots replaced by dashes — for
 `example.com`: `emissary-id-example-com`, `emissary-in-example-com`,

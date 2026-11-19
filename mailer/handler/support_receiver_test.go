@@ -302,6 +302,26 @@ func TestSupportReceiverRulesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSupportReceiverRulesAcceptsDrop(t *testing.T) {
+	lister := &fakeSESIdentityLister{}
+	h, store := newReceiverSupportTestHandler(t, lister, nil)
+	_, token, _ := login(t, h, "admin", "secret")
+
+	body := `{"rules":[{"domain":"blocked.example.com","rules":["Drop"]}]}`
+	w := request(t, h, http.MethodPut, "/api/support/receiver/rules", body, token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, want %d (body %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	stored, err := store.Get(context.Background(), "blocked.example.com")
+	if err != nil {
+		t.Fatalf("stored rules: %v", err)
+	}
+	if !reflect.DeepEqual(stored.Rules, []receiver.HandlerRule{receiver.Drop}) {
+		t.Errorf("stored rules = %+v, want [Drop]", stored.Rules)
+	}
+}
+
 func TestSupportReceiverRulesDelete(t *testing.T) {
 	lister := &fakeSESIdentityLister{pages: []*ses.ListIdentitiesOutput{
 		{Identities: []string{"example.com", "news.example.com"}},

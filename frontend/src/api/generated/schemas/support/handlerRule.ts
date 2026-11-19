@@ -28,7 +28,7 @@
  */
 
 /**
- * One receiver rule. `DeliverToUser` falls through when the user does not exist.
+ * One receiver rule. `DeliverToUser` falls through when the user does not exist; `Drop` discards the message without a bounce.
  */
 export type HandlerRule = typeof HandlerRule[keyof typeof HandlerRule];
 
@@ -37,4 +37,5 @@ export const HandlerRule = {
   DeliverToUser: 'DeliverToUser',
   DeliverToMailIdentity: 'DeliverToMailIdentity',
   Bounce: 'Bounce',
+  Drop: 'Drop',
 } as const;
