@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -153,6 +154,7 @@ func TestSupportListsConfigurations(t *testing.T) {
 		"server":       false,
 		"storage":      false,
 		"sender":       false,
+		"receiver":     false,
 		"metadata":     false,
 		"session":      false,
 		"user-manager": false,
@@ -230,6 +232,54 @@ func TestSupportGetsConfigurationDetailsAndRedactsSecrets(t *testing.T) {
 	w = request(t, h, http.MethodGet, "/api/support/configurations/unknown", "", token)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("unknown section status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestSupportGetsReceiverConfigurationWithRules(t *testing.T) {
+	h, _, _ := newHandlerForTest(t, "secret")
+	_, token, _ := login(t, h, "admin", "secret")
+
+	w := request(t, h, http.MethodGet, "/api/support/configurations/receiver", "", token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var detail struct {
+		Name           string            `json:"name"`
+		Implementation string            `json:"implementation"`
+		Settings       map[string]string `json:"settings"`
+	}
+	decodeJSONBody(t, w.Body.Bytes(), &detail)
+	if detail.Name != "receiver" {
+		t.Errorf("name = %q, want receiver", detail.Name)
+	}
+	if detail.Implementation == "" {
+		t.Error("implementation is missing")
+	}
+	if detail.Settings["prefix"] != "receiver" {
+		t.Errorf("prefix = %q, want receiver", detail.Settings["prefix"])
+	}
+	if detail.Settings["identityCount"] != "1" {
+		t.Errorf("identityCount = %q, want 1", detail.Settings["identityCount"])
+	}
+	fallbackRules, ok := detail.Settings["rules._"]
+	if !ok {
+		t.Fatalf("rules._ is missing from settings: %v", detail.Settings)
+	}
+	var rules []string
+	decodeJSONBody(t, []byte(fallbackRules), &rules)
+	if !reflect.DeepEqual(rules, []string{"DeliverToUser", "Bounce"}) {
+		t.Errorf("rules._ = %s, want [\"DeliverToUser\",\"Bounce\"]", fallbackRules)
+	}
+
+	// Aliases resolve to the same section.
+	w = request(t, h, http.MethodGet, "/api/support/configurations/RECEIVER_CONFIGURATION", "", token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("alias status = %d, want %d (body %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	decodeJSONBody(t, w.Body.Bytes(), &detail)
+	if detail.Name != "receiver" {
+		t.Errorf("alias name = %q, want receiver", detail.Name)
 	}
 }
 

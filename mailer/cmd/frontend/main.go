@@ -57,7 +57,12 @@ func main() {
 
 		SenderType:    cfg.Sender.Type,
 		SenderMTAPort: cfg.Sender.MTAPort,
-		IsLambda:      awsutil.IsAwsLambda(),
+
+		ReceiverConfigType: cfg.Receiver.Type,
+		ReceiverTable:      cfg.ReceiverTableName(),
+		ReceiverRegion:     cfg.Receiver.Region,
+
+		IsLambda: awsutil.IsAwsLambda(),
 	}
 
 	h, err := handler.New(handlerCfg)

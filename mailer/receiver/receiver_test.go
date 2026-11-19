@@ -239,3 +239,139 @@ func TestNewReceiverRequiresStorage(t *testing.T) {
 		t.Fatal("NewReceiver() without Storage should fail")
 	}
 }
+
+func TestNewReceiverRejectsInvalidIdentityConfig(t *testing.T) {
+	identity := BaseMailIdentityConfig()
+	delete(identity, FallbackIdentity)
+	_, err := NewReceiver(ReceiverConfig{
+		Bucket:         "bucket",
+		Domain:         "example.com",
+		UserManager:    fakeUserManager{},
+		Sender:         &fakeSender{},
+		SESClient:      &fakeS3{objects: map[string][]byte{}},
+		Storage:        storage.NewMemoryStorage(),
+		IdentityConfig: identity,
+	})
+	if err == nil {
+		t.Fatal("NewReceiver() with empty fallback rules should fail")
+	}
+}
+
+// messageTo builds a minimal inbound message addressed to to.
+func messageTo(to string) []byte {
+	return []byte("From: sender@example.com\r\nTo: " + to + "\r\nSubject: hi\r\n\r\nbody\r\n")
+}
+
+// newRoutingTestReceiver builds a receiver with an explicit identity config
+// and returns its store and sender so tests can inspect the outcomes.
+func newRoutingTestReceiver(identity MailIdentityConfig, users usermanager.UserManager, client S3Client) (*Receiver, *storage.MemoryStorage, *fakeSender) {
+	emailStore := storage.NewMemoryStorage()
+	mailSender := &fakeSender{}
+	r, err := NewReceiver(ReceiverConfig{
+		Bucket:         "bucket",
+		Domain:         "example.com",
+		UserManager:    users,
+		Sender:         mailSender,
+		SESClient:      client,
+		Storage:        emailStore,
+		IdentityConfig: identity,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return r, emailStore, mailSender
+}
+
+func TestProcessMessageRoutesConfiguredIdentityToMailIdentity(t *testing.T) {
+	const key = "routing-catchall"
+	identity := BaseMailIdentityConfig()
+	identity["alias@example.com"] = []HandlerRules{{
+		MailIdentity: "catchall@example.com",
+		Rules:        []HandlerRule{DeliverToMailIdentity},
+	}}
+	client := &fakeS3{objects: map[string][]byte{key: messageTo("alias@example.com")}}
+	r, emailStore, mailSender := newRoutingTestReceiver(
+		identity,
+		rejectingUserManager{invalid: "alias@example.com"},
+		client,
+	)
+
+	if err := r.ProcessMessage(context.Background(), key); err != nil {
+		t.Fatalf("ProcessMessage() error = %v", err)
+	}
+	listed, err := emailStore.ListEmails(context.Background(), "catchall@example.com", "inbox")
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("catchall emails = %v, %v; want one delivery", listed, err)
+	}
+	if len(mailSender.bounces) != 0 {
+		t.Errorf("bounces = %+v, want none", mailSender.bounces)
+	}
+	original, err := emailStore.ListEmails(context.Background(), "alias@example.com", "inbox")
+	if err != nil || len(original) != 0 {
+		t.Errorf("alias emails = %v, %v; want none", original, err)
+	}
+}
+
+func TestProcessMessageFallsThroughToRecipientIdentity(t *testing.T) {
+	const key = "routing-fallthrough"
+	identity := BaseMailIdentityConfig()
+	identity["missing@example.com"] = []HandlerRules{{
+		MailIdentity: "*",
+		Rules:        []HandlerRule{DeliverToUser, DeliverToMailIdentity},
+	}}
+	client := &fakeS3{objects: map[string][]byte{key: messageTo("missing@example.com")}}
+	r, emailStore, mailSender := newRoutingTestReceiver(
+		identity,
+		rejectingUserManager{invalid: "missing@example.com"},
+		client,
+	)
+
+	if err := r.ProcessMessage(context.Background(), key); err != nil {
+		t.Fatalf("ProcessMessage() error = %v", err)
+	}
+	listed, err := emailStore.ListEmails(context.Background(), "missing@example.com", "inbox")
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("recipient-identity emails = %v, %v; want one delivery", listed, err)
+	}
+	if len(mailSender.bounces) != 0 {
+		t.Errorf("bounces = %+v, want none", mailSender.bounces)
+	}
+}
+
+func TestProcessMessageBounceRuleOverridesUserLookup(t *testing.T) {
+	const key = "routing-bounce"
+	identity := BaseMailIdentityConfig()
+	identity["blocked@example.com"] = []HandlerRules{{
+		Rules: []HandlerRule{Bounce},
+	}}
+	client := &fakeS3{objects: map[string][]byte{key: messageTo("blocked@example.com")}}
+	r, emailStore, mailSender := newRoutingTestReceiver(identity, fakeUserManager{}, client)
+
+	if err := r.ProcessMessage(context.Background(), key); err != nil {
+		t.Fatalf("ProcessMessage() error = %v", err)
+	}
+	if len(mailSender.bounces) != 1 || mailSender.bounces[0].recipient != "blocked@example.com" {
+		t.Fatalf("bounces = %+v, want one bounce for blocked@example.com", mailSender.bounces)
+	}
+	listed, err := emailStore.ListEmails(context.Background(), "blocked@example.com", "inbox")
+	if err != nil || len(listed) != 0 {
+		t.Errorf("emails = %v, %v; want no delivery", listed, err)
+	}
+}
+
+func TestProcessMessageMatchesIdentityCaseInsensitively(t *testing.T) {
+	const key = "routing-case"
+	identity := BaseMailIdentityConfig()
+	identity["alias@example.com"] = []HandlerRules{{
+		Rules: []HandlerRule{Bounce},
+	}}
+	client := &fakeS3{objects: map[string][]byte{key: messageTo("Alias@Example.com")}}
+	r, _, mailSender := newRoutingTestReceiver(identity, fakeUserManager{}, client)
+
+	if err := r.ProcessMessage(context.Background(), key); err != nil {
+		t.Fatalf("ProcessMessage() error = %v", err)
+	}
+	if len(mailSender.bounces) != 1 || mailSender.bounces[0].recipient != "alias@example.com" {
+		t.Fatalf("bounces = %+v, want one bounce for the normalised address", mailSender.bounces)
+	}
+}

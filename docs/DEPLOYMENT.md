@@ -49,6 +49,8 @@ AWS, not the application directly):
 | `PASSWORD` | no | Administrator password baked into the Lambda env (a warning is printed when unset). |
 | `USER_MANAGER` | no | User-manager backend for the deployed app. Unset → the app auto-selects `s3` (storage is always S3 in a deploy); users then live as `users/<email>/user.json` objects in the mail bucket. When set to `ddb`, a users table is created. |
 | `SESSION` | no | Session backend for the deployed app. When set to `ddb`, a sessions table is created. |
+| `RECEIVER` | no | Receiver config backend. Unset → the app uses `s3` (routing files in the mail bucket). When set to `ddb`/`dynamodb`, a receiver table is created for the inbound routing rules. |
+| `RECEIVER_TABLE` | no | Override the generated receiver table name (default `<TABLE_PREFIX>receiver`). |
 | `JWT_SECRET` | no | Signing secret for the app. Unset → CDK generates a 64-character secret in Secrets Manager. |
 
 ## The three stacks
@@ -97,7 +99,8 @@ Skipped (with a warning) unless `mailer/cmd/frontend/bootstrap` exists.
   `provided.al2023`, x86_64, 512 MB, 30s timeout, handler `bootstrap`.
   Its environment pins `STORAGE=s3`, `SENDER=aws-ses`, `METADATA=ddb`
   and passes the bucket, `TABLE_PREFIX`, the resolved DynamoDB table
-  names, domain, admin credentials (password only if provided),
+  names (including `RECEIVER_TABLE`/`RECEIVER_REGION` when `RECEIVER=ddb`),
+  domain, admin credentials (password only if provided),
   `JWT_SECRET` as a Secrets Manager ARN, and the JWT audience/issuer.
 - IAM role `emissary-<domain>-app`: Lambda basic execution (logs to
   `/logs/emissary/<domain>`, 3-month retention), read and delete access
@@ -106,7 +109,7 @@ Skipped (with a warning) unless `mailer/cmd/frontend/bootstrap` exists.
   the JWT secret.
 - DynamoDB tables for application state (pay-per-request), named from `TABLE_PREFIX` the same way as the
   household project (default prefix `emissary-`): `metadata` for
-  per-message metadata (JMAP keywords and `receivedAt`; partition key `id`, sort key `userId`, plus the `userId-index` global secondary index for per-user listing; created when `METADATA=ddb`), `sessions` for refresh tokens (partition key `id`, sort key `userEmail`; created when `SESSION=ddb`), and `users` for the `ddb` user manager (partition key `id`; created when `USER_MANAGER=ddb`).
+  per-message metadata (JMAP keywords and `receivedAt`; partition key `id`, sort key `userId`, plus the `userId-index` global secondary index for per-user listing; created when `METADATA=ddb`), `sessions` for refresh tokens (partition key `id`, sort key `userEmail`; created when `SESSION=ddb`), `users` for the `ddb` user manager (partition key `id`; created when `USER_MANAGER=ddb`), and `receiver` for inbound routing rules (partition key `id` only, with a `rules` list attribute; created when `RECEIVER=ddb` and granted to both the frontend and s3-receiver roles).
 - Secrets Manager secret `emissary/<domain>/jwt-secret` — generated
   when `JWT_SECRET` is not supplied, otherwise seeded with the given
   value via a custom resource. The app resolves the ARN at runtime.

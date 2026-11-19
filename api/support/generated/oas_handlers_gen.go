@@ -36,7 +36,7 @@ func (c *codeRecorder) Unwrap() http.ResponseWriter {
 // handleGetConfigurationRequest handles getConfiguration operation.
 //
 // Returns the full configuration for a section. Names are case insensitive; the canonical names are
-// `server`, `storage`, `sender`, `metadata`, `session`, `user-manager` and `aws`.
+// `server`, `storage`, `sender`, `receiver`, `metadata`, `session`, `user-manager` and `aws`.
 //
 // Secret values are replaced by booleans or descriptive markers (for example
 // `passwordConfigured: true`); they are never returned.
@@ -404,7 +404,8 @@ func (s *Server) handleListBucketRootRequest(args [0]string, argsEscaped bool, w
 // handleListConfigurationsRequest handles listConfigurations operation.
 //
 // Returns every runtime configuration section together with the name of the implementation currently
-// backing it (for example `s3`, `ddb`, `memory`, `file`, `aws-ses`, `mta`, `log`, `none` or `ldap`).
+// backing it (for example `s3`, `ddb`, `memory`, `filesystem`, `aws-ses`, `mta`, `log`, `none` or
+// `ldap`).
 //
 // Use `GET /api/support/configurations/{name}` to fetch the full configuration details for one
 // section.

@@ -2,8 +2,11 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/go-faster/errors"
@@ -24,6 +27,7 @@ const (
 	serverConfigurationName      = "server"
 	storageConfigurationName     = "storage"
 	senderConfigurationName      = "sender"
+	receiverConfigurationName    = "receiver"
 	metadataConfigurationName    = "metadata"
 	sessionConfigurationName     = "session"
 	userManagerConfigurationName = "user-manager"
@@ -40,6 +44,8 @@ type supportHandler struct {
 	session  session.SessionStore
 	sender   sender.Sender
 	users    usermanager.UserManager
+
+	identityConfig receiver.MailIdentityConfig
 }
 
 func newSupportHandler(cfg HandlerConfig, emailStore storage.Storage, metaStore metadata.MetadataStore, sessionStore session.SessionStore, mailSender sender.Sender, users usermanager.UserManager) *supportHandler {
@@ -50,6 +56,8 @@ func newSupportHandler(cfg HandlerConfig, emailStore storage.Storage, metaStore 
 		session:  sessionStore,
 		sender:   mailSender,
 		users:    users,
+
+		identityConfig: cfg.ReceiverConfig,
 	}
 }
 
@@ -200,6 +208,8 @@ func (h *supportHandler) ProcessEmail(ctx context.Context, req *supportapi.Proce
 		SESClient:   store.Client(),
 		Storage:     h.storage,
 		Metadata:    h.metadata,
+
+		IdentityConfig: h.identityConfig,
 	})
 	if err != nil {
 		log.Printf("support: create receiver: %v", err)
@@ -244,6 +254,11 @@ func (h *supportHandler) configurationSummaries() []configurationSummary {
 			name:           senderConfigurationName,
 			implementation: senderImplementation(h.cfg.SenderType, h.sender),
 			description:    "Outbound email sender",
+		},
+		{
+			name:           receiverConfigurationName,
+			implementation: receiverImplementation(h.cfg.ReceiverConfigType),
+			description:    "Inbound recipient routing rules",
 		},
 		{
 			name:           metadataConfigurationName,
@@ -316,6 +331,38 @@ func (h *supportHandler) configurationSettings(name string) map[string]string {
 	case senderConfigurationName:
 		addSetting(settings, "type", senderImplementation(h.cfg.SenderType, h.sender))
 
+	case receiverConfigurationName:
+		implementation := receiverImplementation(h.cfg.ReceiverConfigType)
+		addSetting(settings, "type", implementation)
+		addSetting(settings, "prefix", "receiver")
+		// Only report the settings relevant to the active backend.
+		switch implementation {
+		case "s3":
+			addSetting(settings, "bucket", h.cfg.S3Bucket)
+		case "filesystem":
+			addSetting(settings, "dir", filepath.Join(filesystemRoot(h.cfg.FilesystemDir), "receiver"))
+		case "ddb":
+			addSetting(settings, "table", resolveDDBTable(h.cfg.ReceiverTable, h.cfg.DDBTablePrefix, "receiver"))
+			addSetting(settings, "region", h.cfg.ReceiverRegion)
+		}
+		settings["identityCount"] = strconv.Itoa(len(h.identityConfig))
+		// The rules themselves are safe for a System Manager to read. Show
+		// each identity as a JSON array of rule names so the loaded map is
+		// auditable, including the "_" base fallback. Groups are evaluated in
+		// order, so their rules are flattened in that order.
+		for identity, groups := range h.identityConfig {
+			rules := make([]receiver.HandlerRule, 0, len(groups))
+			for _, group := range groups {
+				rules = append(rules, group.Rules...)
+			}
+			encoded, err := json.Marshal(rules)
+			if err != nil {
+				log.Printf("support: encode receiver rules for %q: %v", identity, err)
+				continue
+			}
+			settings["rules."+identity] = string(encoded)
+		}
+
 	case metadataConfigurationName:
 		addSetting(settings, "type", metadataImplementation(h.cfg.MetadataType, h.metadata))
 		addSetting(settings, "path", h.cfg.MetadataPath)
@@ -356,6 +403,8 @@ func canonicalConfigurationName(name string) string {
 	switch name {
 	case "user", "users", "user-manager", "usermanager":
 		return userManagerConfigurationName
+	case "receiver", "receiver-config", "receiver-configuration", "routing":
+		return receiverConfigurationName
 	case "server", "storage", "sender", "metadata", "session", "aws":
 		return name
 	default:
@@ -378,6 +427,19 @@ func storageImplementation(configured string, store storage.Storage) string {
 			return strings.ToLower(store.Name())
 		}
 		return "s3"
+	default:
+		return strings.ToLower(strings.TrimSpace(configured))
+	}
+}
+
+func receiverImplementation(configured string) string {
+	switch strings.ToLower(strings.TrimSpace(configured)) {
+	case "", "memory":
+		return "memory"
+	case "file", "filesystem":
+		return "filesystem"
+	case "ddb", "dynamodb":
+		return "ddb"
 	default:
 		return strings.ToLower(strings.TrimSpace(configured))
 	}

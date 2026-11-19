@@ -96,6 +96,23 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 		log.Fatalf("Failed to create metadata store: %v", err)
 	}
 
+	// Load inbound routing rules. The backend is selected by RECEIVER;
+	// an empty store is seeded with the base fallback rules.
+	configStore, err := receiver.NewConfigStore(receiver.ConfigStoreOptions{
+		Type:          cfg.Receiver.Type,
+		FilesystemDir: cfg.FilesystemDir,
+		Bucket:        cfg.Storage.S3Bucket,
+		TableName:     cfg.ReceiverTableName(),
+		Region:        cfg.Receiver.Region,
+	})
+	if err != nil {
+		log.Fatalf("Failed to create receiver config store: %v", err)
+	}
+	identityConfig, err := receiver.LoadMailIdentityConfig(ctx, configStore)
+	if err != nil {
+		log.Fatalf("Failed to load receiver config: %v", err)
+	}
+
 	// Create receiver
 	rcvr, err := receiver.NewReceiver(receiver.ReceiverConfig{
 		Bucket:      cfg.Storage.S3Bucket,
@@ -105,6 +122,8 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 		SESClient:   s3Client,
 		Storage:     emailStore,
 		Metadata:    metaStore,
+
+		IdentityConfig: identityConfig,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create receiver: %v", err)

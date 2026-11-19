@@ -20,6 +20,9 @@ func TestLoad_Defaults(t *testing.T) {
 		os.Unsetenv("JWT_SECRET")
 		os.Unsetenv("STORAGE")
 		os.Unsetenv("SENDER")
+		os.Unsetenv("RECEIVER")
+		os.Unsetenv("RECEIVER_TABLE")
+		os.Unsetenv("RECEIVER_REGION")
 		os.Unsetenv("MTA_PORT")
 		os.Unsetenv("SESSION")
 		os.Unsetenv("SESSION_TABLE")
@@ -59,6 +62,9 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 	if cfg.Sender.Type != "log" {
 		t.Errorf("Sender.Type = %q, want %q", cfg.Sender.Type, "log")
+	}
+	if cfg.Receiver.Type != "memory" {
+		t.Errorf("Receiver.Type = %q, want %q", cfg.Receiver.Type, "memory")
 	}
 	if cfg.Metadata.Type != "memory" {
 		t.Errorf("Metadata.Type = %q, want %q", cfg.Metadata.Type, "memory")
@@ -335,6 +341,31 @@ func TestLoad_DynamoDBAliasDerivesTableFromPrefix(t *testing.T) {
 	}
 }
 
+func TestLoad_ReceiverDDBTableDerivesFromPrefix(t *testing.T) {
+	os.Setenv("USERNAME", "user")
+	os.Setenv("PASSWORD", "pass")
+	os.Setenv("RECEIVER", "dynamodb")
+	os.Setenv("TABLE_PREFIX", "custom")
+	defer cleanupEnv()
+
+	cfg, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.ReceiverTableName(); got != "custom-receiver" {
+		t.Errorf("ReceiverTableName() = %q, want %q", got, "custom-receiver")
+	}
+	os.Setenv("RECEIVER_TABLE", "explicit-table")
+	defer os.Unsetenv("RECEIVER_TABLE")
+	cfg, err = Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.ReceiverTableName(); got != "explicit-table" {
+		t.Errorf("ReceiverTableName() with override = %q, want %q", got, "explicit-table")
+	}
+}
+
 func TestLoad_FileMetadataDefaultPath(t *testing.T) {
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
@@ -548,6 +579,54 @@ func TestLoad_SenderAutoSelect(t *testing.T) {
 	}
 }
 
+func TestLoad_ReceiverAutoSelect(t *testing.T) {
+	tests := []struct {
+		name     string
+		receiver string
+		env      map[string]string
+		want     string
+	}{
+		{"no credentials", "", nil, "memory"},
+		{"credentials without bucket", "", map[string]string{
+			"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
+		}, "memory"},
+		{"access key pair", "", map[string]string{
+			"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret", "S3_BUCKET": "bucket",
+		}, "s3"},
+		{"shared profile", "", map[string]string{
+			"AWS_PROFILE": "dev", "S3_BUCKET": "bucket",
+		}, "s3"},
+		{"explicit memory wins over credentials", "memory", map[string]string{
+			"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
+		}, "memory"},
+		{"explicit filesystem", "filesystem", map[string]string{
+			"FILESYSTEM_DIR": t.TempDir(),
+		}, "filesystem"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearAWSCredentialEnv()
+			defer cleanupEnv()
+
+			os.Setenv("USERNAME", "testuser")
+			if tt.receiver != "" {
+				os.Setenv("RECEIVER", tt.receiver)
+			}
+			for key, value := range tt.env {
+				os.Setenv(key, value)
+			}
+
+			cfg, err := Load(context.Background())
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Receiver.Type != tt.want {
+				t.Errorf("Receiver.Type = %q, want %q", cfg.Receiver.Type, tt.want)
+			}
+		})
+	}
+}
+
 func clearAWSCredentialEnv() {
 	for _, key := range []string{
 		"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_PROFILE", "AWS_DEFAULT_PROFILE",
@@ -661,6 +740,9 @@ func cleanupEnv() {
 	os.Unsetenv("JWT_SECRET")
 	os.Unsetenv("STORAGE")
 	os.Unsetenv("SENDER")
+	os.Unsetenv("RECEIVER")
+	os.Unsetenv("RECEIVER_TABLE")
+	os.Unsetenv("RECEIVER_REGION")
 	os.Unsetenv("SESSION")
 	os.Unsetenv("SESSION_TABLE")
 	os.Unsetenv("SESSION_REGION")

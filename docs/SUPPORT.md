@@ -43,6 +43,7 @@ of the implementation currently backing it:
 | `server` | `http` | HTTP listener, JWT settings and administrator configuration. |
 | `storage` | `s3`, `memory` | Email storage backend. |
 | `sender` | `aws-ses`, `mta`, `log` | Outbound email sender. |
+| `receiver` | `memory`, `filesystem`, `s3`, `ddb` | Inbound recipient routing rules (one config per identity; `_` is the base fallback). |
 | `metadata` | `memory`, `file`, `ddb` | Per-message metadata store (JMAP keywords and server-owned `receivedAt`). |
 | `session` | `memory`, `ddb` | Refresh-token session store. |
 | `user-manager` | `none`, `ddb`, `s3`, `ldap` | Ordinary-user authentication backend (auto-selects `s3` when storage is S3). |
@@ -66,7 +67,9 @@ Example response (`200`):
 
 `GET /api/support/configurations/{name}` returns the complete settings for one
 section. Names are case-insensitive; `_` and `-` are interchangeable, and
-`user`, `users` and `usermanager` all resolve to `user-manager`.
+`user`, `users` and `usermanager` all resolve to `user-manager`. `receiver`,
+`receiver-config`, `receiver-configuration` and `routing` all resolve to
+`receiver`.
 
 Example response (`200`) for `server`:
 
@@ -86,6 +89,26 @@ Example response (`200`) for `server`:
   }
 }
 ```
+
+The `receiver` section reports the backend settings plus the rule names for
+every loaded identity as `rules.<identity>` (a JSON array of rule names). For
+example:
+
+```json
+{
+  "name": "receiver",
+  "implementation": "memory",
+  "description": "Inbound recipient routing rules",
+  "settings": {
+    "identityCount": "1",
+    "prefix": "receiver",
+    "rules._": "[\"DeliverToUser\",\"Bounce\"]",
+    "type": "memory"
+  }
+}
+```
+
+The `_` entry is the base fallback used by recipients without their own rules.
 
 Unknown sections return `404 configuration section not found`.
 

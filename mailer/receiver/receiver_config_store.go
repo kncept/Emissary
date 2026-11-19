@@ -1,0 +1,82 @@
+package receiver
+
+import (
+	"context"
+	"fmt"
+	"strings"
+)
+
+// configPrefix is the S3 key prefix and filesystem directory holding one
+// receiver configuration file per mail identity.
+const configPrefix = "receiver"
+
+// ConfigStore persists one JSON configuration per mail identity under the
+// "receiver" prefix. Get returns ErrIdentityConfigNotFound when the identity
+// has no configuration; Put overwrites a configuration; List returns all
+// configured identities.
+type ConfigStore interface {
+	Name() string
+	Get(ctx context.Context, identity string) ([]HandlerRules, error)
+	Put(ctx context.Context, identity string, rules []HandlerRules) error
+	List(ctx context.Context) ([]string, error)
+}
+
+// ConfigStoreOptions carries the resolved settings for each backend. Only the
+// fields relevant to the selected Type are used.
+type ConfigStoreOptions struct {
+	Type          string // "s3", "filesystem", "memory", "ddb" or "dynamodb"
+	FilesystemDir string // FILESYSTEM_DIR root; the store adds "receiver/"
+	Bucket        string // S3_BUCKET for the s3 backend
+	TableName     string // fully resolved DynamoDB table name
+	Region        string // AWS region for the DynamoDB client
+}
+
+// NewConfigStore selects a receiver config backend by name. An unknown (or
+// empty) type uses memory, matching the other stores in the repository.
+func NewConfigStore(opts ConfigStoreOptions) (ConfigStore, error) {
+	switch strings.ToLower(strings.TrimSpace(opts.Type)) {
+	case "s3":
+		return NewS3ConfigStore(opts.Bucket)
+	case "file", "filesystem":
+		return NewFileConfigStore(opts.FilesystemDir)
+	case "ddb", "dynamodb":
+		return NewDdbConfigStore(opts.TableName, opts.Region)
+	default:
+		return NewMemoryConfigStore(), nil
+	}
+}
+
+// LoadMailIdentityConfig loads every configuration from store into a map. If
+// the store has no base fallback ("_"), it seeds one so unknown recipients
+// always have rules to apply.
+func LoadMailIdentityConfig(ctx context.Context, store ConfigStore) (MailIdentityConfig, error) {
+	if store == nil {
+		store = NewMemoryConfigStore()
+	}
+	keys, err := store.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list receiver config: %w", err)
+	}
+
+	config := make(MailIdentityConfig, len(keys)+1)
+	for _, key := range keys {
+		rules, err := store.Get(ctx, key)
+		if err != nil {
+			return nil, fmt.Errorf("load receiver config %q: %w", key, err)
+		}
+		config[normalizeIdentity(key)] = rules
+	}
+
+	if _, ok := config[FallbackIdentity]; !ok {
+		base := BaseMailIdentityConfig()[FallbackIdentity]
+		if err := store.Put(ctx, FallbackIdentity, base); err != nil {
+			return nil, fmt.Errorf("seed %q receiver config: %w", FallbackIdentity, err)
+		}
+		config[FallbackIdentity] = base
+	}
+
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	return config, nil
+}

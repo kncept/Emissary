@@ -83,6 +83,23 @@ func (c *SenderConfig) Validate() error {
 	return errors.Join(errs...)
 }
 
+// ReceiverConfig selects the backend holding inbound recipient routing rules.
+type ReceiverConfig struct {
+	Type     string // "s3", "filesystem", "memory", "ddb" or "dynamodb"
+	DdbTable string
+	Region   string // AWS region for the "ddb" backend
+}
+
+// Validate checks that the receiver config backend is known.
+func (c *ReceiverConfig) Validate() error {
+	switch c.Type {
+	case "", "s3", "filesystem", "memory", "ddb", "dynamodb":
+		return nil
+	default:
+		return fmt.Errorf("unknown receiver type %q (want s3, filesystem, memory or ddb)", c.Type)
+	}
+}
+
 // MetadataConfig holds email metadata storage configuration.
 type MetadataConfig struct {
 	Type     string // "memory", "file", "ddb", "dynamodb"
@@ -165,6 +182,7 @@ type Config struct {
 	Server      ServerConfig
 	Storage     StorageConfig
 	Sender      SenderConfig
+	Receiver    ReceiverConfig
 	Metadata    MetadataConfig
 	Session     SessionConfig
 	UserManager UserManagerConfig
@@ -190,6 +208,7 @@ func (c *Config) Validate() error {
 		c.Server.Validate(),
 		c.Storage.Validate(),
 		c.Sender.Validate(),
+		c.Receiver.Validate(),
 		c.Metadata.Validate(),
 		c.Session.Validate(),
 		c.UserManager.Validate(),
@@ -200,6 +219,9 @@ func (c *Config) Validate() error {
 	// USER_MANAGER=s3 with no bucket at all.
 	if c.UserManager.Type == "s3" && c.Storage.S3Bucket == "" {
 		errs = append(errs, errors.New("user manager s3 requires a bucket (set S3_BUCKET)"))
+	}
+	if c.Receiver.Type == "s3" && c.Storage.S3Bucket == "" {
+		errs = append(errs, errors.New("receiver s3 requires a bucket (set S3_BUCKET)"))
 	}
 	return errors.Join(errs...)
 }
@@ -257,6 +279,12 @@ func (c *Config) UserTableName() string {
 	return resolveDDBTable(c.UserManager.DdbTable, c.DDBTablePrefix, "users")
 }
 
+// ReceiverTableName returns the DynamoDB table name for inbound routing
+// rules. It follows the same TABLE_PREFIX derivation as the other tables.
+func (c *Config) ReceiverTableName() string {
+	return resolveDDBTable(c.Receiver.DdbTable, c.DDBTablePrefix, "receiver")
+}
+
 // Load reads configuration from the environment. The account credentials are
 // required; every other value has a local-development friendly default.
 // Pass a context for secret resolution (e.g., from AWS Secrets Manager).
@@ -274,10 +302,12 @@ func Load(ctx context.Context) (*Config, error) {
 	// Determine if filesystem-backed stores are needed.
 	storageType := strings.ToLower(strings.TrimSpace(firstEnv(ctx, "STORAGE")))
 	userManagerType := strings.ToLower(strings.TrimSpace(firstEnv(ctx, "USER_MANAGER")))
+	receiverType := strings.ToLower(strings.TrimSpace(firstEnv(ctx, "RECEIVER")))
 	metadataType := strings.ToLower(strings.TrimSpace(firstEnv(ctx, "METADATA")))
 
 	needsFilesystem := storageType == "filesystem" ||
 		userManagerType == "filesystem" ||
+		receiverType == "filesystem" ||
 		metadataType == "file"
 
 	var filesystemDir string
@@ -315,6 +345,11 @@ func Load(ctx context.Context) (*Config, error) {
 		Sender: SenderConfig{
 			Type:    strings.ToLower(strings.TrimSpace(firstEnv(ctx, "SENDER"))),
 			MTAPort: firstEnvDefault(ctx, "25", "MTA_PORT"),
+		},
+		Receiver: ReceiverConfig{
+			Type:     receiverType,
+			DdbTable: firstEnv(ctx, "RECEIVER_TABLE"),
+			Region:   firstEnv(ctx, "RECEIVER_REGION"),
 		},
 		Metadata: MetadataConfig{
 			Type:     strings.ToLower(strings.TrimSpace(firstEnv(ctx, "METADATA"))),
@@ -380,6 +415,17 @@ func Load(ctx context.Context) (*Config, error) {
 		}
 	}
 
+	// Receiver config defaults. With AWS credentials and a mail bucket, the
+	// receiver routes from files under receiver/ in that bucket; without them
+	// it keeps its configuration in memory. An explicit RECEIVER always wins.
+	if cfg.Receiver.Type == "" {
+		if hasAWSCredentials(ctx) && cfg.Storage.S3Bucket != "" {
+			cfg.Receiver.Type = "s3"
+		} else {
+			cfg.Receiver.Type = "memory"
+		}
+	}
+
 	// Metadata defaults
 	if cfg.Metadata.Type == "" {
 		cfg.Metadata.Type = "memory"
@@ -408,6 +454,9 @@ func Load(ctx context.Context) (*Config, error) {
 	}
 	if cfg.UserManager.Region == "" {
 		cfg.UserManager.Region = cfg.AWSRegion
+	}
+	if cfg.Receiver.Region == "" {
+		cfg.Receiver.Region = cfg.AWSRegion
 	}
 
 	// Session defaults

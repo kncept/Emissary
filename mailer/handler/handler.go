@@ -22,6 +22,7 @@ import (
 	"github.com/kncept/Emissary/mailer/gui"
 	"github.com/kncept/Emissary/mailer/jmap"
 	"github.com/kncept/Emissary/mailer/metadata"
+	"github.com/kncept/Emissary/mailer/receiver"
 	"github.com/kncept/Emissary/mailer/sender"
 	"github.com/kncept/Emissary/mailer/session"
 	"github.com/kncept/Emissary/mailer/storage"
@@ -66,7 +67,13 @@ type HandlerConfig struct {
 	Sender           sender.Sender
 	SenderType       string
 	SenderMTAPort    string
-	IsLambda         bool
+
+	ReceiverConfigType string // "s3", "filesystem", "memory" or "ddb"
+	ReceiverTable      string // DynamoDB table name for the "ddb" backend
+	ReceiverRegion     string // AWS region for the "ddb" backend
+	ReceiverConfig     receiver.MailIdentityConfig
+
+	IsLambda bool
 }
 
 func applyDDBTablePrefix(prefix, name string) string {
@@ -198,6 +205,27 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 			mailSender = sender.NewLogSender()
 		}
 	}
+
+	// Inbound routing rules are loaded once at startup from the configured
+	// backend. A supplied config (tests or programmatic callers) wins.
+	identityConfig := cfg.ReceiverConfig
+	if identityConfig == nil {
+		configStore, err := receiver.NewConfigStore(receiver.ConfigStoreOptions{
+			Type:          cfg.ReceiverConfigType,
+			FilesystemDir: filesystemRoot(cfg.FilesystemDir),
+			Bucket:        cfg.S3Bucket,
+			TableName:     resolveDDBTable(cfg.ReceiverTable, cfg.DDBTablePrefix, "receiver"),
+			Region:        cfg.ReceiverRegion,
+		})
+		if err != nil {
+			return nil, err
+		}
+		identityConfig, err = receiver.LoadMailIdentityConfig(context.Background(), configStore)
+		if err != nil {
+			return nil, err
+		}
+	}
+	cfg.ReceiverConfig = identityConfig
 
 	return newHandler(authenticator, emailStore, metaStore, sessionStore, mailSender, users, cfg), nil
 }

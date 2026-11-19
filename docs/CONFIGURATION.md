@@ -53,6 +53,26 @@ checks the From domain against the envelope (SPF) domain using
 logged as a warning but does not stop delivery. The sender does not
 authenticate to the MX host and uses STARTTLS when the server advertises it.
 
+## Receiver (inbound routing rules)
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RECEIVER` | `s3` when AWS credentials and `S3_BUCKET` are configured, otherwise `memory` | Backend for recipient routing rules: `s3`, `filesystem`, `ddb`/`dynamodb` or `memory`. |
+| `RECEIVER_TABLE` | `<TABLE_PREFIX>receiver` | DynamoDB table name for the `ddb` backend (`TABLE_PREFIX` defaults to `emissary-`). |
+| `RECEIVER_REGION` | `AWS_REGION` | AWS region for the `ddb` backend. |
+
+Each mail identity is stored as one JSON configuration under the `receiver/`
+prefix: `s3://<S3_BUCKET>/receiver/<identity>.json` or
+`<FILESYSTEM_DIR>/receiver/<identity>.json`. With `RECEIVER=ddb` each identity
+is one item in `RECEIVER_TABLE`, keyed by a string partition key `id` (no sort
+key); the rules are held in a `rules` list attribute. The `_` identity holds the
+base fallback rules (deliver to an existing user, otherwise bounce), and is
+created automatically when the backend is empty. Identities without their own
+configuration use `_`. The frontend API and `s3-receiver` both load these rules
+at startup. DynamoDB tables are created at deploy time from `TABLE_PREFIX`
+without per-table CREATE permissions at runtime, so the table must exist before
+the app starts.
+
 ## Metadata (JMAP keywords and received time)
 
 | Variable | Default | Description |
@@ -102,8 +122,9 @@ share one root:
 | `STORAGE=filesystem` | `~/.emissary/mail` | `users/<account>/<mailbox>/<timestamp>_<id>.eml` and `_storage/<session>/` drafts/state. |
 | `USER_MANAGER=filesystem` | `~/.emissary/users` | `<email>/user.json` records, the same JSON shape as the S3 user manager. |
 | `METADATA=file` | `~/.emissary/metadata` | One `<email id>.json` record per message. |
+| `RECEIVER=filesystem` | `~/.emissary/receiver` | One `<identity>.json` routing config per mail identity, including `_` for the base fallback. |
 
-All three expand a leading `~` in `FILESYSTEM_DIR` to the home directory and
+All four expand a leading `~` in `FILESYSTEM_DIR` to the home directory and
 create their directory on first use. Ids are validated before being mapped to
 paths, so JMAP ids cannot escape these roots.
 

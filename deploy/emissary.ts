@@ -385,6 +385,26 @@ async function emailClientStack(
     userTable.grantReadWriteData(role)
   }
 
+  // Receiver routing rules can also live in DynamoDB. Parse RECEIVER the same
+  // way as mailer/config ("dynamodb" is an alias for "ddb"). Only the "id"
+  // partition key is needed: each item holds one identity's rules in a
+  // "rules" list. The app defaults to S3 in a deploy, so this table is only
+  // created when RECEIVER explicitly selects DynamoDB.
+  const receiverType = (env.RECEIVER || '').toLowerCase().trim()
+  const usesDdbReceiver = receiverType === 'ddb' || receiverType === 'dynamodb'
+  let receiverTableName = env.RECEIVER_TABLE || ''
+  let receiverTable: dynamodb.Table | undefined
+  if (usesDdbReceiver) {
+    if (receiverTableName === '') receiverTableName = `${ddbTablePrefix}receiver`
+    receiverTable = new dynamodb.Table(stack, 'emissary-receiver', {
+      tableName: receiverTableName,
+      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    })
+    receiverTable.grantReadWriteData(role)
+  }
+
   const authUsername = env.USERNAME || ''
   const authPassword = env.PASSWORD || ''
   if (authPassword === '') {
@@ -465,6 +485,8 @@ async function emailClientStack(
       METADATA_REGION: awsRegion,
       ...(sessionTableName ? { SESSION: env.SESSION || 'ddb', SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
       ...(userTableName ? { USER_TABLE: userTableName, USER_REGION: awsRegion } : {}),
+      ...(env.RECEIVER ? { RECEIVER: env.RECEIVER } : {}),
+      ...(receiverTableName ? { RECEIVER_TABLE: receiverTableName, RECEIVER_REGION: awsRegion } : {}),
       ...(authPassword ? { PASSWORD: authPassword } : {}),
       // Pass the JWT secret ARN - the application will resolve it at runtime
       JWT_SECRET: jwtSecret.secretArn,
@@ -534,6 +556,10 @@ async function emailClientStack(
   })
   s3ReceiverLogGroup.grantWrite(s3ReceiverRole)
 
+  // The inbound receiver loads/seeds its routing rules too, so it needs the
+  // same DynamoDB access as the frontend when RECEIVER selects that backend.
+  if (receiverTable) receiverTable.grantReadWriteData(s3ReceiverRole)
+
   // Grant S3 access to the inbound email bucket (read staging objects, write user mailboxes, delete staging)
   s3ReceiverRole.addToPolicy(new iam.PolicyStatement({
     sid: 'InboundEmailAccess',
@@ -593,6 +619,8 @@ async function emailClientStack(
       METADATA_REGION: awsRegion,
       ...(sessionTableName ? { SESSION: env.SESSION || 'ddb', SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
       ...(userTableName ? { USER_TABLE: userTableName, USER_REGION: awsRegion } : {}),
+      ...(env.RECEIVER ? { RECEIVER: env.RECEIVER } : {}),
+      ...(receiverTableName ? { RECEIVER_TABLE: receiverTableName, RECEIVER_REGION: awsRegion } : {}),
       ...(authPassword ? { PASSWORD: authPassword } : {}),
       JWT_SECRET: jwtSecret.secretArn,
       JWT_AUDIENCE: mailFromDomain,

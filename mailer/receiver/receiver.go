@@ -47,6 +47,11 @@ type ReceiverConfig struct {
 	// Domain is the receiving domain (used for bounce sender address).
 	Domain string
 
+	// IdentityConfig decides how each recipient is handled. It is normally
+	// built by LoadMailIdentityConfig. When nil it defaults to the base
+	// fallback rules: deliver to existing users, bounce everyone else.
+	IdentityConfig MailIdentityConfig
+
 	// SESClient is the S3 client for staging-area operations (read and delete).
 	SESClient S3Client
 
@@ -81,6 +86,12 @@ func NewReceiver(cfg ReceiverConfig) (*Receiver, error) {
 	}
 	if cfg.Domain == "" {
 		return nil, errors.New("domain is required")
+	}
+	if cfg.IdentityConfig == nil {
+		cfg.IdentityConfig = BaseMailIdentityConfig()
+	}
+	if err := cfg.IdentityConfig.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid mail identity config: %w", err)
 	}
 	if cfg.SESClient == nil {
 		return nil, errors.New("S3 client is required")
@@ -138,55 +149,45 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 
 	log.Printf("receiver: message %s has %d recipient(s): %s", key, len(recipients), strings.Join(recipients, ", "))
 
-	// Validate each recipient and categorize as valid/invalid
-	var validRecipients []string
-	var invalidRecipients []string
-
+	// Resolve an action for each recipient by evaluating its configured
+	// handler rules in order. The first rule that applies wins.
+	var plans []recipientPlan
 	for _, recipient := range recipients {
-		user, err := r.cfg.UserManager.Lookup(ctx, recipient)
+		groups, err := r.cfg.IdentityConfig.Get(recipient)
 		if err != nil {
-			// Check if it's a "not found" type error
-			if errors.Is(err, usermanager.ErrInvalidCredentials) || errors.Is(err, usermanager.ErrUserNotFound) {
-				log.Printf("receiver: recipient %s not found (invalid)", recipient)
-				invalidRecipients = append(invalidRecipients, recipient)
-				continue
-			}
-			// Other errors (network, etc.) - treat as invalid to avoid losing mail
-			log.Printf("receiver: error looking up %s: %v (treating as invalid)", recipient, err)
-			invalidRecipients = append(invalidRecipients, recipient)
+			log.Printf("receiver: no routing rules for %s: %v (bouncing)", recipient, err)
+			plans = append(plans, recipientPlan{recipient: recipient, action: Bounce})
 			continue
 		}
-		if user != nil {
-			log.Printf("receiver: recipient %s is valid", recipient)
-			validRecipients = append(validRecipients, recipient)
-		} else {
-			log.Printf("receiver: recipient %s returned nil user (invalid)", recipient)
-			invalidRecipients = append(invalidRecipients, recipient)
+		plan, ok := r.planRecipient(ctx, recipient, groups)
+		if !ok {
+			// No rule handled the recipient. Bounce instead of silently
+			// dropping the message, which is what the default fallback does.
+			log.Printf("receiver: no handler rule matched %s; bouncing", recipient)
+			plan = recipientPlan{recipient: recipient, action: Bounce}
 		}
+		plans = append(plans, plan)
 	}
 
 	// Delivery results
 	var deliveryErrors []error
 	var bounceErrors []error
 
-	// Deliver to valid recipients
-	for _, recipient := range validRecipients {
-		if err := r.deliverToRecipient(ctx, recipient, parsedEmail); err != nil {
-			log.Printf("receiver: failed to deliver to %s: %v", recipient, err)
-			deliveryErrors = append(deliveryErrors, fmt.Errorf("delivery to %s failed: %w", recipient, err))
-		} else {
-			log.Printf("receiver: delivered to %s", recipient)
-		}
-	}
-
-	// Send bounces for invalid recipients
 	bounceSender := fmt.Sprintf("mailer-daemon@%s", r.cfg.Domain)
-	for _, recipient := range invalidRecipients {
-		if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
-			log.Printf("receiver: failed to send bounce to %s: %v", recipient, err)
-			bounceErrors = append(bounceErrors, fmt.Errorf("bounce to %s failed: %w", recipient, err))
-		} else {
-			log.Printf("receiver: sent bounce for %s", recipient)
+	for _, plan := range plans {
+		switch plan.action {
+		case DeliverToUser, DeliverToMailIdentity:
+			if err := r.deliverToRecipient(ctx, plan.mailbox, parsedEmail); err != nil {
+				log.Printf("receiver: failed to deliver to %s: %v", plan.mailbox, err)
+				deliveryErrors = append(deliveryErrors, fmt.Errorf("delivery to %s failed: %w", plan.mailbox, err))
+			}
+		case Bounce:
+			if err := r.sendBounce(ctx, key, parsedEmail, plan.recipient, bounceSender); err != nil {
+				log.Printf("receiver: failed to send bounce to %s: %v", plan.recipient, err)
+				bounceErrors = append(bounceErrors, fmt.Errorf("bounce to %s failed: %w", plan.recipient, err))
+			} else {
+				log.Printf("receiver: sent bounce for %s", plan.recipient)
+			}
 		}
 	}
 
@@ -205,6 +206,45 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 
 	log.Printf("receiver: successfully processed message %s", key)
 	return nil
+}
+
+// recipientPlan is the terminal action selected for one recipient after
+// evaluating its handler rules. mailbox is the delivery target for the
+// DeliverToMailIdentity rule.
+type recipientPlan struct {
+	recipient string
+	action    HandlerRule
+	mailbox   string
+}
+
+// planRecipient evaluates every rule group in order and returns the first
+// action that applies. DeliverToUser only applies when the user exists; a
+// failed lookup falls through to the next rule instead of deciding the outcome.
+func (r *Receiver) planRecipient(ctx context.Context, recipient string, groups []HandlerRules) (recipientPlan, bool) {
+	for _, rules := range groups {
+		for _, rule := range rules.Rules {
+			switch rule {
+			case DeliverToUser:
+				user, err := r.cfg.UserManager.Lookup(ctx, recipient)
+				if err != nil || user == nil {
+					log.Printf("receiver: recipient %s is not a user (rule %s)", recipient, rule)
+					continue
+				}
+				return recipientPlan{recipient: recipient, action: DeliverToUser, mailbox: recipient}, true
+			case DeliverToMailIdentity:
+				identity := rules.deliveryIdentity(recipient)
+				log.Printf("receiver: recipient %s routed to mail identity %s", recipient, identity)
+				return recipientPlan{recipient: recipient, action: DeliverToMailIdentity, mailbox: identity}, true
+			case Bounce:
+				return recipientPlan{recipient: recipient, action: Bounce}, true
+			default:
+				// Validate should reject unknown rules, but never lose mail if a
+				// config was built without going through NewReceiver.
+				log.Printf("receiver: ignoring unknown handler rule %q for %s", rule, recipient)
+			}
+		}
+	}
+	return recipientPlan{}, false
 }
 
 // extractRecipients extracts all unique recipient addresses from To, Cc, and Bcc headers.
