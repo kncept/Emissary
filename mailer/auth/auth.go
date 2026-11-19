@@ -20,12 +20,16 @@ var (
 	ErrInvalidCredentials = errors.New("invalid username or password")
 	ErrInvalidToken       = errors.New("invalid token")
 	ErrExpiredToken       = errors.New("token expired")
+	ErrNotYetValid        = errors.New("token not yet valid")
 )
 
 const (
 	defaultTokenTTL = 24 * time.Hour
 	accessTokenTTL  = 9 * time.Hour
 	refreshTokenTTL = 30 * 24 * time.Hour
+	// A refresh token cannot be exchanged until it is eight hours old. The
+	// access token lives nine hours, so there is always a window to refresh.
+	refreshTokenNBF = 8 * time.Hour
 	sessionIDBytes  = 16
 )
 
@@ -46,6 +50,7 @@ type Claims struct {
 	EmissaryUserManagement bool   `json:"EmissaryUserManagement,omitempty"`
 	Issue                  int    `json:"issue,omitempty"`
 	IssuedAt               int64  `json:"iat"`
+	NotBefore              int64  `json:"nbf,omitempty"`
 	ExpiresAt              int64  `json:"exp"`
 	Audience               string `json:"aud,omitempty"`
 	Issuer                 string `json:"iss,omitempty"`
@@ -110,6 +115,16 @@ func (a *Authenticator) SessionStore() session.SessionStore {
 	return a.sessionStore
 }
 
+// SetNow overrides the time source used to sign and verify tokens. A nil
+// source restores the system clock. It is primarily useful for deterministic
+// tests of token lifetimes.
+func (a *Authenticator) SetNow(now func() time.Time) {
+	if now == nil {
+		now = time.Now
+	}
+	a.now = now
+}
+
 // Authenticate reports whether the credentials are valid. It is retained for
 // callers that only need a boolean; use AuthenticateUser when the user details
 // are required.
@@ -130,7 +145,7 @@ func (a *Authenticator) Issue(username string) (string, time.Time, error) {
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	result, err := a.issueTokens(context.Background(), user)
+	result, err := a.newSession(context.Background(), user)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -155,7 +170,7 @@ func (a *Authenticator) Login(ctx context.Context, username, password string) (*
 		return nil, ErrInvalidCredentials
 	}
 
-	return a.issueTokens(ctx, user)
+	return a.newSession(ctx, user)
 }
 
 // Refresh validates the refresh token and issues new access and refresh tokens.
@@ -187,28 +202,71 @@ func (a *Authenticator) Refresh(ctx context.Context, refreshToken string) (*Logi
 		return nil, ErrInvalidToken
 	}
 
+	// Never consume an issue number if the remaining session is too short to
+	// carry a refresh token with its eight-hour not-before window.
+	now := a.now().UTC()
+	if !now.Add(refreshTokenNBF).Before(sess.ExpiresAt) {
+		return nil, ErrInvalidToken
+	}
+
 	// Increment the issue number
 	newIssue := sess.Issue + 1
 	if err := a.sessionStore.UpdateIssue(ctx, sess.ID, sess.Issue, newIssue); err != nil {
 		return nil, ErrInvalidToken
 	}
 
-	// Update session with new issue
+	// Reuse the same session: its id is stable for the session's lifetime and
+	// the issue number is what advances with every refresh.
 	sess.Issue = newIssue
 
-	return a.issueTokens(ctx, user)
+	return a.issueTokenPair(ctx, user, sess)
 }
 
-// issueTokens creates a new session (or updates existing) and issues both tokens.
-func (a *Authenticator) issueTokens(ctx context.Context, user *usermanager.User) (*LoginResult, error) {
+// Logout revokes the session named in the access token's sid claim. Since the
+// session id is stable across refreshes, this invalidates every refresh token
+// in that session; access tokens remain valid until they expire because they
+// are stateless.
+func (a *Authenticator) Logout(ctx context.Context, sid string) error {
+	if sid == "" {
+		return ErrInvalidToken
+	}
+	return a.sessionStore.Delete(ctx, sid)
+}
+
+// newSession starts a session for a newly authenticated user and issues its
+// first token pair. The session id never changes afterwards; only the refresh
+// issue number advances.
+func (a *Authenticator) newSession(ctx context.Context, user *usermanager.User) (*LoginResult, error) {
 	now := a.now().UTC()
 
-	// Generate session ID
 	sidBytes := make([]byte, sessionIDBytes)
 	if _, err := rand.Read(sidBytes); err != nil {
 		return nil, err
 	}
 	sid := base64.RawURLEncoding.EncodeToString(sidBytes)
+
+	sess := &session.Session{
+		ID:        sid,
+		UserEmail: user.Email,
+		Issue:     1,
+		CreatedAt: now,
+		ExpiresAt: now.Add(refreshTokenTTL),
+	}
+	if err := a.sessionStore.Create(ctx, sess); err != nil {
+		return nil, err
+	}
+
+	return a.issueTokenPair(ctx, user, sess)
+}
+
+// issueTokenPair signs an access token and the current refresh token for sess.
+// The refresh token carries the session's current issue number, an eight-hour
+// not-before time, and expires with the session.
+func (a *Authenticator) issueTokenPair(ctx context.Context, user *usermanager.User, sess *session.Session) (*LoginResult, error) {
+	now := a.now().UTC()
+	if !now.Add(refreshTokenNBF).Before(sess.ExpiresAt) {
+		return nil, ErrInvalidToken
+	}
 
 	// Determine claims based on user type:
 	// - The built-in admin always has system management and user management
@@ -226,23 +284,10 @@ func (a *Authenticator) issueTokens(ctx context.Context, user *usermanager.User)
 		}
 	}
 
-	// Create or update session
-	sess := &session.Session{
-		ID:        sid,
-		UserEmail: user.Email,
-		Issue:     1,
-		CreatedAt: now,
-		ExpiresAt: now.Add(refreshTokenTTL),
-	}
-	if err := a.sessionStore.Create(ctx, sess); err != nil {
-		return nil, err
-	}
-
-	// Issue access token (9 hours)
 	accessExpiresAt := now.Add(accessTokenTTL)
 	accessToken, err := a.signToken(Claims{
 		Subject:                user.Email,
-		SID:                    sid,
+		SID:                    sess.ID,
 		SystemManager:          systemManager,
 		EmissaryUserManagement: emissaryUserMgmt,
 		IssuedAt:               now.Unix(),
@@ -254,14 +299,13 @@ func (a *Authenticator) issueTokens(ctx context.Context, user *usermanager.User)
 		return nil, err
 	}
 
-	// Issue refresh token (30 days) with issue number
-	refreshExpiresAt := now.Add(refreshTokenTTL)
 	refreshToken, err := a.signToken(Claims{
 		Subject:   user.Email,
-		SID:       sid,
-		Issue:     1,
+		SID:       sess.ID,
+		Issue:     sess.Issue,
 		IssuedAt:  now.Unix(),
-		ExpiresAt: refreshExpiresAt.Unix(),
+		NotBefore: now.Add(refreshTokenNBF).Unix(),
+		ExpiresAt: sess.ExpiresAt.Unix(),
 		Audience:  a.audience,
 		Issuer:    a.issuer,
 	})
@@ -294,6 +338,12 @@ func (a *Authenticator) ValidateRefreshToken(token string) (*Claims, error) {
 		return nil, ErrInvalidToken
 	}
 
+	// Refresh tokens must carry the eight-hour not-before time. This also
+	// stops an access token (which has no issue or nbf) being used here.
+	if claims.NotBefore == 0 {
+		return nil, ErrInvalidToken
+	}
+
 	return claims, nil
 }
 
@@ -314,8 +364,8 @@ func (a *Authenticator) ValidateClaims(token string) (*Claims, error) {
 		return nil, err
 	}
 
-	// Access tokens should not have an issue number
-	if claims.Issue != 0 {
+	// Access tokens are neither refresh tokens nor time-gated.
+	if claims.Issue != 0 || claims.NotBefore != 0 {
 		return nil, ErrInvalidToken
 	}
 
@@ -342,7 +392,7 @@ func (a *Authenticator) validateToken(token string) (*Claims, error) {
 		return nil, ErrInvalidToken
 	}
 	var header jwtHeader
-	if err := json.Unmarshal(headerData, &header); err != nil || header.Algorithm != "HS256" {
+	if err := json.Unmarshal(headerData, &header); err != nil || header.Algorithm != "HS256" || header.Type != "JWT" {
 		return nil, ErrInvalidToken
 	}
 
@@ -354,7 +404,10 @@ func (a *Authenticator) validateToken(token string) (*Claims, error) {
 	if err := json.Unmarshal(claimsData, &claims); err != nil {
 		return nil, ErrInvalidToken
 	}
-	if claims.Subject == "" || claims.ExpiresAt == 0 {
+	if claims.Subject == "" || claims.SID == "" || claims.IssuedAt == 0 || claims.ExpiresAt == 0 {
+		return nil, ErrInvalidToken
+	}
+	if claims.IssuedAt >= claims.ExpiresAt || (claims.NotBefore != 0 && claims.NotBefore >= claims.ExpiresAt) {
 		return nil, ErrInvalidToken
 	}
 
@@ -363,6 +416,12 @@ func (a *Authenticator) validateToken(token string) (*Claims, error) {
 	// Validate expiration
 	if now >= claims.ExpiresAt {
 		return nil, ErrExpiredToken
+	}
+
+	// A refresh token cannot be exchanged before its nbf time. No skew is
+	// allowed here: "no early refreshes" means exactly that.
+	if claims.NotBefore > now {
+		return nil, ErrNotYetValid
 	}
 
 	// Validate issued at (iat) - reject tokens from the future (with small skew tolerance)

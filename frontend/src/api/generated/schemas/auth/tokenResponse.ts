@@ -29,11 +29,23 @@
  *   ever sent to `POST /api/auth/refresh`, never as a bearer token.
  *   It must contain: `sub` - the email address of the user (used to
  *   double-check the session); `sid` - the session id; `issue` - the
- *   issue number of this refresh token. Strict ordering is enforced.
+ *   issue number of this refresh token; `nbf` - a not-before time
+ *   eight hours after issue, so early refreshes are rejected.
+ *   Strict ordering is enforced.
+ *
+ * The session id is stable for the lifetime of the session: every
+ * refresh reuses the same `sid` and increments `issue`, which is what
+ * invalidates the exchanged token. Refreshing neither creates a new
+ * session nor extends the 30-day session lifetime. Every JWT must be
+ * fully valid: HS256 with `typ: JWT`, a correct signature, non-empty
+ * `sub` and `sid`, `iat` and `exp`, `nbf` not in the future, and the
+ * configured `aud`/`iss`. Access tokens must not carry `issue` or
+ * `nbf`; refresh tokens must carry both.
  *
  * `POST /api/auth/refresh` exchanges a refresh token for a new
  * access token and a new refresh token with `issue` incremented by
- * one; the exchanged refresh token is invalidated.
+ * one; the exchanged refresh token is invalidated. A refresh before
+ * the token's `nbf` is rejected with `401`.
  *
  * Errors are returned as `{"error": "<message>"}` with a generic
  * message; details are only logged server-side.
@@ -62,9 +74,12 @@ export interface TokenResponse {
      * `/api/auth/refresh`. It must contain: `sub` - the email
      * address of the user (used to double-check the session);
      * `sid` - the session id; `issue` - the issue number of
-     * this refresh token. Strict ordering is enforced: each
-     * refresh issues a new token with `issue` incremented by
-     * one, and the exchanged token is invalidated.
+     * this refresh token; `nbf` - a not-before time eight hours
+     * after issue. Strict ordering is enforced: each refresh
+     * reuses the same `sid`, issues a new token with `issue`
+     * incremented by one, and invalidates the exchanged token.
+     * The session expires 30 days after login; refreshing does
+     * not extend it.
      * @minLength 1
      */
   refreshToken: string;

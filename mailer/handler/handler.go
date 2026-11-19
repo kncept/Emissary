@@ -394,7 +394,7 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 		}
 	}
 
-	mux.Handle("POST /api/auth/logout", requireAuth(authenticator, http.HandlerFunc(handleLogout)))
+	mux.Handle("POST /api/auth/logout", requireAuth(authenticator, handleLogout(authenticator)))
 
 	notFound := func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
@@ -736,6 +736,18 @@ func writeJMAPError(w http.ResponseWriter, typ, detail string) {
 	})
 }
 
-func handleLogout(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+func handleLogout(authenticator *auth.Authenticator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := currentClaims(r)
+		if claims == nil || claims.SID == "" {
+			writeError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		if err := authenticator.Logout(r.Context(), claims.SID); err != nil {
+			logRequestError(r, "revoke session", err)
+			writeError(w, http.StatusInternalServerError, "failed to log out")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+	}
 }

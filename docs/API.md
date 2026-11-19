@@ -79,8 +79,9 @@ not generated from `users.yaml`: it is served directly by the configured
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/api/auth/login` | — | Exchange credentials for a JWT. |
-| `POST` | `/api/auth/logout` | Bearer | Client-side token discard hook. |
+| `POST` | `/api/auth/login` | — | Exchange credentials for a token pair. |
+| `POST` | `/api/auth/refresh` | — (refresh token in body) | Rotate the token pair in the same session. |
+| `POST` | `/api/auth/logout` | Bearer | Revokes the session, invalidating its refresh tokens. |
 | `GET` | `/api/user/` | Bearer\* | List all users (paginated). |
 | `POST` | `/api/user/` | Bearer\* | Create a new user. |
 | `GET` | `/api/user/{email}` | Bearer\* | Get a user by email. |
@@ -320,13 +321,34 @@ Response (`200`):
 first, then the configured user manager backend. The access token carries the
 user id (the user's email address) in `sub`, the session id in `sid`,
 `systemManager` and `EmissaryUserManagement` when true, `iat`, `exp`, and
-the configured `aud`/`iss`.
+the configured `aud`/`iss`. The refresh token carries `sub`, `sid`, the
+current `issue`, `iat`, `exp` and `nbf` (eight hours after `iat`).
+
+## `POST /api/auth/refresh`
+
+Request:
+
+```json
+{ "refreshToken": "eyJ..." }
+```
+
+Returns the same shape as login with a fresh pair. The session id (`sid`)
+is unchanged; the refresh token's `issue` is incremented by one, which
+invalidates the token that was presented. The refresh token is unusable
+before its `nbf` (eight hours after issue) and expires with the 30-day
+session. A missing `refreshToken` is `400`; an invalid, expired, too-early
+or spent token is `401`. Every token is fully validated — signature,
+`alg`/`typ`, `sub`, `sid`, `iat`, `exp`, `nbf` and configured `aud`/`iss`.
+See [AUTH.md](AUTH.md) for the full token design.
 
 ## `POST /api/auth/logout`
 
-JWTs are stateless, so nothing is invalidated server-side; the endpoint
-exists as a stable hook for future revocation. Returns
-`{ "success": true }`. The client is expected to drop the token.
+Requires a valid access token. The session named by its `sid` claim is
+deleted, so every refresh token in that session can no longer be exchanged;
+the endpoint returns `{ "success": true }`. Because `sid` is stable across
+refreshes, one logout revokes the whole chain. Access tokens are stateless
+and remain valid until their 9-hour expiry, so the client must still drop
+both tokens locally. Repeating the call is harmless.
 
 ## `GET /api/user/autocomplete`
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kncept/Emissary/mailer/session"
 	"github.com/kncept/Emissary/mailer/usermanager"
 )
 
@@ -416,11 +417,254 @@ func TestAuthenticator_IssueUser_SystemManagerClaim(t *testing.T) {
 	}
 }
 
+func decodeTokenClaims(t *testing.T, token string) Claims {
+	t.Helper()
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("token %q is not a JWT", token)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode token payload: %v", err)
+	}
+	var claims Claims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Fatalf("unmarshal token claims: %v", err)
+	}
+	return claims
+}
+
+func TestAuthenticator_Refresh(t *testing.T) {
+	a := New("user", "pass", "secret", time.Hour, "", "")
+	ctx := context.Background()
+	now := time.Date(2099, 1, 1, 12, 0, 0, 0, time.UTC)
+	a.SetNow(func() time.Time { return now })
+
+	first, err := a.Login(ctx, "user", "pass")
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	firstAccess := decodeTokenClaims(t, first.AccessToken)
+	firstRefresh := decodeTokenClaims(t, first.RefreshToken)
+	if firstRefresh.SID != firstAccess.SID {
+		t.Errorf("refresh sid = %q, want %q", firstRefresh.SID, firstAccess.SID)
+	}
+	if firstRefresh.Issue != 1 {
+		t.Errorf("refresh issue = %d, want 1", firstRefresh.Issue)
+	}
+	if firstRefresh.NotBefore != now.Add(refreshTokenNBF).Unix() {
+		t.Errorf("refresh nbf = %d, want %d", firstRefresh.NotBefore, now.Add(refreshTokenNBF).Unix())
+	}
+
+	// The refresh token is not usable during its eight-hour not-before window.
+	if _, err := a.Refresh(ctx, first.RefreshToken); !errors.Is(err, ErrNotYetValid) {
+		t.Errorf("early Refresh() error = %v, want ErrNotYetValid", err)
+	}
+
+	now = now.Add(refreshTokenNBF)
+	second, err := a.Refresh(ctx, first.RefreshToken)
+	if err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	if second.AccessToken == first.AccessToken || second.RefreshToken == first.RefreshToken {
+		t.Error("Refresh() reused a token from the previous pair")
+	}
+	secondRefresh := decodeTokenClaims(t, second.RefreshToken)
+	if secondRefresh.SID != firstRefresh.SID {
+		t.Errorf("refresh sid changed: %q -> %q", firstRefresh.SID, secondRefresh.SID)
+	}
+	if secondRefresh.Issue != 2 {
+		t.Errorf("refresh issue = %d, want 2", secondRefresh.Issue)
+	}
+	if secondRefresh.NotBefore != now.Add(refreshTokenNBF).Unix() {
+		t.Errorf("refresh nbf = %d, want %d", secondRefresh.NotBefore, now.Add(refreshTokenNBF).Unix())
+	}
+	sess, err := a.SessionStore().Get(ctx, firstRefresh.SID)
+	if err != nil {
+		t.Fatalf("session lookup: %v", err)
+	}
+	if sess.Issue != 2 {
+		t.Errorf("session issue = %d, want 2", sess.Issue)
+	}
+
+	if _, err := a.Refresh(ctx, first.RefreshToken); err == nil {
+		t.Error("Refresh() accepted a spent refresh token")
+	}
+
+	now = now.Add(refreshTokenNBF)
+	third, err := a.Refresh(ctx, second.RefreshToken)
+	if err != nil {
+		t.Fatalf("second Refresh() error = %v", err)
+	}
+	thirdRefresh := decodeTokenClaims(t, third.RefreshToken)
+	if thirdRefresh.SID != firstRefresh.SID {
+		t.Errorf("refresh sid changed on second refresh: %q", thirdRefresh.SID)
+	}
+	if thirdRefresh.Issue != 3 {
+		t.Errorf("refresh issue = %d, want 3", thirdRefresh.Issue)
+	}
+}
+
+func TestAuthenticator_RefreshRejectsAccessToken(t *testing.T) {
+	a := New("user", "pass", "secret", time.Hour, "", "")
+	result, err := a.Login(context.Background(), "user", "pass")
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	if _, err := a.Refresh(context.Background(), result.AccessToken); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("Refresh() with access token error = %v, want ErrInvalidToken", err)
+	}
+	if _, err := a.ValidateClaims(result.RefreshToken); err == nil {
+		t.Error("ValidateClaims() accepted a refresh token")
+	}
+}
+
+func TestAuthenticator_LogoutRevokesRefreshToken(t *testing.T) {
+	a := New("user", "pass", "secret", time.Hour, "", "")
+	ctx := context.Background()
+	now := time.Date(2099, 1, 1, 12, 0, 0, 0, time.UTC)
+	a.SetNow(func() time.Time { return now })
+
+	result, err := a.Login(ctx, "user", "pass")
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	claims, err := a.ValidateClaims(result.AccessToken)
+	if err != nil {
+		t.Fatalf("ValidateClaims() error = %v", err)
+	}
+
+	if err := a.Logout(ctx, claims.SID); err != nil {
+		t.Fatalf("Logout() error = %v", err)
+	}
+	if _, err := a.SessionStore().Get(ctx, claims.SID); !errors.Is(err, session.ErrSessionNotFound) {
+		t.Errorf("session still present after Logout(): %v", err)
+	}
+	now = now.Add(refreshTokenNBF)
+	if _, err := a.Refresh(ctx, result.RefreshToken); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("Refresh() after Logout() error = %v, want ErrInvalidToken", err)
+	}
+}
+
+func TestAuthenticator_ValidateClaimsRejectsRefreshOnlyClaims(t *testing.T) {
+	a := New("user", "pass", "secret", time.Hour, "", "")
+	now := time.Now()
+	for name, claims := range map[string]Claims{
+		"issue":     {Subject: "user", SID: "s", Issue: 1, IssuedAt: now.Add(-time.Hour).Unix(), ExpiresAt: now.Add(time.Hour).Unix()},
+		"notBefore": {Subject: "user", SID: "s", IssuedAt: now.Add(-time.Hour).Unix(), NotBefore: now.Add(-time.Minute).Unix(), ExpiresAt: now.Add(time.Hour).Unix()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			token, err := a.signToken(claims)
+			if err != nil {
+				t.Fatalf("signToken: %v", err)
+			}
+			if _, err := a.ValidateClaims(token); !errors.Is(err, ErrInvalidToken) {
+				t.Errorf("ValidateClaims() error = %v, want ErrInvalidToken", err)
+			}
+		})
+	}
+}
+
+func TestAuthenticator_LogoutRejectsEmptySessionID(t *testing.T) {
+	a := New("user", "pass", "secret", time.Hour, "", "")
+	if err := a.Logout(context.Background(), ""); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("Logout() error = %v, want ErrInvalidToken", err)
+	}
+}
+
+func signedTokenWithHeader(t *testing.T, a *Authenticator, header jwtHeader, claims Claims) string {
+	t.Helper()
+	headerData, err := json.Marshal(header)
+	if err != nil {
+		t.Fatalf("marshal header: %v", err)
+	}
+	claimsData, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("marshal claims: %v", err)
+	}
+	encoding := base64.RawURLEncoding
+	input := encoding.EncodeToString(headerData) + "." + encoding.EncodeToString(claimsData)
+	return input + "." + encoding.EncodeToString(a.sign(input))
+}
+
+func TestAuthenticator_ValidatesEveryJWTClaim(t *testing.T) {
+	a := New("user", "pass", "secret", time.Hour, "aud", "iss")
+	now := time.Date(2099, 1, 1, 12, 0, 0, 0, time.UTC)
+	a.SetNow(func() time.Time { return now })
+
+	valid := Claims{
+		Subject:   "user",
+		SID:       "session-1",
+		IssuedAt:  now.Add(-time.Minute).Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+		Audience:  "aud",
+		Issuer:    "iss",
+	}
+	validToken, err := a.signToken(valid)
+	if err != nil {
+		t.Fatalf("signToken: %v", err)
+	}
+	if _, err := a.validateToken(validToken); err != nil {
+		t.Fatalf("valid token rejected: %v", err)
+	}
+
+	modified := func(fn func(*Claims)) string {
+		claims := valid
+		fn(&claims)
+		token, err := a.signToken(claims)
+		if err != nil {
+			t.Fatalf("signToken: %v", err)
+		}
+		return token
+	}
+
+	tampered := validToken[:len(validToken)-1]
+	if validToken[len(validToken)-1] == 'A' {
+		tampered += "B"
+	} else {
+		tampered += "A"
+	}
+
+	for _, tc := range []struct {
+		name  string
+		token string
+		want  error
+	}{
+		{"bad signature", tampered, ErrInvalidToken},
+		{"bad algorithm", signedTokenWithHeader(t, a, jwtHeader{Algorithm: "HS512", Type: "JWT"}, valid), ErrInvalidToken},
+		{"bad type", signedTokenWithHeader(t, a, jwtHeader{Algorithm: "HS256", Type: "NOT-JWT"}, valid), ErrInvalidToken},
+		{"missing subject", modified(func(c *Claims) { c.Subject = "" }), ErrInvalidToken},
+		{"missing session id", modified(func(c *Claims) { c.SID = "" }), ErrInvalidToken},
+		{"missing issued at", modified(func(c *Claims) { c.IssuedAt = 0 }), ErrInvalidToken},
+		{"missing expiry", modified(func(c *Claims) { c.ExpiresAt = 0 }), ErrInvalidToken},
+		{"issued in future", modified(func(c *Claims) {
+			c.IssuedAt = now.Add(time.Hour).Unix()
+			c.ExpiresAt = now.Add(2 * time.Hour).Unix()
+		}), ErrInvalidToken},
+		{"expired", modified(func(c *Claims) {
+			c.IssuedAt = now.Add(-2 * time.Hour).Unix()
+			c.ExpiresAt = now.Add(-time.Minute).Unix()
+		}), ErrExpiredToken},
+		{"not before in future", modified(func(c *Claims) { c.NotBefore = now.Add(time.Minute).Unix() }), ErrNotYetValid},
+		{"not before after expiry", modified(func(c *Claims) { c.NotBefore = now.Add(2 * time.Hour).Unix() }), ErrInvalidToken},
+		{"wrong audience", modified(func(c *Claims) { c.Audience = "other" }), ErrInvalidToken},
+		{"wrong issuer", modified(func(c *Claims) { c.Issuer = "other" }), ErrInvalidToken},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := a.validateToken(tc.token)
+			if !errors.Is(err, tc.want) {
+				t.Errorf("validateToken() error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
 // createTokenWithCustomIat creates a token with a custom iat claim for testing
 func createTokenWithCustomIat(a *Authenticator, subject string, iat, exp int64) string {
 	header, _ := json.Marshal(jwtHeader{Algorithm: "HS256", Type: "JWT"})
 	claimsData, _ := json.Marshal(jwtClaims{
 		Subject:   subject,
+		SID:       "test-session",
 		IssuedAt:  iat,
 		ExpiresAt: exp,
 	})

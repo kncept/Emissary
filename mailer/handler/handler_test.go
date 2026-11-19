@@ -12,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/metadata"
+	"github.com/kncept/Emissary/mailer/session"
 	"github.com/kncept/Emissary/mailer/storage"
 	"github.com/kncept/Emissary/mailer/usermanager"
 )
@@ -1327,6 +1329,200 @@ func TestRawEmailEndpoint(t *testing.T) {
 		w := request(t, h, http.MethodGet, "/api/email/raw", "", token)
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("status = %d, want 400 (body %s)", w.Code, w.Body.String())
+		}
+	})
+}
+
+// newHandlerWithClockForTest builds the real handler with an authenticator
+// whose clock can be advanced, for tests of token lifetimes.
+func newHandlerWithClockForTest(t *testing.T, adminPassword string, now func() time.Time) (http.Handler, *auth.Authenticator) {
+	t.Helper()
+	users := &testUserManager{
+		adminUsername: "admin",
+		adminPassword: adminPassword,
+		domain:        "example.com",
+	}
+	store := storage.NewMemoryStorage()
+	sessions := session.NewMemorySessionStore()
+	sender := &captureSender{}
+	authenticator := auth.NewWithUserManager(users, sessions, "secret", time.Hour, "", "", "admin")
+	authenticator.SetNow(now)
+	cfg := HandlerConfig{
+		AuthUser:     "admin",
+		AuthPass:     adminPassword,
+		JWTSecret:    "secret",
+		JWTSecretTTL: time.Hour,
+		MetadataType: "memory",
+		Storage:      store,
+		UserManager:  users,
+		UserDomain:   "example.com",
+		Sender:       sender,
+	}
+	return newHandler(authenticator, store, metadata.NewMemoryMetadata(), sessions, sender, users, cfg), authenticator
+}
+
+func decodeAuthClaims(t *testing.T, token string) auth.Claims {
+	t.Helper()
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("token %q is not a JWT", token)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode token payload: %v", err)
+	}
+	var claims auth.Claims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Fatalf("unmarshal token claims: %v", err)
+	}
+	return claims
+}
+
+func refreshRequest(t *testing.T, h http.Handler, refreshToken string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"refreshToken": refreshToken})
+	return request(t, h, http.MethodPost, "/api/auth/refresh", string(body), "")
+}
+
+func TestRefreshEndpoint(t *testing.T) {
+	now := time.Date(2099, 1, 1, 12, 0, 0, 0, time.UTC)
+	h, _ := newHandlerWithClockForTest(t, "secret", func() time.Time { return now })
+
+	status, _, response := login(t, h, "admin", "secret")
+	if status != http.StatusOK {
+		t.Fatalf("login status = %d, want 200 (body %v)", status, response)
+	}
+	firstRefresh, _ := response["refreshToken"].(string)
+	if firstRefresh == "" {
+		t.Fatal("login response has no refreshToken")
+	}
+
+	t.Run("early refresh is rejected", func(t *testing.T) {
+		w := refreshRequest(t, h, firstRefresh)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401 (body %s)", w.Code, w.Body.String())
+		}
+	})
+
+	now = now.Add(8 * time.Hour)
+	w := refreshRequest(t, h, firstRefresh)
+	if w.Code != http.StatusOK {
+		t.Fatalf("refresh status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	var refreshed map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &refreshed); err != nil {
+		t.Fatalf("decode refresh response: %v (body %s)", err, w.Body.String())
+	}
+	nextAccess, _ := refreshed["accessToken"].(string)
+	nextRefresh, _ := refreshed["refreshToken"].(string)
+	if nextAccess == "" || nextRefresh == "" {
+		t.Fatalf("refresh response missing tokens: %v", refreshed)
+	}
+	if nextAccess == response["accessToken"] || nextRefresh == firstRefresh {
+		t.Errorf("refresh reused a token from the previous pair: %v", refreshed)
+	}
+
+	claims := decodeAuthClaims(t, nextRefresh)
+	originalClaims := decodeAuthClaims(t, firstRefresh)
+	if claims.SID != originalClaims.SID {
+		t.Errorf("session id changed: %q -> %q", originalClaims.SID, claims.SID)
+	}
+	if claims.Issue != originalClaims.Issue+1 {
+		t.Errorf("issue = %d, want %d", claims.Issue, originalClaims.Issue+1)
+	}
+
+	t.Run("new access token works and session id is unchanged", func(t *testing.T) {
+		w := request(t, h, http.MethodGet, "/.well-known/jmap", "", nextAccess)
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("spent refresh token is rejected", func(t *testing.T) {
+		w := refreshRequest(t, h, firstRefresh)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401 (body %s)", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("current refresh token works after its not-before", func(t *testing.T) {
+		now = now.Add(8 * time.Hour)
+		w := refreshRequest(t, h, nextRefresh)
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("missing refresh token is rejected", func(t *testing.T) {
+		w := request(t, h, http.MethodPost, "/api/auth/refresh", `{}`, "")
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400 (body %s)", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("invalid refresh token is rejected", func(t *testing.T) {
+		w := refreshRequest(t, h, "not-a-jwt")
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401 (body %s)", w.Code, w.Body.String())
+		}
+	})
+}
+
+func TestLogoutEndpoint(t *testing.T) {
+	now := time.Date(2099, 1, 1, 12, 0, 0, 0, time.UTC)
+	h, authenticator := newHandlerWithClockForTest(t, "secret", func() time.Time { return now })
+
+	t.Run("requires authentication", func(t *testing.T) {
+		w := request(t, h, http.MethodPost, "/api/auth/logout", "", "")
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401 (body %s)", w.Code, w.Body.String())
+		}
+	})
+
+	status, accessToken, response := login(t, h, "admin", "secret")
+	if status != http.StatusOK {
+		t.Fatalf("login status = %d, want 200 (body %v)", status, response)
+	}
+	refreshToken, _ := response["refreshToken"].(string)
+	claims, err := authenticator.ValidateClaims(accessToken)
+	if err != nil {
+		t.Fatalf("ValidateClaims() error = %v", err)
+	}
+
+	w := request(t, h, http.MethodPost, "/api/auth/logout", "", accessToken)
+	if w.Code != http.StatusOK {
+		t.Fatalf("logout status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	var logoutResponse map[string]bool
+	if err := json.Unmarshal(w.Body.Bytes(), &logoutResponse); err != nil {
+		t.Fatalf("decode logout response: %v (body %s)", err, w.Body.String())
+	}
+	if logoutResponse["success"] != true {
+		t.Errorf("logout success = %v, want true", logoutResponse["success"])
+	}
+	if _, err := authenticator.SessionStore().Get(context.Background(), claims.SID); err == nil {
+		t.Error("session still present after logout")
+	}
+
+	t.Run("refresh token is revoked", func(t *testing.T) {
+		now = now.Add(8 * time.Hour)
+		w := refreshRequest(t, h, refreshToken)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401 (body %s)", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("access token is still valid until expiry", func(t *testing.T) {
+		w := request(t, h, http.MethodGet, "/.well-known/jmap", "", accessToken)
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("repeat logout succeeds", func(t *testing.T) {
+		w := request(t, h, http.MethodPost, "/api/auth/logout", "", accessToken)
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
 		}
 	})
 }

@@ -20,10 +20,11 @@ type Handler interface {
 	Login(ctx context.Context, req *LoginRequest) (LoginRes, error)
 	// Refresh implements refresh operation.
 	//
-	// Validates the presented refresh token - signature, expiry, session (`sid`), and strict ordering of
-	// `issue` - and returns a new access token and a new refresh token with `issue` incremented by one.
-	// The exchanged refresh token is invalidated; presenting it again (or presenting an older `issue` for
-	// the same session) is rejected with `401`.
+	// Fully validates the presented refresh token - signature, algorithm, claims, expiry, eight-hour
+	// `nbf`, active session (`sid`), and strict ordering of `issue` - and returns a new access token and a
+	// new refresh token with `issue` incremented by one in the same session. The exchanged refresh token
+	// is invalidated; presenting it again (or presenting an older `issue` for the same session) is
+	// rejected with `401`. A token presented before its `nbf` is also rejected with `401`.
 	//
 	// POST /api/auth/refresh
 	Refresh(ctx context.Context, req *RefreshRequest) (RefreshRes, error)

@@ -29,11 +29,23 @@
  *   ever sent to `POST /api/auth/refresh`, never as a bearer token.
  *   It must contain: `sub` - the email address of the user (used to
  *   double-check the session); `sid` - the session id; `issue` - the
- *   issue number of this refresh token. Strict ordering is enforced.
+ *   issue number of this refresh token; `nbf` - a not-before time
+ *   eight hours after issue, so early refreshes are rejected.
+ *   Strict ordering is enforced.
+ *
+ * The session id is stable for the lifetime of the session: every
+ * refresh reuses the same `sid` and increments `issue`, which is what
+ * invalidates the exchanged token. Refreshing neither creates a new
+ * session nor extends the 30-day session lifetime. Every JWT must be
+ * fully valid: HS256 with `typ: JWT`, a correct signature, non-empty
+ * `sub` and `sid`, `iat` and `exp`, `nbf` not in the future, and the
+ * configured `aud`/`iss`. Access tokens must not carry `issue` or
+ * `nbf`; refresh tokens must carry both.
  *
  * `POST /api/auth/refresh` exchanges a refresh token for a new
  * access token and a new refresh token with `issue` incremented by
- * one; the exchanged refresh token is invalidated.
+ * one; the exchanged refresh token is invalidated. A refresh before
+ * the token's `nbf` is rejected with `401`.
  *
  * Errors are returned as `{"error": "<message>"}` with a generic
  * message; details are only logged server-side.
@@ -167,12 +179,14 @@ export const getRefreshUrl = () => {
 }
 
 /**
- * Validates the presented refresh token - signature, expiry,
- * session (`sid`), and strict ordering of `issue` - and returns
- * a new access token and a new refresh token with `issue`
- * incremented by one. The exchanged refresh token is
+ * Fully validates the presented refresh token - signature,
+ * algorithm, claims, expiry, eight-hour `nbf`, active session
+ * (`sid`), and strict ordering of `issue` - and returns a new
+ * access token and a new refresh token with `issue` incremented
+ * by one in the same session. The exchanged refresh token is
  * invalidated; presenting it again (or presenting an older
- * `issue` for the same session) is rejected with `401`.
+ * `issue` for the same session) is rejected with `401`. A token
+ * presented before its `nbf` is also rejected with `401`.
  * @summary Exchange a refresh token for a new access token and refresh token
  */
 export const refresh = async (refreshRequest: RefreshRequest, options?: RequestInit): Promise<refreshResponse> => {

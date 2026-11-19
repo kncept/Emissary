@@ -27,6 +27,9 @@ func signedSupportToken(t *testing.T, claims map[string]any) string {
 	if _, ok := claims["sub"]; !ok {
 		claims["sub"] = "manager@example.com"
 	}
+	if _, ok := claims["sid"]; !ok {
+		claims["sid"] = "test-session"
+	}
 	if _, ok := claims["iat"]; !ok {
 		claims["iat"] = now.Unix()
 	}

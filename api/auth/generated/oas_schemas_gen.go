@@ -96,8 +96,10 @@ type TokenResponse struct {
 	AccessToken string `json:"accessToken"`
 	// A signed JWT with a duration of 30 days, exchanged at `/api/auth/refresh`. It must contain: `sub` -
 	// the email address of the user (used to double-check the session); `sid` - the session id; `issue` -
-	// the issue number of this refresh token. Strict ordering is enforced: each refresh issues a new token
-	// with `issue` incremented by one, and the exchanged token is invalidated.
+	// the issue number of this refresh token; `nbf` - a not-before time eight hours after issue. Strict
+	// ordering is enforced: each refresh reuses the same `sid`, issues a new token with `issue`
+	// incremented by one, and invalidates the exchanged token. The session expires 30 days after login;
+	// refreshing does not extend it.
 	RefreshToken string `json:"refreshToken"`
 	TokenType    string `json:"tokenType"`
 	// Expiry of the access token (its `exp` claim).
