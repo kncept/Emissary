@@ -40,26 +40,26 @@ func (f *FileConfigStore) objectPath(identity string) (string, error) {
 	return fsutil.ResolveKey(f.dir, normalizeIdentity(identity)+".json")
 }
 
-func (f *FileConfigStore) Get(_ context.Context, identity string) ([]HandlerRules, error) {
+func (f *FileConfigStore) Get(_ context.Context, identity string) (HandlerRules, error) {
 	path, err := f.objectPath(identity)
 	if err != nil {
-		return nil, err
+		return HandlerRules{}, err
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("%w: %q", ErrIdentityConfigNotFound, identity)
+			return HandlerRules{}, fmt.Errorf("%w: %q", ErrIdentityConfigNotFound, identity)
 		}
-		return nil, fmt.Errorf("read receiver config %q: %w", identity, err)
+		return HandlerRules{}, fmt.Errorf("read receiver config %q: %w", identity, err)
 	}
-	var rules []HandlerRules
+	var rules HandlerRules
 	if err := json.Unmarshal(body, &rules); err != nil {
-		return nil, fmt.Errorf("unmarshal receiver config %q: %w", identity, err)
+		return HandlerRules{}, fmt.Errorf("unmarshal receiver config %q: %w", identity, err)
 	}
 	return rules, nil
 }
 
-func (f *FileConfigStore) Put(_ context.Context, identity string, rules []HandlerRules) error {
+func (f *FileConfigStore) Put(_ context.Context, identity string, rules HandlerRules) error {
 	path, err := f.objectPath(identity)
 	if err != nil {
 		return err
@@ -70,6 +70,20 @@ func (f *FileConfigStore) Put(_ context.Context, identity string, rules []Handle
 	}
 	if err := fsutil.WriteFileAtomically(path, body, 0644); err != nil {
 		return fmt.Errorf("write receiver config %q: %w", identity, err)
+	}
+	return nil
+}
+
+func (f *FileConfigStore) Delete(_ context.Context, identity string) error {
+	if err := validateDeletableConfigKey(identity); err != nil {
+		return err
+	}
+	path, err := f.objectPath(identity)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("delete receiver config %q: %w", identity, err)
 	}
 	return nil
 }

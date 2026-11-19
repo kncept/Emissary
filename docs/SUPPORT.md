@@ -1,9 +1,11 @@
 # Support tools
 
 Emissary includes an administrative support surface for inspecting runtime
-configuration and working with the inbound mail staging area. It is available
-to System Managers and is reached from **Settings → Support** in the web
-client, or directly through the API under `/api/support/`.
+configuration, configuring inbound receiver rules and working with the inbound
+mail staging area. It is available to System Managers and is reached from
+**Settings → Support** in the web client, or directly through the API under
+`/api/support/`. The receiver rules editor is reached from the `receiver`
+configuration details (**Edit**).
 
 The wire contract is [`api/support.yaml`](../api/support.yaml); this document
 describes how the operations behave.
@@ -32,6 +34,10 @@ role. Ordinary users receive `403 insufficient permissions`. The obsolete
 | `GET` | `/api/support/configurations/{name}` | Get the full settings for one section. |
 | `GET` | `/api/support/bucket/root` | List the immediate contents of the mail bucket. |
 | `POST` | `/api/support/process-email` | Run the standard inbound pipeline on a staging object. |
+| `GET` | `/api/support/receiver/identities` | List receiving mail identities (verified SES identities) and whether each has receiver rules. |
+| `GET` | `/api/support/receiver/rules` | List the configured receiver rules (domain → ordered rules). |
+| `PUT` | `/api/support/receiver/rules` | Add or replace receiver rules entries. |
+| `DELETE` | `/api/support/receiver/rules/{identity}` | Remove a configured receiving identity. The `_` fallback is rejected. |
 
 ## Configuration sections
 
@@ -101,7 +107,6 @@ example:
   "description": "Inbound recipient routing rules",
   "settings": {
     "identityCount": "1",
-    "prefix": "receiver",
     "rules._": "[\"DeliverToUser\",\"Bounce\"]",
     "type": "memory"
   }
@@ -109,6 +114,8 @@ example:
 ```
 
 The `_` entry is the base fallback used by recipients without their own rules.
+The editor uses the dedicated operations below instead of this flattened view,
+because it needs the ordered handler groups as well as their actions.
 
 Unknown sections return `404 configuration section not found`.
 
@@ -128,6 +135,100 @@ passwords, signing secrets, LDAP bind passwords and access keys are omitted.
 
 Because settings are string-valued, booleans are reported as `"true"` or
 `"false"`. Empty or unconfigured values are omitted from the object.
+
+## Receiver rules editor
+
+`GET /api/support/receiver/identities` lists the receiving mail identities: the
+verified identities returned by the AWS SES `ListIdentities` operation (both
+domains and individual email addresses), sorted by name. `hasRules` is true
+when the receiver has its own rules entry for that identity; false means mail
+for it is routed by the `_` fallback. The frontend shows a tick (✓) for `true`
+and a plus (+) for `false`. Each receiving identity is also the `domain` key of
+the corresponding rules entry below — there is no separate mailbox field.
+
+Example response (`200`):
+
+```json
+{
+  "identities": [
+    { "identity": "example.com", "hasRules": true },
+    { "identity": "news.example.com", "hasRules": false }
+  ]
+}
+```
+
+SES identities are account-wide. The frontend role needs the
+`ses:ListIdentities` IAM permission (`ListIdentities` does not support
+resource-level permissions, so it is granted on `*`). A failed SES query
+returns `502 failed to list SES identities`.
+
+`GET /api/support/receiver/rules` reads the rules from the configured receiver
+config store on every call, so it also serves as the GUI's **Reload** action.
+Each receiving identity has exactly one ordered list of rules; the first
+applicable rule wins, and `DeliverToUser` falls through when no such user
+exists. The fallback `_` is returned first, followed by other identities in
+name order. There are no nested handler groups or actions — the entries are
+just identities and their rules.
+
+Example response (`200`):
+
+```json
+{
+  "rules": [
+    { "domain": "_", "rules": ["DeliverToUser", "Bounce"] },
+    { "domain": "news.example.com", "rules": ["DeliverToMailIdentity", "Bounce"] }
+  ]
+}
+```
+
+`domain` is the receiving identity and maps directly onto the list above. The
+allowed rules are `DeliverToUser`, `DeliverToMailIdentity` and `Bounce`.
+`DeliverToMailIdentity` delivers to the identity's own mailbox, even when no
+user account exists (administrators can open it via masquerade); the `_`
+fallback and a `*` key both mean the recipient's own mailbox. See
+[CONFIGURATION.md](CONFIGURATION.md#receiver-inbound-routing-rules) for the
+backend settings.
+
+`PUT /api/support/receiver/rules` adds or replaces the rules entries for the
+identities supplied in the request:
+
+```json
+{
+  "rules": [
+    { "domain": "news.example.com", "rules": ["DeliverToMailIdentity", "Bounce"] }
+  ]
+}
+```
+
+Identities not included in the request (in particular `_`) are left untouched,
+so this operation never deletes a rules entry; use `DELETE` for that. Each
+identity needs at least one known rule, identities must be valid config keys,
+and the resulting config must keep a valid `_` fallback; invalid requests
+return `400 invalid receiver rules`, `400 invalid handler rules`,
+`400 invalid receiving domain` or `400 no rules supplied`. Store failures
+return `500 failed to save receiver rules`. The response is the full saved
+rules list in the same shape as `GET`.
+
+`DELETE /api/support/receiver/rules/{identity}` removes one receiving identity's
+rules entry from the config store and returns the remaining rules list. The
+identity then appears with a plus in the identities list and is routed by the
+`_` fallback until rules are added again. An unknown identity returns
+`404 receiver rules not found`; an invalid key returns
+`400 invalid receiving identity`. The `_` fallback can never be deleted —
+every recipient without its own entry relies on it — so the operation returns
+`400 the fallback receiving identity cannot be removed` for it. The config
+store implementations enforce the same rule independently of the API.
+
+Saved rules are written to the active receiver config store (`memory`,
+`filesystem`, `s3` or `ddb`) and published to the in-process receiver used by
+`ProcessEmail`. With `RECEIVER=s3` the target bucket is `RECEIVER_BUCKET`
+(defaulting to `S3_BUCKET`); with `RECEIVER=filesystem` it is
+`RECEIVER_FILESYSTEM_DIR` (defaulting to `FILESYSTEM_DIR`). Loading rules is
+read-only, so startup and **Reload** never write to the store. A newly created support handler loads the current rules from
+that store, falling back to the base rules only when no stored rules are
+available. The `s3-receiver` Lambda reloads the store on every invocation, so
+with a persistent backend the new rules apply to the next inbound message. With
+`memory`, each process keeps its own rules.
 
 ## Bucket root
 
@@ -205,15 +306,29 @@ The **Support** screen is reachable from Settings only when the signed-in user
 has the `systemManager` claim. It shows:
 
 - The configuration section list with its implementation; selecting a section
-  shows its settings.
+  shows its settings. The `receiver` details have an **Edit** button next to
+  **Close**, which opens `/support/receiver`.
 - The bucket root with unprocessed staging messages.
 - A **Process** action for each staging object, with a `Processing…` busy
   state. It does not use a browser dialog; see
   [DESIGN.md](DESIGN.md#frontend-ui-conventions) for the no-native-dialog rule.
 
+The **receiver rules** screen (`/support/receiver`) shows the receiving mail
+identities with tick/plus indicators, then each configured identity with its
+single ordered list of rules. The identity of each entry is its `domain` key,
+matching the list above; there are no mailbox identity fields, handler groups
+or "actions" nesting. Clicking a **+** adds a rules entry (seeded from the
+fallback rules) so it can be edited. **Remove** deletes a configured identity
+via `DELETE` after an in-app confirmation; the `_` fallback button is disabled
+and the backend rejects the same request. **Cancel** returns to Support,
+**Reload** re-reads both lists and discards unsaved edits, and **OK** saves via
+`PUT`. Rules can be reordered (↑/↓), changed or removed, and more rules can be
+added with **+ Add rule**. The page uses only in-app status messages and
+dialogs, never native dialogs.
+
 Users without System Manager permission do not see the Settings entry and are
-redirected away from `/support`; the API also enforces the `systemManager`
-claim regardless of the client.
+redirected away from `/support` and `/support/receiver`; the API also enforces
+the `systemManager` claim regardless of the client.
 
 ## Related documentation
 

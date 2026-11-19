@@ -25,9 +25,17 @@ const Bounce HandlerRule = "Bounce"
 // an identity. LoadMailIdentityConfig treats it as "seed the base fallback".
 var ErrIdentityConfigNotFound = errors.New("mail identity config not found")
 
-// HandlerRules is one ordered group of actions to try for a mail identity. The
-// first rule that applies wins; DeliverToUser falls through when no such user
-// exists.
+// ErrFallbackIdentity is returned when a management operation tries to delete
+// the base fallback rules. Every recipient without its own entry relies on
+// them, so the fallback can never be removed.
+var ErrFallbackIdentity = errors.New("cannot delete the fallback receiving identity")
+
+// HandlerRules is the ordered rules for one mail identity. It is a struct
+// rather than a bare []HandlerRule only so that it can hold its own key: the
+// MailIdentity field repeats the map key, which lets the management API turn
+// the config into a list without losing which identity each entry belongs to.
+// The first applicable rule wins; DeliverToUser falls through when no such
+// user exists.
 type HandlerRules struct {
 	MailIdentity string        `json:"mailIdentity" dynamodbav:"mailIdentity"`
 	Rules        []HandlerRule `json:"rules" dynamodbav:"rules"`
@@ -49,10 +57,11 @@ func (h HandlerRules) Validate() error {
 	return nil
 }
 
-// deliveryIdentity resolves the mailbox used by DeliverToMailIdentity. A
-// concrete MailIdentity wins; the wildcard (or an empty value) means the
-// mailbox is named after the recipient's own identity, which administrators
-// can open via masquerade even when no user account exists.
+// deliveryIdentity resolves the mailbox used by DeliverToMailIdentity. The
+// identity's own key normally names the catchall mailbox; the wildcard (or an
+// empty value, including the "_" fallback) means the mailbox is named after
+// the recipient, which administrators can open via masquerade even when no
+// user account exists.
 func (h HandlerRules) deliveryIdentity(recipient string) string {
 	identity := normalizeIdentity(h.MailIdentity)
 	if identity == "" || identity == FallbackIdentity || identity == "*" {
@@ -62,39 +71,67 @@ func (h HandlerRules) deliveryIdentity(recipient string) string {
 }
 
 // MailIdentityConfig is the complete set of inbound routing rules, keyed by
-// mail identity. The FallbackIdentity ("_") entry holds the base rules used
-// for every identity without its own configuration.
-type MailIdentityConfig map[string][]HandlerRules
+// mail identity. Each identity has exactly one ordered HandlerRules list. The
+// FallbackIdentity ("_") entry holds the base rules used for every identity
+// without its own configuration.
+type MailIdentityConfig map[string]HandlerRules
 
 // BaseMailIdentityConfig returns the seed written when a config store is
 // empty: deliver to existing users, bounce everyone else.
 func BaseMailIdentityConfig() MailIdentityConfig {
 	return MailIdentityConfig{
-		FallbackIdentity: []HandlerRules{{
+		FallbackIdentity: {
 			MailIdentity: FallbackIdentity,
 			Rules:        []HandlerRule{DeliverToUser, Bounce},
-		}},
+		},
 	}
 }
 
-// Get returns the rule groups for identity. Matching is case-insensitive, and
+// Get returns the rules for identity. Matching is case-insensitive, and
 // identities without their own entry use the FallbackIdentity ("_") entry. It
 // returns an error when neither exists so a misconfigured store cannot make
 // the receiver drop mail silently.
-func (c MailIdentityConfig) Get(identity string) ([]HandlerRules, error) {
+func (c MailIdentityConfig) Get(identity string) (HandlerRules, error) {
 	if rules, ok := c.lookup(identity); ok {
-		return cloneRules(rules), nil
+		return cloneHandlerRules(rules), nil
 	}
 	if rules, ok := c.lookup(FallbackIdentity); ok {
-		return cloneRules(rules), nil
+		return cloneHandlerRules(rules), nil
 	}
-	return nil, fmt.Errorf("%w: no rules for %q and no %q fallback", ErrIdentityConfigNotFound, identity, FallbackIdentity)
+	return HandlerRules{}, fmt.Errorf("%w: no rules for %q and no %q fallback", ErrIdentityConfigNotFound, identity, FallbackIdentity)
 }
 
-func (c MailIdentityConfig) lookup(identity string) ([]HandlerRules, bool) {
+// Has reports whether identity has its own rules entry. Unlike Get it does
+// not consult the fallback entry, so callers can tell explicitly configured
+// identities from those relying on "_".
+func (c MailIdentityConfig) Has(identity string) bool {
+	_, ok := c.lookup(identity)
+	return ok
+}
+
+// Clone returns a deep copy of the configuration. It is used by management
+// operations which build a replacement config before publishing it.
+func (c MailIdentityConfig) Clone() MailIdentityConfig {
+	if c == nil {
+		return nil
+	}
+	clone := make(MailIdentityConfig, len(c))
+	for identity, rules := range c {
+		clone[identity] = cloneHandlerRules(rules)
+	}
+	return clone
+}
+
+// ValidateConfigKey checks that identity is safe to use as a config store
+// key. The stores call this on Put; management APIs call it before writing.
+func ValidateConfigKey(identity string) error {
+	return validateConfigKey(identity)
+}
+
+func (c MailIdentityConfig) lookup(identity string) (HandlerRules, bool) {
 	key := normalizeIdentity(identity)
 	if key == "" {
-		return nil, false
+		return HandlerRules{}, false
 	}
 	if rules, ok := c[key]; ok {
 		return rules, true
@@ -105,29 +142,23 @@ func (c MailIdentityConfig) lookup(identity string) ([]HandlerRules, bool) {
 			return rules, true
 		}
 	}
-	return nil, false
+	return HandlerRules{}, false
 }
 
-// Validate checks that the fallback exists and that every rule group is
-// usable. It is called after loading a store, and by NewReceiver.
+// Validate checks that the fallback exists and that every identity has a
+// usable rule list. It is called after loading a store, and by NewReceiver.
 func (c MailIdentityConfig) Validate() error {
 	var errs []error
 	if _, ok := c[FallbackIdentity]; !ok {
 		errs = append(errs, fmt.Errorf("missing %q fallback configuration", FallbackIdentity))
 	}
-	for identity, groups := range c {
+	for identity, rules := range c {
 		if strings.TrimSpace(identity) == "" {
 			errs = append(errs, errors.New("mail identity key cannot be empty"))
 			continue
 		}
-		if len(groups) == 0 {
-			errs = append(errs, fmt.Errorf("identity %q has no rule groups", identity))
-			continue
-		}
-		for i, group := range groups {
-			if err := group.Validate(); err != nil {
-				errs = append(errs, fmt.Errorf("identity %q rule group %d: %w", identity, i, err))
-			}
+		if err := rules.Validate(); err != nil {
+			errs = append(errs, fmt.Errorf("identity %q: %w", identity, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -137,22 +168,28 @@ func normalizeIdentity(identity string) string {
 	return strings.ToLower(strings.TrimSpace(identity))
 }
 
-func cloneRules(rules []HandlerRules) []HandlerRules {
-	if rules == nil {
-		return nil
-	}
-	clone := make([]HandlerRules, len(rules))
-	for i, group := range rules {
-		group.Rules = append([]HandlerRule(nil), group.Rules...)
-		clone[i] = group
-	}
-	return clone
+func cloneHandlerRules(rules HandlerRules) HandlerRules {
+	rules.Rules = append([]HandlerRule(nil), rules.Rules...)
+	return rules
 }
 
 func validateConfigKey(identity string) error {
 	key := strings.TrimSpace(identity)
 	if key == "" || key == "." || key == ".." || strings.ContainsAny(key, "/\\") {
 		return fmt.Errorf("invalid mail identity config key %q", identity)
+	}
+	return nil
+}
+
+// validateDeletableConfigKey checks an identity before a store deletes its
+// rules entry. The fallback is deliberately excluded: without it the receiver
+// would have no rules for recipients that do not have their own entry.
+func validateDeletableConfigKey(identity string) error {
+	if err := validateConfigKey(identity); err != nil {
+		return err
+	}
+	if normalizeIdentity(identity) == FallbackIdentity {
+		return ErrFallbackIdentity
 	}
 	return nil
 }

@@ -6,6 +6,9 @@ import type {
   ConfigurationDetail,
   ConfigurationsResponse,
   ProcessEmailResponse,
+  ReceiverIdentitiesResponse,
+  ReceiverRulesRequest,
+  ReceiverRulesResponse,
 } from './api/generated/schemas/support/index.ts';
 import {
   MASQUERADE_AS_KEY,
@@ -72,6 +75,7 @@ export async function authenticatedFetch(url: string, options: RequestInit = {})
   let response = await fetch(url, {
     ...options,
     headers,
+    cache: 'no-store',
   });
 
   if (response.status === 401) {
@@ -84,6 +88,7 @@ export async function authenticatedFetch(url: string, options: RequestInit = {})
       response = await fetch(url, {
         ...options,
         headers,
+        cache: 'no-store',
       });
     }
 
@@ -214,6 +219,48 @@ export async function processSupportEmail(id: string): Promise<ProcessEmailRespo
     throw new Error((data as { error?: string }).error || 'Failed to process email');
   }
   return data as ProcessEmailResponse;
+}
+
+export async function getSupportReceiverIdentities(): Promise<ReceiverIdentitiesResponse> {
+  const response = await authenticatedFetch(`${API_BASE}/support/receiver/identities`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error((data as { error?: string }).error || 'Failed to load receiver identities');
+  }
+  return data as ReceiverIdentitiesResponse;
+}
+
+export async function getSupportReceiverRules(): Promise<ReceiverRulesResponse> {
+  const response = await authenticatedFetch(`${API_BASE}/support/receiver/rules`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error((data as { error?: string }).error || 'Failed to load receiver rules');
+  }
+  return data as ReceiverRulesResponse;
+}
+
+export async function saveSupportReceiverRules(rules: ReceiverRulesRequest['rules']): Promise<ReceiverRulesResponse> {
+  const response = await authenticatedFetch(`${API_BASE}/support/receiver/rules`, {
+    method: 'PUT',
+    body: JSON.stringify({ rules }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error((data as { error?: string }).error || 'Failed to save receiver rules');
+  }
+  return data as ReceiverRulesResponse;
+}
+
+export async function deleteSupportReceiverRule(identity: string): Promise<ReceiverRulesResponse> {
+  const response = await authenticatedFetch(
+    `${API_BASE}/support/receiver/rules/${encodeURIComponent(identity)}`,
+    { method: 'DELETE' },
+  );
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error((data as { error?: string }).error || 'Failed to delete receiver rules');
+  }
+  return data as ReceiverRulesResponse;
 }
 
 export async function checkAuth(): Promise<AuthState> {

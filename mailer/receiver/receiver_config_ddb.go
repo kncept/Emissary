@@ -18,6 +18,7 @@ import (
 type ddbConfigAPI interface {
 	GetItem(ctx context.Context, params *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
 	PutItem(ctx context.Context, params *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
+	DeleteItem(ctx context.Context, params *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
 	Scan(ctx context.Context, params *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
 }
 
@@ -31,9 +32,13 @@ type DdbConfigStore struct {
 
 var _ ConfigStore = (*DdbConfigStore)(nil)
 
+// receiverConfigItem keeps the existing DynamoDB shape: the partition key is
+// the identity and "rules" is the ordered list of rules for it. HandlerRules
+// repeats the key in memory for the API's flattened response, but the table
+// does not need to store it twice.
 type receiverConfigItem struct {
-	Identity string         `dynamodbav:"id"`
-	Rules    []HandlerRules `dynamodbav:"rules"`
+	Identity string        `dynamodbav:"id"`
+	Rules    []HandlerRule `dynamodbav:"rules"`
 }
 
 func NewDdbConfigStore(tableName, region string) (*DdbConfigStore, error) {
@@ -53,7 +58,7 @@ func newDdbConfigStore(client ddbConfigAPI, tableName string) *DdbConfigStore {
 
 func (d *DdbConfigStore) Name() string { return "ddb" }
 
-func (d *DdbConfigStore) Get(ctx context.Context, identity string) ([]HandlerRules, error) {
+func (d *DdbConfigStore) Get(ctx context.Context, identity string) (HandlerRules, error) {
 	output, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(d.tableName),
 		Key: map[string]types.AttributeValue{
@@ -61,25 +66,25 @@ func (d *DdbConfigStore) Get(ctx context.Context, identity string) ([]HandlerRul
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("read receiver config %q: %w", identity, err)
+		return HandlerRules{}, fmt.Errorf("read receiver config %q: %w", identity, err)
 	}
 	if len(output.Item) == 0 {
-		return nil, fmt.Errorf("%w: %q", ErrIdentityConfigNotFound, identity)
+		return HandlerRules{}, fmt.Errorf("%w: %q", ErrIdentityConfigNotFound, identity)
 	}
 	var item receiverConfigItem
 	if err := attributevalue.UnmarshalMap(output.Item, &item); err != nil {
-		return nil, fmt.Errorf("unmarshal receiver config %q: %w", identity, err)
+		return HandlerRules{}, fmt.Errorf("unmarshal receiver config %q: %w", identity, err)
 	}
-	return item.Rules, nil
+	return HandlerRules{MailIdentity: item.Identity, Rules: item.Rules}, nil
 }
 
-func (d *DdbConfigStore) Put(ctx context.Context, identity string, rules []HandlerRules) error {
+func (d *DdbConfigStore) Put(ctx context.Context, identity string, rules HandlerRules) error {
 	if err := validateConfigKey(identity); err != nil {
 		return err
 	}
 	item, err := attributevalue.MarshalMap(receiverConfigItem{
 		Identity: normalizeIdentity(identity),
-		Rules:    cloneRules(rules),
+		Rules:    append([]HandlerRule(nil), rules.Rules...),
 	})
 	if err != nil {
 		return fmt.Errorf("marshal receiver config %q: %w", identity, err)
@@ -89,6 +94,21 @@ func (d *DdbConfigStore) Put(ctx context.Context, identity string, rules []Handl
 		Item:      item,
 	}); err != nil {
 		return fmt.Errorf("write receiver config %q: %w", identity, err)
+	}
+	return nil
+}
+
+func (d *DdbConfigStore) Delete(ctx context.Context, identity string) error {
+	if err := validateDeletableConfigKey(identity); err != nil {
+		return err
+	}
+	if _, err := d.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(d.tableName),
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: normalizeIdentity(identity)},
+		},
+	}); err != nil {
+		return fmt.Errorf("delete receiver config %q: %w", identity, err)
 	}
 	return nil
 }

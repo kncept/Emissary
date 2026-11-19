@@ -8,6 +8,17 @@ import (
 
 // Handler handles operations described by OpenAPI v3 specification.
 type Handler interface {
+	// DeleteReceiverRules implements deleteReceiverRules operation.
+	//
+	// Deletes the rules entry for `identity` from the receiver config store. The identity then appears
+	// with a plus in the receiving mail identities list and is routed by the `_` fallback until rules are
+	// added again. The response is the full remaining rules list.
+	//
+	// The `_` fallback can never be deleted: every recipient without its own entry relies on it, so the
+	// operation returns `400 Bad Request` for it. Unknown identities return `404 Not Found`.
+	//
+	// DELETE /api/support/receiver/rules/{identity}
+	DeleteReceiverRules(ctx context.Context, params DeleteReceiverRulesParams) (DeleteReceiverRulesRes, error)
 	// GetConfiguration implements getConfiguration operation.
 	//
 	// Returns the full configuration for a section. Names are case insensitive; the canonical names are
@@ -40,6 +51,28 @@ type Handler interface {
 	//
 	// GET /api/support/configurations
 	ListConfigurations(ctx context.Context) (ListConfigurationsRes, error)
+	// ListReceiverIdentities implements listReceiverIdentities operation.
+	//
+	// Lists the receiving mail identities: the verified identities returned by the SES `ListIdentities`
+	// operation (both domains and individual email addresses). `hasRules` is true when the receiver has
+	// its own rules entry for that identity; otherwise the recipient is routed by the `_` fallback. The
+	// GUI shows a tick for identities with rules and a plus for those without.
+	//
+	// Requires the `ses:ListIdentities` IAM permission. A failed SES query returns
+	// `502 failed to list SES identities`.
+	//
+	// GET /api/support/receiver/identities
+	ListReceiverIdentities(ctx context.Context) (ListReceiverIdentitiesRes, error)
+	// ListReceiverRules implements listReceiverRules operation.
+	//
+	// Returns every receiving identity with its own rules entry, including the `_` fallback. Each identity
+	// has one ordered list of rules evaluated first-match-wins.
+	//
+	// The rules are read from the configured receiver config store on every request, so this operation
+	// also acts as the GUI's Reload action.
+	//
+	// GET /api/support/receiver/rules
+	ListReceiverRules(ctx context.Context) (ListReceiverRulesRes, error)
 	// ProcessEmail implements processEmail operation.
 	//
 	// Runs the standard inbound processing pipeline on a raw staging object. The `id` is the object key
@@ -54,6 +87,19 @@ type Handler interface {
 	//
 	// POST /api/support/process-email
 	ProcessEmail(ctx context.Context, req *ProcessEmailRequest) (ProcessEmailRes, error)
+	// SaveReceiverRules implements saveReceiverRules operation.
+	//
+	// Adds or replaces the rules entries for the domains in the request. Domains not included in the
+	// request (in particular the `_` fallback) are left untouched. Use `DELETE` on
+	// `/api/support/receiver/rules/{identity}` to remove an entry.
+	//
+	// Each identity must have at least one rule, and every rule must be a known `HandlerRule`. The `_`
+	// fallback must remain valid, otherwise the request is rejected with `400 Bad Request`. Submitted
+	// entries are persisted in the configured receiver config store and published to the active receiver
+	// cache. The updated rules are returned in the response.
+	//
+	// PUT /api/support/receiver/rules
+	SaveReceiverRules(ctx context.Context, req *ReceiverRulesRequest) (SaveReceiverRulesRes, error)
 }
 
 // Server implements http server based on OpenAPI v3 specification and

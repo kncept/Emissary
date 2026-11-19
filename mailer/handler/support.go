@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/go-faster/errors"
 	"github.com/ogen-go/ogen/ogenerrors"
@@ -45,11 +47,18 @@ type supportHandler struct {
 	sender   sender.Sender
 	users    usermanager.UserManager
 
-	identityConfig receiver.MailIdentityConfig
+	// identityConfig is an immutable snapshot. Rule changes publish a new
+	// config through the pointer instead of mutating the shared map, so the
+	// receiver used by ProcessEmail never races with a save.
+	identityConfig atomic.Pointer[receiver.MailIdentityConfig]
+	configStore    receiver.ConfigStore
+
+	sesMu         sync.Mutex
+	sesIdentities SESIdentityLister
 }
 
-func newSupportHandler(cfg HandlerConfig, emailStore storage.Storage, metaStore metadata.MetadataStore, sessionStore session.SessionStore, mailSender sender.Sender, users usermanager.UserManager) *supportHandler {
-	return &supportHandler{
+func newSupportHandler(ctx context.Context, cfg HandlerConfig, emailStore storage.Storage, metaStore metadata.MetadataStore, sessionStore session.SessionStore, mailSender sender.Sender, users usermanager.UserManager) *supportHandler {
+	h := &supportHandler{
 		cfg:      cfg,
 		storage:  emailStore,
 		metadata: metaStore,
@@ -57,8 +66,60 @@ func newSupportHandler(cfg HandlerConfig, emailStore storage.Storage, metaStore 
 		sender:   mailSender,
 		users:    users,
 
-		identityConfig: cfg.ReceiverConfig,
+		configStore:   cfg.ReceiverConfigStore,
+		sesIdentities: cfg.SESIdentityLister,
 	}
+
+	// Never let a configured backend silently degrade to process-local rules.
+	// New() normally supplies the store, but constructing one here as well
+	// guarantees that a reported type of s3/filesystem/ddb really is written
+	// to when OK is pressed, regardless of how HandlerConfig was assembled.
+	if h.configStore == nil && strings.TrimSpace(cfg.ReceiverConfigType) != "" {
+		store, err := receiver.NewConfigStore(receiver.ConfigStoreOptions{
+			Type:          cfg.ReceiverConfigType,
+			FilesystemDir: receiverFilesystemRoot(cfg),
+			Bucket:        receiverBucket(cfg),
+			TableName:     resolveDDBTable(cfg.ReceiverTable, cfg.DDBTablePrefix, "receiver"),
+			Region:        cfg.ReceiverRegion,
+		})
+		if err != nil {
+			log.Printf("support: create receiver config store: %v", err)
+		} else {
+			h.configStore = store
+		}
+	}
+
+	// The store is authoritative. A caller may supply ReceiverConfig for
+	// tests or programmatic use, but an active store still wins so a fresh
+	// handler (including one created on a Lambda cold start) sees saved
+	// rules. Only an empty/unavailable store falls back to the supplied
+	// config and ultimately the base rules.
+	config := cfg.ReceiverConfig.Clone()
+	if h.configStore != nil {
+		stored, err := receiver.LoadMailIdentityConfig(ctx, h.configStore)
+		if err != nil {
+			log.Printf("support: load receiver rules on create: %v", err)
+		} else {
+			config = stored
+		}
+	}
+	if config == nil {
+		config = receiver.BaseMailIdentityConfig()
+	}
+	h.identityConfig.Store(&config)
+	return h
+}
+
+// receiverConfig returns the currently published rules snapshot.
+func (h *supportHandler) receiverConfig() receiver.MailIdentityConfig {
+	return *h.identityConfig.Load()
+}
+
+func (h *supportHandler) publishReceiverConfig(config receiver.MailIdentityConfig) {
+	if config == nil {
+		return
+	}
+	h.identityConfig.Store(&config)
 }
 
 // supportSecurityHandler validates the bearer token and makes the claims
@@ -209,7 +270,7 @@ func (h *supportHandler) ProcessEmail(ctx context.Context, req *supportapi.Proce
 		Storage:     h.storage,
 		Metadata:    h.metadata,
 
-		IdentityConfig: h.identityConfig,
+		IdentityConfig: h.receiverConfig().Clone(),
 	})
 	if err != nil {
 		log.Printf("support: create receiver: %v", err)
@@ -334,7 +395,6 @@ func (h *supportHandler) configurationSettings(name string) map[string]string {
 	case receiverConfigurationName:
 		implementation := receiverImplementation(h.cfg.ReceiverConfigType)
 		addSetting(settings, "type", implementation)
-		addSetting(settings, "prefix", "receiver")
 		// Only report the settings relevant to the active backend.
 		switch implementation {
 		case "s3":
@@ -345,17 +405,14 @@ func (h *supportHandler) configurationSettings(name string) map[string]string {
 			addSetting(settings, "table", resolveDDBTable(h.cfg.ReceiverTable, h.cfg.DDBTablePrefix, "receiver"))
 			addSetting(settings, "region", h.cfg.ReceiverRegion)
 		}
-		settings["identityCount"] = strconv.Itoa(len(h.identityConfig))
+		config := h.receiverConfig()
+		settings["identityCount"] = strconv.Itoa(len(config))
 		// The rules themselves are safe for a System Manager to read. Show
 		// each identity as a JSON array of rule names so the loaded map is
-		// auditable, including the "_" base fallback. Groups are evaluated in
-		// order, so their rules are flattened in that order.
-		for identity, groups := range h.identityConfig {
-			rules := make([]receiver.HandlerRule, 0, len(groups))
-			for _, group := range groups {
-				rules = append(rules, group.Rules...)
-			}
-			encoded, err := json.Marshal(rules)
+		// auditable, including the "_" base fallback. Rules are evaluated in
+		// order, which is the order they are stored in.
+		for identity, rules := range config {
+			encoded, err := json.Marshal(rules.Rules)
 			if err != nil {
 				log.Printf("support: encode receiver rules for %q: %v", identity, err)
 				continue

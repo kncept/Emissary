@@ -58,20 +58,29 @@ authenticate to the MX host and uses STARTTLS when the server advertises it.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `RECEIVER` | `s3` when AWS credentials and `S3_BUCKET` are configured, otherwise `memory` | Backend for recipient routing rules: `s3`, `filesystem`, `ddb`/`dynamodb` or `memory`. |
+| `RECEIVER_BUCKET` | `S3_BUCKET` | S3 bucket holding the rules when `RECEIVER=s3`. Set it explicitly to keep receiver rules in a dedicated bucket. |
+| `RECEIVER_FILESYSTEM_DIR` | `FILESYSTEM_DIR` (default `~/.emissary`) | Root directory holding the rules when `RECEIVER=filesystem`. The store adds the `receiver/` subdirectory. |
 | `RECEIVER_TABLE` | `<TABLE_PREFIX>receiver` | DynamoDB table name for the `ddb` backend (`TABLE_PREFIX` defaults to `emissary-`). |
 | `RECEIVER_REGION` | `AWS_REGION` | AWS region for the `ddb` backend. |
 
-Each mail identity is stored as one JSON configuration under the `receiver/`
-prefix: `s3://<S3_BUCKET>/receiver/<identity>.json` or
-`<FILESYSTEM_DIR>/receiver/<identity>.json`. With `RECEIVER=ddb` each identity
-is one item in `RECEIVER_TABLE`, keyed by a string partition key `id` (no sort
-key); the rules are held in a `rules` list attribute. The `_` identity holds the
-base fallback rules (deliver to an existing user, otherwise bounce), and is
-created automatically when the backend is empty. Identities without their own
-configuration use `_`. The frontend API and `s3-receiver` both load these rules
-at startup. DynamoDB tables are created at deploy time from `TABLE_PREFIX`
-without per-table CREATE permissions at runtime, so the table must exist before
-the app starts.
+Each mail identity is stored as one JSON object under the `receiver/` prefix:
+`s3://<RECEIVER_BUCKET>/receiver/<identity>.json` or
+`<RECEIVER_FILESYSTEM_DIR>/receiver/<identity>.json`. The object is a single
+`HandlerRules` entry — `{"mailIdentity": "<identity>", "rules": [...]}` — where
+`mailIdentity` repeats the config key and `rules` is the one ordered list tried
+first-match-wins. With `RECEIVER=ddb` each identity is one item in
+`RECEIVER_TABLE`, keyed by a string partition key `id` (no sort key); the rules
+are held in a `rules` list attribute and the identity is not stored twice.
+The `_` identity holds the base fallback rules (deliver to an existing user,
+otherwise bounce). It is always available in memory when the backend has no
+`_` entry; loading rules never writes to the store, so it is only persisted
+when a save explicitly includes it.
+Identities without their own configuration use `_`. The frontend API and
+`s3-receiver` both load these rules at startup. The `s3-receiver` Lambda ignores
+S3 object keys containing `/`, so writes under `receiver/` never get treated as
+inbound mail or deleted by the message consumer. DynamoDB tables are created at
+deploy time from `TABLE_PREFIX` without per-table CREATE permissions at
+runtime, so the table must exist before the app starts.
 
 ## Metadata (JMAP keywords and received time)
 
@@ -122,9 +131,9 @@ share one root:
 | `STORAGE=filesystem` | `~/.emissary/mail` | `users/<account>/<mailbox>/<timestamp>_<id>.eml` and `_storage/<session>/` drafts/state. |
 | `USER_MANAGER=filesystem` | `~/.emissary/users` | `<email>/user.json` records, the same JSON shape as the S3 user manager. |
 | `METADATA=file` | `~/.emissary/metadata` | One `<email id>.json` record per message. |
-| `RECEIVER=filesystem` | `~/.emissary/receiver` | One `<identity>.json` routing config per mail identity, including `_` for the base fallback. |
+| `RECEIVER=filesystem` | `~/.emissary/receiver` | One `<identity>.json` routing config per mail identity, including `_` for the base fallback. `RECEIVER_FILESYSTEM_DIR` overrides the root independently. |
 
-All four expand a leading `~` in `FILESYSTEM_DIR` to the home directory and
+All four expand a leading `~` in their configured root to the home directory and
 create their directory on first use. Ids are validated before being mapped to
 paths, so JMAP ids cannot escape these roots.
 

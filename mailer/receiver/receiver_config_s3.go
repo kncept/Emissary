@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 
@@ -22,6 +24,7 @@ import (
 type s3ConfigAPI interface {
 	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
 
@@ -42,6 +45,8 @@ func NewS3ConfigStore(bucket string) (*S3ConfigStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
+	log.Printf("receiver config s3: store initialized for bucket %q (region=%q AWS_ENDPOINT_URL=%q AWS_ENDPOINT_URL_S3=%q AWS_PROFILE=%q)",
+		bucket, cfg.Region, os.Getenv("AWS_ENDPOINT_URL"), os.Getenv("AWS_ENDPOINT_URL_S3"), os.Getenv("AWS_PROFILE"))
 	return newS3ConfigStore(s3.NewFromConfig(cfg), bucket), nil
 }
 
@@ -58,10 +63,10 @@ func (s *S3ConfigStore) objectKey(identity string) (string, error) {
 	return configPrefix + "/" + normalizeIdentity(identity) + ".json", nil
 }
 
-func (s *S3ConfigStore) Get(ctx context.Context, identity string) ([]HandlerRules, error) {
+func (s *S3ConfigStore) Get(ctx context.Context, identity string) (HandlerRules, error) {
 	key, err := s.objectKey(identity)
 	if err != nil {
-		return nil, err
+		return HandlerRules{}, err
 	}
 	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
@@ -69,24 +74,24 @@ func (s *S3ConfigStore) Get(ctx context.Context, identity string) ([]HandlerRule
 	})
 	if err != nil {
 		if isConfigObjectNotFound(err) {
-			return nil, fmt.Errorf("%w: %q", ErrIdentityConfigNotFound, identity)
+			return HandlerRules{}, fmt.Errorf("%w: %q", ErrIdentityConfigNotFound, identity)
 		}
-		return nil, fmt.Errorf("read receiver config %q: %w", identity, err)
+		return HandlerRules{}, fmt.Errorf("read receiver config %q: %w", identity, err)
 	}
 	defer output.Body.Close()
 
 	body, err := io.ReadAll(output.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read receiver config %q: %w", identity, err)
+		return HandlerRules{}, fmt.Errorf("read receiver config %q: %w", identity, err)
 	}
-	var rules []HandlerRules
+	var rules HandlerRules
 	if err := json.Unmarshal(body, &rules); err != nil {
-		return nil, fmt.Errorf("unmarshal receiver config %q: %w", identity, err)
+		return HandlerRules{}, fmt.Errorf("unmarshal receiver config %q: %w", identity, err)
 	}
 	return rules, nil
 }
 
-func (s *S3ConfigStore) Put(ctx context.Context, identity string, rules []HandlerRules) error {
+func (s *S3ConfigStore) Put(ctx context.Context, identity string, rules HandlerRules) error {
 	key, err := s.objectKey(identity)
 	if err != nil {
 		return err
@@ -95,13 +100,37 @@ func (s *S3ConfigStore) Put(ctx context.Context, identity string, rules []Handle
 	if err != nil {
 		return fmt.Errorf("marshal receiver config %q: %w", identity, err)
 	}
-	if _, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+	log.Printf("receiver config s3: PutObject bucket=%q key=%q identity=%q", s.bucket, key, identity)
+	output, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(key),
 		Body:        strings.NewReader(string(body)),
 		ContentType: aws.String("application/json"),
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("write receiver config %q: %w", identity, err)
+	}
+	etag := ""
+	if output != nil && output.ETag != nil {
+		etag = *output.ETag
+	}
+	log.Printf("receiver config s3: PutObject succeeded bucket=%q key=%q etag=%q", s.bucket, key, etag)
+	return nil
+}
+
+func (s *S3ConfigStore) Delete(ctx context.Context, identity string) error {
+	if err := validateDeletableConfigKey(identity); err != nil {
+		return err
+	}
+	key, err := s.objectKey(identity)
+	if err != nil {
+		return err
+	}
+	if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	}); err != nil {
+		return fmt.Errorf("delete receiver config %q: %w", identity, err)
 	}
 	return nil
 }

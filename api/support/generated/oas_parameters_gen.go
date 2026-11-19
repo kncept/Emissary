@@ -14,6 +14,92 @@ import (
 	"github.com/ogen-go/ogen/validate"
 )
 
+// DeleteReceiverRulesParams is parameters of deleteReceiverRules operation.
+type DeleteReceiverRulesParams struct {
+	// The receiving identity whose rules entry should be removed.
+	Identity string
+}
+
+func unpackDeleteReceiverRulesParams(packed middleware.Parameters) (params DeleteReceiverRulesParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "identity",
+			In:   "path",
+		}
+		params.Identity = packed[key].(string)
+	}
+	return params
+}
+
+func decodeDeleteReceiverRulesParams(args [1]string, argsEscaped bool, r *http.Request) (params DeleteReceiverRulesParams, _ error) {
+	// Decode path: identity.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "identity",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToString(val)
+				if err != nil {
+					return err
+				}
+
+				params.Identity = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+			if err := func() error {
+				if err := (validate.String{
+					MinLength:     1,
+					MinLengthSet:  true,
+					MaxLength:     0,
+					MaxLengthSet:  false,
+					Email:         false,
+					Hostname:      false,
+					Regex:         nil,
+					MinNumeric:    0,
+					MinNumericSet: false,
+					MaxNumeric:    0,
+					MaxNumericSet: false,
+				}).Validate(string(params.Identity)); err != nil {
+					return errors.Wrap(err, "string")
+				}
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "identity",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // GetConfigurationParams is parameters of getConfiguration operation.
 type GetConfigurationParams struct {
 	// Configuration section name.

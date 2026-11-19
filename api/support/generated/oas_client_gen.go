@@ -29,6 +29,17 @@ func trimTrailingSlashes(u *url.URL) {
 
 // Invoker invokes operations described by OpenAPI v3 specification.
 type Invoker interface {
+	// DeleteReceiverRules invokes deleteReceiverRules operation.
+	//
+	// Deletes the rules entry for `identity` from the receiver config store. The identity then appears
+	// with a plus in the receiving mail identities list and is routed by the `_` fallback until rules are
+	// added again. The response is the full remaining rules list.
+	//
+	// The `_` fallback can never be deleted: every recipient without its own entry relies on it, so the
+	// operation returns `400 Bad Request` for it. Unknown identities return `404 Not Found`.
+	//
+	// DELETE /api/support/receiver/rules/{identity}
+	DeleteReceiverRules(ctx context.Context, params DeleteReceiverRulesParams) (DeleteReceiverRulesRes, error)
 	// GetConfiguration invokes getConfiguration operation.
 	//
 	// Returns the full configuration for a section. Names are case insensitive; the canonical names are
@@ -61,6 +72,28 @@ type Invoker interface {
 	//
 	// GET /api/support/configurations
 	ListConfigurations(ctx context.Context) (ListConfigurationsRes, error)
+	// ListReceiverIdentities invokes listReceiverIdentities operation.
+	//
+	// Lists the receiving mail identities: the verified identities returned by the SES `ListIdentities`
+	// operation (both domains and individual email addresses). `hasRules` is true when the receiver has
+	// its own rules entry for that identity; otherwise the recipient is routed by the `_` fallback. The
+	// GUI shows a tick for identities with rules and a plus for those without.
+	//
+	// Requires the `ses:ListIdentities` IAM permission. A failed SES query returns
+	// `502 failed to list SES identities`.
+	//
+	// GET /api/support/receiver/identities
+	ListReceiverIdentities(ctx context.Context) (ListReceiverIdentitiesRes, error)
+	// ListReceiverRules invokes listReceiverRules operation.
+	//
+	// Returns every receiving identity with its own rules entry, including the `_` fallback. Each identity
+	// has one ordered list of rules evaluated first-match-wins.
+	//
+	// The rules are read from the configured receiver config store on every request, so this operation
+	// also acts as the GUI's Reload action.
+	//
+	// GET /api/support/receiver/rules
+	ListReceiverRules(ctx context.Context) (ListReceiverRulesRes, error)
 	// ProcessEmail invokes processEmail operation.
 	//
 	// Runs the standard inbound processing pipeline on a raw staging object. The `id` is the object key
@@ -75,6 +108,19 @@ type Invoker interface {
 	//
 	// POST /api/support/process-email
 	ProcessEmail(ctx context.Context, request *ProcessEmailRequest) (ProcessEmailRes, error)
+	// SaveReceiverRules invokes saveReceiverRules operation.
+	//
+	// Adds or replaces the rules entries for the domains in the request. Domains not included in the
+	// request (in particular the `_` fallback) are left untouched. Use `DELETE` on
+	// `/api/support/receiver/rules/{identity}` to remove an entry.
+	//
+	// Each identity must have at least one rule, and every rule must be a known `HandlerRule`. The `_`
+	// fallback must remain valid, otherwise the request is rejected with `400 Bad Request`. Submitted
+	// entries are persisted in the configured receiver config store and published to the active receiver
+	// cache. The updated rules are returned in the response.
+	//
+	// PUT /api/support/receiver/rules
+	SaveReceiverRules(ctx context.Context, request *ReceiverRulesRequest) (SaveReceiverRulesRes, error)
 }
 
 // Client implements OAS client.
@@ -116,6 +162,142 @@ func (c *Client) requestURL(ctx context.Context) *url.URL {
 		return c.serverURL
 	}
 	return u
+}
+
+// DeleteReceiverRules invokes deleteReceiverRules operation.
+//
+// Deletes the rules entry for `identity` from the receiver config store. The identity then appears
+// with a plus in the receiving mail identities list and is routed by the `_` fallback until rules are
+// added again. The response is the full remaining rules list.
+//
+// The `_` fallback can never be deleted: every recipient without its own entry relies on it, so the
+// operation returns `400 Bad Request` for it. Unknown identities return `404 Not Found`.
+//
+// DELETE /api/support/receiver/rules/{identity}
+func (c *Client) DeleteReceiverRules(ctx context.Context, params DeleteReceiverRulesParams) (DeleteReceiverRulesRes, error) {
+	res, err := c.sendDeleteReceiverRules(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendDeleteReceiverRules(ctx context.Context, params DeleteReceiverRulesParams) (res DeleteReceiverRulesRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("deleteReceiverRules"),
+		semconv.HTTPRequestMethodKey.String("DELETE"),
+		semconv.URLTemplateKey.String("/api/support/receiver/rules/{identity}"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, DeleteReceiverRulesOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [2]string
+	pathParts[0] = "/api/support/receiver/rules/"
+	{
+		// Encode "identity" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "identity",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.StringToString(params.Identity))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "DELETE", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+			stage = "Security:BearerAuth"
+			switch err := c.securityBearerAuth(ctx, DeleteReceiverRulesOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"BearerAuth\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	stage = "DecodeResponse"
+	result, err := decodeDeleteReceiverRulesResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
 }
 
 // GetConfiguration invokes getConfiguration operation.
@@ -489,6 +671,242 @@ func (c *Client) sendListConfigurations(ctx context.Context) (res ListConfigurat
 	return result, nil
 }
 
+// ListReceiverIdentities invokes listReceiverIdentities operation.
+//
+// Lists the receiving mail identities: the verified identities returned by the SES `ListIdentities`
+// operation (both domains and individual email addresses). `hasRules` is true when the receiver has
+// its own rules entry for that identity; otherwise the recipient is routed by the `_` fallback. The
+// GUI shows a tick for identities with rules and a plus for those without.
+//
+// Requires the `ses:ListIdentities` IAM permission. A failed SES query returns
+// `502 failed to list SES identities`.
+//
+// GET /api/support/receiver/identities
+func (c *Client) ListReceiverIdentities(ctx context.Context) (ListReceiverIdentitiesRes, error) {
+	res, err := c.sendListReceiverIdentities(ctx)
+	return res, err
+}
+
+func (c *Client) sendListReceiverIdentities(ctx context.Context) (res ListReceiverIdentitiesRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("listReceiverIdentities"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/support/receiver/identities"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ListReceiverIdentitiesOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/support/receiver/identities"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+			stage = "Security:BearerAuth"
+			switch err := c.securityBearerAuth(ctx, ListReceiverIdentitiesOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"BearerAuth\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	stage = "DecodeResponse"
+	result, err := decodeListReceiverIdentitiesResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ListReceiverRules invokes listReceiverRules operation.
+//
+// Returns every receiving identity with its own rules entry, including the `_` fallback. Each identity
+// has one ordered list of rules evaluated first-match-wins.
+//
+// The rules are read from the configured receiver config store on every request, so this operation
+// also acts as the GUI's Reload action.
+//
+// GET /api/support/receiver/rules
+func (c *Client) ListReceiverRules(ctx context.Context) (ListReceiverRulesRes, error) {
+	res, err := c.sendListReceiverRules(ctx)
+	return res, err
+}
+
+func (c *Client) sendListReceiverRules(ctx context.Context) (res ListReceiverRulesRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("listReceiverRules"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/support/receiver/rules"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ListReceiverRulesOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/support/receiver/rules"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+			stage = "Security:BearerAuth"
+			switch err := c.securityBearerAuth(ctx, ListReceiverRulesOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"BearerAuth\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	stage = "DecodeResponse"
+	result, err := decodeListReceiverRulesResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // ProcessEmail invokes processEmail operation.
 //
 // Runs the standard inbound processing pipeline on a raw staging object. The `id` is the object key
@@ -606,6 +1024,129 @@ func (c *Client) sendProcessEmail(ctx context.Context, request *ProcessEmailRequ
 
 	stage = "DecodeResponse"
 	result, err := decodeProcessEmailResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// SaveReceiverRules invokes saveReceiverRules operation.
+//
+// Adds or replaces the rules entries for the domains in the request. Domains not included in the
+// request (in particular the `_` fallback) are left untouched. Use `DELETE` on
+// `/api/support/receiver/rules/{identity}` to remove an entry.
+//
+// Each identity must have at least one rule, and every rule must be a known `HandlerRule`. The `_`
+// fallback must remain valid, otherwise the request is rejected with `400 Bad Request`. Submitted
+// entries are persisted in the configured receiver config store and published to the active receiver
+// cache. The updated rules are returned in the response.
+//
+// PUT /api/support/receiver/rules
+func (c *Client) SaveReceiverRules(ctx context.Context, request *ReceiverRulesRequest) (SaveReceiverRulesRes, error) {
+	res, err := c.sendSaveReceiverRules(ctx, request)
+	return res, err
+}
+
+func (c *Client) sendSaveReceiverRules(ctx context.Context, request *ReceiverRulesRequest) (res SaveReceiverRulesRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("saveReceiverRules"),
+		semconv.HTTPRequestMethodKey.String("PUT"),
+		semconv.URLTemplateKey.String("/api/support/receiver/rules"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, SaveReceiverRulesOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/support/receiver/rules"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "PUT", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeSaveReceiverRulesRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+			stage = "Security:BearerAuth"
+			switch err := c.securityBearerAuth(ctx, SaveReceiverRulesOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"BearerAuth\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	stage = "DecodeResponse"
+	result, err := decodeSaveReceiverRulesResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

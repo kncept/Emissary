@@ -84,20 +84,33 @@ func (c *SenderConfig) Validate() error {
 }
 
 // ReceiverConfig selects the backend holding inbound recipient routing rules.
+// S3Bucket and FilesystemDir default to the shared S3_BUCKET and FILESYSTEM_DIR
+// values, but can be set independently with RECEIVER_BUCKET and
+// RECEIVER_FILESYSTEM_DIR.
 type ReceiverConfig struct {
-	Type     string // "s3", "filesystem", "memory", "ddb" or "dynamodb"
-	DdbTable string
-	Region   string // AWS region for the "ddb" backend
+	Type          string // "s3", "filesystem", "memory", "ddb" or "dynamodb"
+	S3Bucket      string
+	FilesystemDir string
+	DdbTable      string
+	Region        string // AWS region for the "ddb" backend
 }
 
-// Validate checks that the receiver config backend is known.
+// Validate checks that the receiver config backend is known and has a target.
 func (c *ReceiverConfig) Validate() error {
 	switch c.Type {
-	case "", "s3", "filesystem", "memory", "ddb", "dynamodb":
-		return nil
+	case "s3":
+		if strings.TrimSpace(c.S3Bucket) == "" {
+			return errors.New("receiver s3 requires a bucket (set RECEIVER_BUCKET or S3_BUCKET)")
+		}
+	case "filesystem":
+		if strings.TrimSpace(c.FilesystemDir) == "" {
+			return errors.New("receiver filesystem requires a directory (set RECEIVER_FILESYSTEM_DIR or FILESYSTEM_DIR)")
+		}
+	case "", "memory", "ddb", "dynamodb":
 	default:
 		return fmt.Errorf("unknown receiver type %q (want s3, filesystem, memory or ddb)", c.Type)
 	}
+	return nil
 }
 
 // MetadataConfig holds email metadata storage configuration.
@@ -220,9 +233,6 @@ func (c *Config) Validate() error {
 	if c.UserManager.Type == "s3" && c.Storage.S3Bucket == "" {
 		errs = append(errs, errors.New("user manager s3 requires a bucket (set S3_BUCKET)"))
 	}
-	if c.Receiver.Type == "s3" && c.Storage.S3Bucket == "" {
-		errs = append(errs, errors.New("receiver s3 requires a bucket (set S3_BUCKET)"))
-	}
 	return errors.Join(errs...)
 }
 
@@ -298,6 +308,7 @@ func Load(ctx context.Context) (*Config, error) {
 	// This avoids requiring $HOME in environments like AWS Lambda where
 	// it's not defined, unless filesystem mode is used or explicitly configured.
 	explicitFilesystemDir := firstEnv(ctx, "FILESYSTEM_DIR")
+	explicitReceiverFilesystemDir := firstEnv(ctx, "RECEIVER_FILESYSTEM_DIR")
 
 	// Determine if filesystem-backed stores are needed.
 	storageType := strings.ToLower(strings.TrimSpace(firstEnv(ctx, "STORAGE")))
@@ -328,6 +339,18 @@ func Load(ctx context.Context) (*Config, error) {
 	}
 	// If not explicitly set and filesystem not needed, filesystemDir stays empty
 
+	// The receiver filesystem store can point at a dedicated directory. It is
+	// expanded independently so "~" works even when the shared FILESYSTEM_DIR
+	// is not used by any other backend.
+	var receiverFilesystemDir string
+	if explicitReceiverFilesystemDir != "" {
+		var err error
+		receiverFilesystemDir, err = fsutil.ExpandDir(explicitReceiverFilesystemDir)
+		if err != nil {
+			return nil, fmt.Errorf("invalid RECEIVER_FILESYSTEM_DIR: %w", err)
+		}
+	}
+
 	cfg := &Config{
 		Server: ServerConfig{
 			ListenAddr:  listenAddr(ctx),
@@ -347,9 +370,11 @@ func Load(ctx context.Context) (*Config, error) {
 			MTAPort: firstEnvDefault(ctx, "25", "MTA_PORT"),
 		},
 		Receiver: ReceiverConfig{
-			Type:     receiverType,
-			DdbTable: firstEnv(ctx, "RECEIVER_TABLE"),
-			Region:   firstEnv(ctx, "RECEIVER_REGION"),
+			Type:          receiverType,
+			S3Bucket:      firstEnv(ctx, "RECEIVER_BUCKET"),
+			FilesystemDir: receiverFilesystemDir,
+			DdbTable:      firstEnv(ctx, "RECEIVER_TABLE"),
+			Region:        firstEnv(ctx, "RECEIVER_REGION"),
 		},
 		Metadata: MetadataConfig{
 			Type:     strings.ToLower(strings.TrimSpace(firstEnv(ctx, "METADATA"))),
@@ -424,6 +449,15 @@ func Load(ctx context.Context) (*Config, error) {
 		} else {
 			cfg.Receiver.Type = "memory"
 		}
+	}
+	// Receiver-specific targets default to the shared storage/filesystem
+	// settings so existing deployments keep working, while RECEIVER_BUCKET and
+	// RECEIVER_FILESYSTEM_DIR allow a dedicated rules store.
+	if cfg.Receiver.S3Bucket == "" {
+		cfg.Receiver.S3Bucket = cfg.Storage.S3Bucket
+	}
+	if cfg.Receiver.FilesystemDir == "" {
+		cfg.Receiver.FilesystemDir = filesystemDir
 	}
 
 	// Metadata defaults

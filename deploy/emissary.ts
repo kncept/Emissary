@@ -283,6 +283,12 @@ async function emailClientStack(
   const accountId = await accountIdPromise
   const stack = new cdk.Stack(app, `emissary-client-${emissaryDomain.replaceAll(".", "-")}`, {})
 
+  // RECEIVER_BUCKET can point the rules store at a dedicated bucket. Both
+  // Lambdas must receive the same value so the support editor and the inbound
+  // consumer agree on where the rules live.
+  const receiverBucketName = (env.RECEIVER_BUCKET || '').trim() || inboundEmailBucketName
+  const receiverPolicyBucketNames = Array.from(new Set([inboundEmailBucketName, receiverBucketName]))
+
   const role = new iam.Role(stack, 'emissary-app-role', {
     assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
     roleName: `emissary-${emissaryDomain.replaceAll(".", "-")}-app`,
@@ -298,20 +304,23 @@ async function emailClientStack(
   })
   logGroup.grantWrite(role)
 
-  // Access to the raw inbound EML messages. The ARNs are built from the
-  // bucket name string (rather than a bucket grant) so the bucket stays owned
-  // by the email-in stack without creating a cross-stack reference.
+  // Access to the raw inbound EML messages. The receiver config store lives
+  // under receiver/ in RECEIVER_BUCKET (the mail bucket by default) when
+  // RECEIVER=s3, so the support API needs PutObject/DeleteObject to save and
+  // remove rules. ARNs are built from bucket names rather than bucket grants
+  // so custom buckets stay owned outside this stack.
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'InboundEmailAccess',
     actions: [
       's3:GetObject',
+      's3:PutObject',
       's3:ListBucket',
       's3:DeleteObject',
     ],
-    resources: [
-      `arn:aws:s3:::${inboundEmailBucketName}`,
-      `arn:aws:s3:::${inboundEmailBucketName}/*`,
-    ],
+    resources: receiverPolicyBucketNames.flatMap((bucketName) => [
+      `arn:aws:s3:::${bucketName}`,
+      `arn:aws:s3:::${bucketName}/*`,
+    ]),
     effect: iam.Effect.ALLOW,
   }))
 
@@ -328,9 +337,15 @@ async function emailClientStack(
     effect: iam.Effect.ALLOW,
   }))
 
+  // Support API: list the verified identities shown in the receiver rules
+  // editor. ListIdentities does not support resource-level permissions.
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'SesListIdentities',
+    actions: ['ses:ListIdentities'],
+    resources: ['*'],
+    effect: iam.Effect.ALLOW,
+  }))
 
-
-  
   // DynamoDB tables used by the application. Table names are derived from
   // TABLE_PREFIX the same way as the household project (default "emissary-").
   // The metadata table is only needed when METADATA selects DynamoDB. Parse
@@ -486,6 +501,7 @@ async function emailClientStack(
       ...(sessionTableName ? { SESSION: env.SESSION || 'ddb', SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
       ...(userTableName ? { USER_TABLE: userTableName, USER_REGION: awsRegion } : {}),
       ...(env.RECEIVER ? { RECEIVER: env.RECEIVER } : {}),
+      RECEIVER_BUCKET: receiverBucketName,
       ...(receiverTableName ? { RECEIVER_TABLE: receiverTableName, RECEIVER_REGION: awsRegion } : {}),
       ...(authPassword ? { PASSWORD: authPassword } : {}),
       // Pass the JWT secret ARN - the application will resolve it at runtime
@@ -560,7 +576,8 @@ async function emailClientStack(
   // same DynamoDB access as the frontend when RECEIVER selects that backend.
   if (receiverTable) receiverTable.grantReadWriteData(s3ReceiverRole)
 
-  // Grant S3 access to the inbound email bucket (read staging objects, write user mailboxes, delete staging)
+  // Grant S3 access to the inbound email bucket (read staging objects, write
+  // user mailboxes, delete staging) and to the receiver config bucket.
   s3ReceiverRole.addToPolicy(new iam.PolicyStatement({
     sid: 'InboundEmailAccess',
     actions: [
@@ -569,10 +586,10 @@ async function emailClientStack(
       's3:DeleteObject',
       's3:ListBucket',
     ],
-    resources: [
-      `arn:aws:s3:::${inboundEmailBucketName}`,
-      `arn:aws:s3:::${inboundEmailBucketName}/*`,
-    ],
+    resources: receiverPolicyBucketNames.flatMap((bucketName) => [
+      `arn:aws:s3:::${bucketName}`,
+      `arn:aws:s3:::${bucketName}/*`,
+    ]),
     effect: iam.Effect.ALLOW,
   }))
 
@@ -620,6 +637,7 @@ async function emailClientStack(
       ...(sessionTableName ? { SESSION: env.SESSION || 'ddb', SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
       ...(userTableName ? { USER_TABLE: userTableName, USER_REGION: awsRegion } : {}),
       ...(env.RECEIVER ? { RECEIVER: env.RECEIVER } : {}),
+      RECEIVER_BUCKET: receiverBucketName,
       ...(receiverTableName ? { RECEIVER_TABLE: receiverTableName, RECEIVER_REGION: awsRegion } : {}),
       ...(authPassword ? { PASSWORD: authPassword } : {}),
       JWT_SECRET: jwtSecret.secretArn,

@@ -13,6 +13,20 @@ type UnimplementedHandler struct{}
 
 var _ Handler = UnimplementedHandler{}
 
+// DeleteReceiverRules implements deleteReceiverRules operation.
+//
+// Deletes the rules entry for `identity` from the receiver config store. The identity then appears
+// with a plus in the receiving mail identities list and is routed by the `_` fallback until rules are
+// added again. The response is the full remaining rules list.
+//
+// The `_` fallback can never be deleted: every recipient without its own entry relies on it, so the
+// operation returns `400 Bad Request` for it. Unknown identities return `404 Not Found`.
+//
+// DELETE /api/support/receiver/rules/{identity}
+func (UnimplementedHandler) DeleteReceiverRules(ctx context.Context, params DeleteReceiverRulesParams) (r DeleteReceiverRulesRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // GetConfiguration implements getConfiguration operation.
 //
 // Returns the full configuration for a section. Names are case insensitive; the canonical names are
@@ -54,6 +68,34 @@ func (UnimplementedHandler) ListConfigurations(ctx context.Context) (r ListConfi
 	return r, ht.ErrNotImplemented
 }
 
+// ListReceiverIdentities implements listReceiverIdentities operation.
+//
+// Lists the receiving mail identities: the verified identities returned by the SES `ListIdentities`
+// operation (both domains and individual email addresses). `hasRules` is true when the receiver has
+// its own rules entry for that identity; otherwise the recipient is routed by the `_` fallback. The
+// GUI shows a tick for identities with rules and a plus for those without.
+//
+// Requires the `ses:ListIdentities` IAM permission. A failed SES query returns
+// `502 failed to list SES identities`.
+//
+// GET /api/support/receiver/identities
+func (UnimplementedHandler) ListReceiverIdentities(ctx context.Context) (r ListReceiverIdentitiesRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListReceiverRules implements listReceiverRules operation.
+//
+// Returns every receiving identity with its own rules entry, including the `_` fallback. Each identity
+// has one ordered list of rules evaluated first-match-wins.
+//
+// The rules are read from the configured receiver config store on every request, so this operation
+// also acts as the GUI's Reload action.
+//
+// GET /api/support/receiver/rules
+func (UnimplementedHandler) ListReceiverRules(ctx context.Context) (r ListReceiverRulesRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // ProcessEmail implements processEmail operation.
 //
 // Runs the standard inbound processing pipeline on a raw staging object. The `id` is the object key
@@ -68,5 +110,21 @@ func (UnimplementedHandler) ListConfigurations(ctx context.Context) (r ListConfi
 //
 // POST /api/support/process-email
 func (UnimplementedHandler) ProcessEmail(ctx context.Context, req *ProcessEmailRequest) (r ProcessEmailRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// SaveReceiverRules implements saveReceiverRules operation.
+//
+// Adds or replaces the rules entries for the domains in the request. Domains not included in the
+// request (in particular the `_` fallback) are left untouched. Use `DELETE` on
+// `/api/support/receiver/rules/{identity}` to remove an entry.
+//
+// Each identity must have at least one rule, and every rule must be a known `HandlerRule`. The `_`
+// fallback must remain valid, otherwise the request is rejected with `400 Bad Request`. Submitted
+// entries are persisted in the configured receiver config store and published to the active receiver
+// cache. The updated rules are returned in the response.
+//
+// PUT /api/support/receiver/rules
+func (UnimplementedHandler) SaveReceiverRules(ctx context.Context, req *ReceiverRulesRequest) (r SaveReceiverRulesRes, _ error) {
 	return r, ht.ErrNotImplemented
 }

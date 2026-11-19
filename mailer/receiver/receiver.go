@@ -153,13 +153,13 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 	// handler rules in order. The first rule that applies wins.
 	var plans []recipientPlan
 	for _, recipient := range recipients {
-		groups, err := r.cfg.IdentityConfig.Get(recipient)
+		rules, err := r.cfg.IdentityConfig.Get(recipient)
 		if err != nil {
 			log.Printf("receiver: no routing rules for %s: %v (bouncing)", recipient, err)
 			plans = append(plans, recipientPlan{recipient: recipient, action: Bounce})
 			continue
 		}
-		plan, ok := r.planRecipient(ctx, recipient, groups)
+		plan, ok := r.planRecipient(ctx, recipient, rules)
 		if !ok {
 			// No rule handled the recipient. Bounce instead of silently
 			// dropping the message, which is what the default fallback does.
@@ -217,31 +217,29 @@ type recipientPlan struct {
 	mailbox   string
 }
 
-// planRecipient evaluates every rule group in order and returns the first
+// planRecipient evaluates the identity's rules in order and returns the first
 // action that applies. DeliverToUser only applies when the user exists; a
 // failed lookup falls through to the next rule instead of deciding the outcome.
-func (r *Receiver) planRecipient(ctx context.Context, recipient string, groups []HandlerRules) (recipientPlan, bool) {
-	for _, rules := range groups {
-		for _, rule := range rules.Rules {
-			switch rule {
-			case DeliverToUser:
-				user, err := r.cfg.UserManager.Lookup(ctx, recipient)
-				if err != nil || user == nil {
-					log.Printf("receiver: recipient %s is not a user (rule %s)", recipient, rule)
-					continue
-				}
-				return recipientPlan{recipient: recipient, action: DeliverToUser, mailbox: recipient}, true
-			case DeliverToMailIdentity:
-				identity := rules.deliveryIdentity(recipient)
-				log.Printf("receiver: recipient %s routed to mail identity %s", recipient, identity)
-				return recipientPlan{recipient: recipient, action: DeliverToMailIdentity, mailbox: identity}, true
-			case Bounce:
-				return recipientPlan{recipient: recipient, action: Bounce}, true
-			default:
-				// Validate should reject unknown rules, but never lose mail if a
-				// config was built without going through NewReceiver.
-				log.Printf("receiver: ignoring unknown handler rule %q for %s", rule, recipient)
+func (r *Receiver) planRecipient(ctx context.Context, recipient string, rules HandlerRules) (recipientPlan, bool) {
+	for _, rule := range rules.Rules {
+		switch rule {
+		case DeliverToUser:
+			user, err := r.cfg.UserManager.Lookup(ctx, recipient)
+			if err != nil || user == nil {
+				log.Printf("receiver: recipient %s is not a user (rule %s)", recipient, rule)
+				continue
 			}
+			return recipientPlan{recipient: recipient, action: DeliverToUser, mailbox: recipient}, true
+		case DeliverToMailIdentity:
+			identity := rules.deliveryIdentity(recipient)
+			log.Printf("receiver: recipient %s routed to mail identity %s", recipient, identity)
+			return recipientPlan{recipient: recipient, action: DeliverToMailIdentity, mailbox: identity}, true
+		case Bounce:
+			return recipientPlan{recipient: recipient, action: Bounce}, true
+		default:
+			// Validate should reject unknown rules, but never lose mail if a
+			// config was built without going through NewReceiver.
+			log.Printf("receiver: ignoring unknown handler rule %q for %s", rule, recipient)
 		}
 	}
 	return recipientPlan{}, false

@@ -4,6 +4,8 @@ package api
 
 import (
 	"time"
+
+	"github.com/go-faster/errors"
 )
 
 type BearerAuth struct {
@@ -254,6 +256,26 @@ func (s *ConfigurationsResponse) SetConfigurations(val []ConfigurationSummary) {
 
 func (*ConfigurationsResponse) listConfigurationsRes() {}
 
+type DeleteReceiverRulesBadRequest Error
+
+func (*DeleteReceiverRulesBadRequest) deleteReceiverRulesRes() {}
+
+type DeleteReceiverRulesForbidden Error
+
+func (*DeleteReceiverRulesForbidden) deleteReceiverRulesRes() {}
+
+type DeleteReceiverRulesInternalServerError Error
+
+func (*DeleteReceiverRulesInternalServerError) deleteReceiverRulesRes() {}
+
+type DeleteReceiverRulesNotFound Error
+
+func (*DeleteReceiverRulesNotFound) deleteReceiverRulesRes() {}
+
+type DeleteReceiverRulesUnauthorized Error
+
+func (*DeleteReceiverRulesUnauthorized) deleteReceiverRulesRes() {}
+
 // Ref: #/components/schemas/Error
 type Error struct {
 	// A generic error message.
@@ -282,6 +304,56 @@ type GetConfigurationUnauthorized Error
 
 func (*GetConfigurationUnauthorized) getConfigurationRes() {}
 
+// One receiver rule. `DeliverToUser` falls through when the user does not exist.
+// Ref: #/components/schemas/HandlerRule
+type HandlerRule string
+
+const (
+	HandlerRuleDeliverToUser         HandlerRule = "DeliverToUser"
+	HandlerRuleDeliverToMailIdentity HandlerRule = "DeliverToMailIdentity"
+	HandlerRuleBounce                HandlerRule = "Bounce"
+)
+
+// AllValues returns all HandlerRule values.
+func (HandlerRule) AllValues() []HandlerRule {
+	return []HandlerRule{
+		HandlerRuleDeliverToUser,
+		HandlerRuleDeliverToMailIdentity,
+		HandlerRuleBounce,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s HandlerRule) MarshalText() ([]byte, error) {
+	switch s {
+	case HandlerRuleDeliverToUser:
+		return []byte(s), nil
+	case HandlerRuleDeliverToMailIdentity:
+		return []byte(s), nil
+	case HandlerRuleBounce:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *HandlerRule) UnmarshalText(data []byte) error {
+	switch HandlerRule(data) {
+	case HandlerRuleDeliverToUser:
+		*s = HandlerRuleDeliverToUser
+		return nil
+	case HandlerRuleDeliverToMailIdentity:
+		*s = HandlerRuleDeliverToMailIdentity
+		return nil
+	case HandlerRuleBounce:
+		*s = HandlerRuleBounce
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
 type ListBucketRootBadGateway Error
 
 func (*ListBucketRootBadGateway) listBucketRootRes() {}
@@ -305,6 +377,30 @@ func (*ListConfigurationsForbidden) listConfigurationsRes() {}
 type ListConfigurationsUnauthorized Error
 
 func (*ListConfigurationsUnauthorized) listConfigurationsRes() {}
+
+type ListReceiverIdentitiesBadGateway Error
+
+func (*ListReceiverIdentitiesBadGateway) listReceiverIdentitiesRes() {}
+
+type ListReceiverIdentitiesForbidden Error
+
+func (*ListReceiverIdentitiesForbidden) listReceiverIdentitiesRes() {}
+
+type ListReceiverIdentitiesUnauthorized Error
+
+func (*ListReceiverIdentitiesUnauthorized) listReceiverIdentitiesRes() {}
+
+type ListReceiverRulesForbidden Error
+
+func (*ListReceiverRulesForbidden) listReceiverRulesRes() {}
+
+type ListReceiverRulesInternalServerError Error
+
+func (*ListReceiverRulesInternalServerError) listReceiverRulesRes() {}
+
+type ListReceiverRulesUnauthorized Error
+
+func (*ListReceiverRulesUnauthorized) listReceiverRulesRes() {}
 
 // NewOptString returns new OptString with value set to v.
 func NewOptString(v string) OptString {
@@ -432,3 +528,133 @@ func (*ProcessEmailResponse) processEmailRes() {}
 type ProcessEmailUnauthorized Error
 
 func (*ProcessEmailUnauthorized) processEmailRes() {}
+
+// The ordered rules for one receiving identity; `_` is the base fallback.
+// Ref: #/components/schemas/ReceiverDomainRules
+type ReceiverDomainRules struct {
+	// Receiving identity the rules apply to (for example `example.com` or `_`).
+	Domain string `json:"domain"`
+	// Rules evaluated in order until one applies.
+	Rules []HandlerRule `json:"rules"`
+}
+
+// GetDomain returns the value of Domain.
+func (s *ReceiverDomainRules) GetDomain() string {
+	return s.Domain
+}
+
+// GetRules returns the value of Rules.
+func (s *ReceiverDomainRules) GetRules() []HandlerRule {
+	return s.Rules
+}
+
+// SetDomain sets the value of Domain.
+func (s *ReceiverDomainRules) SetDomain(val string) {
+	s.Domain = val
+}
+
+// SetRules sets the value of Rules.
+func (s *ReceiverDomainRules) SetRules(val []HandlerRule) {
+	s.Rules = val
+}
+
+// Verified SES identities with their receiver rule coverage.
+// Ref: #/components/schemas/ReceiverIdentitiesResponse
+type ReceiverIdentitiesResponse struct {
+	// Identities sorted by name; those without a rules entry use the fallback.
+	Identities []ReceiverIdentity `json:"identities"`
+}
+
+// GetIdentities returns the value of Identities.
+func (s *ReceiverIdentitiesResponse) GetIdentities() []ReceiverIdentity {
+	return s.Identities
+}
+
+// SetIdentities sets the value of Identities.
+func (s *ReceiverIdentitiesResponse) SetIdentities(val []ReceiverIdentity) {
+	s.Identities = val
+}
+
+func (*ReceiverIdentitiesResponse) listReceiverIdentitiesRes() {}
+
+// One AWS SES identity and whether the receiver has rules for it.
+// Ref: #/components/schemas/ReceiverIdentity
+type ReceiverIdentity struct {
+	// Verified SES identity (a domain or an individual email address).
+	Identity string `json:"identity"`
+	// True when the receiver has its own rules entry for this identity.
+	HasRules bool `json:"hasRules"`
+}
+
+// GetIdentity returns the value of Identity.
+func (s *ReceiverIdentity) GetIdentity() string {
+	return s.Identity
+}
+
+// GetHasRules returns the value of HasRules.
+func (s *ReceiverIdentity) GetHasRules() bool {
+	return s.HasRules
+}
+
+// SetIdentity sets the value of Identity.
+func (s *ReceiverIdentity) SetIdentity(val string) {
+	s.Identity = val
+}
+
+// SetHasRules sets the value of HasRules.
+func (s *ReceiverIdentity) SetHasRules(val bool) {
+	s.HasRules = val
+}
+
+// Rules entries to add or replace; omitted domains are left untouched.
+// Ref: #/components/schemas/ReceiverRulesRequest
+type ReceiverRulesRequest struct {
+	Rules []ReceiverDomainRules `json:"rules"`
+}
+
+// GetRules returns the value of Rules.
+func (s *ReceiverRulesRequest) GetRules() []ReceiverDomainRules {
+	return s.Rules
+}
+
+// SetRules sets the value of Rules.
+func (s *ReceiverRulesRequest) SetRules(val []ReceiverDomainRules) {
+	s.Rules = val
+}
+
+// All domains with their own receiver rules entry.
+// Ref: #/components/schemas/ReceiverRulesResponse
+type ReceiverRulesResponse struct {
+	// Domains sorted by name, each with its ordered rules.
+	Rules []ReceiverDomainRules `json:"rules"`
+}
+
+// GetRules returns the value of Rules.
+func (s *ReceiverRulesResponse) GetRules() []ReceiverDomainRules {
+	return s.Rules
+}
+
+// SetRules sets the value of Rules.
+func (s *ReceiverRulesResponse) SetRules(val []ReceiverDomainRules) {
+	s.Rules = val
+}
+
+func (*ReceiverRulesResponse) deleteReceiverRulesRes() {}
+func (*ReceiverRulesResponse) listReceiverRulesRes()   {}
+func (*ReceiverRulesResponse) saveReceiverRulesRes()   {}
+
+type SaveReceiverRulesBadRequest Error
+
+func (*SaveReceiverRulesBadRequest) saveReceiverRulesRes() {}
+
+type SaveReceiverRulesForbidden Error
+
+func (*SaveReceiverRulesForbidden) saveReceiverRulesRes() {}
+
+type SaveReceiverRulesInternalServerError Error
+
+func (*SaveReceiverRulesInternalServerError) saveReceiverRulesRes() {}
+
+type SaveReceiverRulesUnauthorized Error
+
+func (*SaveReceiverRulesUnauthorized) saveReceiverRulesRes() {}

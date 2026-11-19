@@ -32,7 +32,10 @@ import type {
   ConfigurationsResponse,
   Error,
   ProcessEmailRequest,
-  ProcessEmailResponse
+  ProcessEmailResponse,
+  ReceiverIdentitiesResponse,
+  ReceiverRulesRequest,
+  ReceiverRulesResponse
 } from './schemas/support';
 
 const getHeaders = (...sources: (RequestInit['headers'] | Record<string, string | undefined>)[]) => {
@@ -335,4 +338,292 @@ export const processEmail = async (processEmailRequest: ProcessEmailRequest, opt
 
   const data: processEmailResponse['data'] = body ? JSON.parse(body) : {}
   return { data, status: res.status, headers: res.headers } as processEmailResponse
+}
+
+
+
+export type listReceiverIdentitiesResponse200 = {
+  data: ReceiverIdentitiesResponse
+  status: 200
+}
+
+export type listReceiverIdentitiesResponse401 = {
+  data: Error
+  status: 401
+}
+
+export type listReceiverIdentitiesResponse403 = {
+  data: Error
+  status: 403
+}
+
+export type listReceiverIdentitiesResponse502 = {
+  data: Error
+  status: 502
+}
+
+export type listReceiverIdentitiesResponseSuccess = (listReceiverIdentitiesResponse200) & {
+  headers: Headers;
+};
+export type listReceiverIdentitiesResponseError = (listReceiverIdentitiesResponse401 | listReceiverIdentitiesResponse403 | listReceiverIdentitiesResponse502) & {
+  headers: Headers;
+};
+
+export type listReceiverIdentitiesResponse = (listReceiverIdentitiesResponseSuccess | listReceiverIdentitiesResponseError)
+
+export const getListReceiverIdentitiesUrl = () => {
+
+
+
+
+  return `/api/support/receiver/identities`
+}
+
+/**
+ * Lists the receiving mail identities: the verified identities returned
+ * by the SES `ListIdentities` operation (both domains and individual
+ * email addresses). `hasRules` is true when the receiver has its own
+ * rules entry for that identity; otherwise the recipient is routed by
+ * the `_` fallback. The GUI shows a tick for identities with rules and
+ * a plus for those without.
+ *
+ * Requires the `ses:ListIdentities` IAM permission. A failed SES query
+ * returns `502 failed to list SES identities`.
+ * @summary List receiving mail identities and their receiver rule coverage
+ */
+export const listReceiverIdentities = async ( options?: RequestInit): Promise<listReceiverIdentitiesResponse> => {
+
+  const res = await fetch(getListReceiverIdentitiesUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: listReceiverIdentitiesResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as listReceiverIdentitiesResponse
+}
+
+
+
+export type listReceiverRulesResponse200 = {
+  data: ReceiverRulesResponse
+  status: 200
+}
+
+export type listReceiverRulesResponse401 = {
+  data: Error
+  status: 401
+}
+
+export type listReceiverRulesResponse403 = {
+  data: Error
+  status: 403
+}
+
+export type listReceiverRulesResponse500 = {
+  data: Error
+  status: 500
+}
+
+export type listReceiverRulesResponseSuccess = (listReceiverRulesResponse200) & {
+  headers: Headers;
+};
+export type listReceiverRulesResponseError = (listReceiverRulesResponse401 | listReceiverRulesResponse403 | listReceiverRulesResponse500) & {
+  headers: Headers;
+};
+
+export type listReceiverRulesResponse = (listReceiverRulesResponseSuccess | listReceiverRulesResponseError)
+
+export const getListReceiverRulesUrl = () => {
+
+
+
+
+  return `/api/support/receiver/rules`
+}
+
+/**
+ * Returns every receiving identity with its own rules entry, including
+ * the `_` fallback. Each identity has one ordered list of rules evaluated
+ * first-match-wins.
+ *
+ * The rules are read from the configured receiver config store on every
+ * request, so this operation also acts as the GUI's **Reload** action.
+ * @summary List the configured receiver rules
+ */
+export const listReceiverRules = async ( options?: RequestInit): Promise<listReceiverRulesResponse> => {
+
+  const res = await fetch(getListReceiverRulesUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: listReceiverRulesResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as listReceiverRulesResponse
+}
+
+
+
+export type saveReceiverRulesResponse200 = {
+  data: ReceiverRulesResponse
+  status: 200
+}
+
+export type saveReceiverRulesResponse400 = {
+  data: Error
+  status: 400
+}
+
+export type saveReceiverRulesResponse401 = {
+  data: Error
+  status: 401
+}
+
+export type saveReceiverRulesResponse403 = {
+  data: Error
+  status: 403
+}
+
+export type saveReceiverRulesResponse500 = {
+  data: Error
+  status: 500
+}
+
+export type saveReceiverRulesResponseSuccess = (saveReceiverRulesResponse200) & {
+  headers: Headers;
+};
+export type saveReceiverRulesResponseError = (saveReceiverRulesResponse400 | saveReceiverRulesResponse401 | saveReceiverRulesResponse403 | saveReceiverRulesResponse500) & {
+  headers: Headers;
+};
+
+export type saveReceiverRulesResponse = (saveReceiverRulesResponseSuccess | saveReceiverRulesResponseError)
+
+export const getSaveReceiverRulesUrl = () => {
+
+
+
+
+  return `/api/support/receiver/rules`
+}
+
+/**
+ * Adds or replaces the rules entries for the domains in the request.
+ * Domains not included in the request (in particular the `_` fallback)
+ * are left untouched. Use `DELETE` on
+ * `/api/support/receiver/rules/{identity}` to remove an entry.
+ *
+ * Each identity must have at least one rule, and every rule must be a
+ * known `HandlerRule`. The `_` fallback must remain valid, otherwise the
+ * request is rejected with `400 Bad Request`. Submitted entries are
+ * persisted in the configured receiver config store and published to the
+ * active receiver cache. The updated rules are returned in the response.
+ * @summary Add or update receiver rules
+ */
+export const saveReceiverRules = async (receiverRulesRequest: ReceiverRulesRequest, options?: RequestInit): Promise<saveReceiverRulesResponse> => {
+
+  const res = await fetch(getSaveReceiverRulesUrl(),
+  {
+    ...options,
+    method: 'PUT',
+    headers: getHeaders({ 'Content-Type': 'application/json' }, options?.headers),
+    body: JSON.stringify(receiverRulesRequest)
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: saveReceiverRulesResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as saveReceiverRulesResponse
+}
+
+
+
+export type deleteReceiverRulesResponse200 = {
+  data: ReceiverRulesResponse
+  status: 200
+}
+
+export type deleteReceiverRulesResponse400 = {
+  data: Error
+  status: 400
+}
+
+export type deleteReceiverRulesResponse401 = {
+  data: Error
+  status: 401
+}
+
+export type deleteReceiverRulesResponse403 = {
+  data: Error
+  status: 403
+}
+
+export type deleteReceiverRulesResponse404 = {
+  data: Error
+  status: 404
+}
+
+export type deleteReceiverRulesResponse500 = {
+  data: Error
+  status: 500
+}
+
+export type deleteReceiverRulesResponseSuccess = (deleteReceiverRulesResponse200) & {
+  headers: Headers;
+};
+export type deleteReceiverRulesResponseError = (deleteReceiverRulesResponse400 | deleteReceiverRulesResponse401 | deleteReceiverRulesResponse403 | deleteReceiverRulesResponse404 | deleteReceiverRulesResponse500) & {
+  headers: Headers;
+};
+
+export type deleteReceiverRulesResponse = (deleteReceiverRulesResponseSuccess | deleteReceiverRulesResponseError)
+
+export const getDeleteReceiverRulesUrl = (identity: string,) => {
+
+
+
+
+  return `/api/support/receiver/rules/${identity}`
+}
+
+/**
+ * Deletes the rules entry for `identity` from the receiver config store.
+ * The identity then appears with a plus in the receiving mail identities
+ * list and is routed by the `_` fallback until rules are added again.
+ * The response is the full remaining rules list.
+ *
+ * The `_` fallback can never be deleted: every recipient without its own
+ * entry relies on it, so the operation returns `400 Bad Request` for it.
+ * Unknown identities return `404 Not Found`.
+ * @summary Remove a configured receiving identity
+ */
+export const deleteReceiverRules = async (identity: string, options?: RequestInit): Promise<deleteReceiverRulesResponse> => {
+
+  const res = await fetch(getDeleteReceiverRulesUrl(identity),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: deleteReceiverRulesResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as deleteReceiverRulesResponse
 }

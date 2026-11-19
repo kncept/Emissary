@@ -25,7 +25,7 @@ func TestBaseMailIdentityConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	want := []HandlerRules{{MailIdentity: FallbackIdentity, Rules: []HandlerRule{DeliverToUser, Bounce}}}
+	want := HandlerRules{MailIdentity: FallbackIdentity, Rules: []HandlerRule{DeliverToUser, Bounce}}
 	if !reflect.DeepEqual(groups, want) {
 		t.Errorf("Get() = %+v, want %+v", groups, want)
 	}
@@ -33,15 +33,15 @@ func TestBaseMailIdentityConfig(t *testing.T) {
 
 func TestMailIdentityConfigGet(t *testing.T) {
 	config := MailIdentityConfig{
-		"alias@example.com": []HandlerRules{{Rules: []HandlerRule{Bounce}}},
-		FallbackIdentity:    []HandlerRules{{Rules: []HandlerRule{DeliverToUser, Bounce}}},
+		"alias@example.com": {Rules: []HandlerRule{Bounce}},
+		FallbackIdentity:    {Rules: []HandlerRule{DeliverToUser, Bounce}},
 	}
 
 	got, err := config.Get("ALIAS@Example.com")
 	if err != nil {
 		t.Fatalf("Get(configured) error = %v", err)
 	}
-	if len(got) != 1 || got[0].Rules[0] != Bounce {
+	if len(got.Rules) != 1 || got.Rules[0] != Bounce {
 		t.Errorf("Get(configured) = %+v, want Bounce", got)
 	}
 
@@ -49,7 +49,7 @@ func TestMailIdentityConfigGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get(fallback) error = %v", err)
 	}
-	if len(got) != 1 || len(got[0].Rules) != 2 {
+	if len(got.Rules) != 2 {
 		t.Errorf("Get(fallback) = %+v, want the base rules", got)
 	}
 
@@ -67,18 +67,18 @@ func TestMailIdentityConfigValidate(t *testing.T) {
 		{name: "base config", config: BaseMailIdentityConfig()},
 		{name: "missing fallback", config: MailIdentityConfig{}, wantErr: "fallback"},
 		{
-			name:    "empty rule groups",
-			config:  MailIdentityConfig{FallbackIdentity: []HandlerRules{}},
-			wantErr: "no rule groups",
+			name:    "empty rules",
+			config:  MailIdentityConfig{FallbackIdentity: {Rules: []HandlerRule{}}},
+			wantErr: "at least one handler rule is required",
 		},
 		{
 			name:    "unknown rule",
-			config:  MailIdentityConfig{FallbackIdentity: []HandlerRules{{Rules: []HandlerRule{"Nope"}}}},
+			config:  MailIdentityConfig{FallbackIdentity: {Rules: []HandlerRule{"Nope"}}},
 			wantErr: "unknown handler rule",
 		},
 		{
 			name:    "empty key",
-			config:  MailIdentityConfig{" ": []HandlerRules{{Rules: []HandlerRule{Bounce}}}, FallbackIdentity: []HandlerRules{{Rules: []HandlerRule{Bounce}}}},
+			config:  MailIdentityConfig{" ": {Rules: []HandlerRule{Bounce}}, FallbackIdentity: {Rules: []HandlerRule{Bounce}}},
 			wantErr: "key cannot be empty",
 		},
 	}
@@ -99,7 +99,7 @@ func TestMailIdentityConfigValidate(t *testing.T) {
 	}
 }
 
-func TestLoadMailIdentityConfigSeedsFallback(t *testing.T) {
+func TestLoadMailIdentityConfigProvidesFallbackWithoutWriting(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryConfigStore()
 
@@ -107,26 +107,26 @@ func TestLoadMailIdentityConfigSeedsFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadMailIdentityConfig() error = %v", err)
 	}
-	groups, err := config.Get("nobody@example.com")
-	if err != nil || len(groups) != 1 || len(groups[0].Rules) != 2 {
-		t.Fatalf("Get() = %+v, %v; want base rules", groups, err)
-	}
-	stored, err := store.Get(ctx, FallbackIdentity)
-	if err != nil || len(stored) != 1 || stored[0].MailIdentity != FallbackIdentity {
-		t.Fatalf("stored fallback = %+v, %v; want seeded base rules", stored, err)
+	rules, err := config.Get("nobody@example.com")
+	if err != nil || len(rules.Rules) != 2 {
+		t.Fatalf("Get() = %+v, %v; want base rules", rules, err)
 	}
 
-	// Loading again is idempotent and must not duplicate the fallback.
+	// Loading is read-only: the fallback exists in memory but is not written
+	// until the user explicitly saves rules.
+	if _, err := store.Get(ctx, FallbackIdentity); !errors.Is(err, ErrIdentityConfigNotFound) {
+		t.Errorf("stored fallback error = %v, want ErrIdentityConfigNotFound", err)
+	}
 	keys, err := store.List(ctx)
-	if err != nil || !reflect.DeepEqual(keys, []string{FallbackIdentity}) {
-		t.Fatalf("List() = %v, %v; want only %q", keys, err, FallbackIdentity)
+	if err != nil || len(keys) != 0 {
+		t.Fatalf("List() after load = %v, %v; want no writes", keys, err)
 	}
 }
 
 func TestLoadMailIdentityConfigLoadsEveryConfiguration(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryConfigStore()
-	aliasRules := []HandlerRules{{Rules: []HandlerRule{Bounce}}}
+	aliasRules := HandlerRules{MailIdentity: "alias@example.com", Rules: []HandlerRule{Bounce}}
 	if err := store.Put(ctx, "Alias@Example.com", aliasRules); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestFileConfigStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileConfigStore() error = %v", err)
 	}
-	rules := []HandlerRules{{MailIdentity: "catchall@example.com", Rules: []HandlerRule{DeliverToMailIdentity}}}
+	rules := HandlerRules{MailIdentity: "alias@example.com", Rules: []HandlerRule{DeliverToMailIdentity}}
 	if err := store.Put(ctx, "alias@example.com", rules); err != nil {
 		t.Fatalf("Put() error = %v", err)
 	}
@@ -197,6 +197,57 @@ func TestNewConfigStore(t *testing.T) {
 	}
 }
 
+func TestConfigStoresDeleteProtectFallback(t *testing.T) {
+	ctx := context.Background()
+	fileStore, err := NewFileConfigStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileConfigStore() error = %v", err)
+	}
+	stores := []struct {
+		name  string
+		store ConfigStore
+	}{
+		{"memory", NewMemoryConfigStore()},
+		{"file", fileStore},
+		{"s3", newS3ConfigStore(&fakeConfigS3{objects: map[string][]byte{}}, "bucket")},
+		{"ddb", newDdbConfigStore(&fakeConfigDdb{items: make(map[string]map[string]ddbtypes.AttributeValue)}, "table")},
+	}
+
+	for _, tt := range stores {
+		t.Run(tt.name, func(t *testing.T) {
+			rules := HandlerRules{MailIdentity: "alias@example.com", Rules: []HandlerRule{Bounce}}
+			if err := tt.store.Put(ctx, "alias@example.com", rules); err != nil {
+				t.Fatalf("Put() error = %v", err)
+			}
+
+			// The fallback can never be removed, whatever case it is given in.
+			for _, fallback := range []string{FallbackIdentity, "_"} {
+				if err := tt.store.Delete(ctx, fallback); !errors.Is(err, ErrFallbackIdentity) {
+					t.Errorf("Delete(%q) error = %v, want ErrFallbackIdentity", fallback, err)
+				}
+			}
+			if err := tt.store.Delete(ctx, "bad/name"); err == nil {
+				t.Error("Delete(invalid key) error = nil, want an error")
+			}
+
+			// Identity matching is case-insensitive on delete, as on get.
+			if err := tt.store.Delete(ctx, "ALIAS@Example.com"); err != nil {
+				t.Fatalf("Delete() error = %v", err)
+			}
+			keys, err := tt.store.List(ctx)
+			if err != nil || len(keys) != 0 {
+				t.Fatalf("List() after Delete() = %v, %v; want no keys", keys, err)
+			}
+			if _, err := tt.store.Get(ctx, "alias@example.com"); !errors.Is(err, ErrIdentityConfigNotFound) {
+				t.Errorf("Get(deleted) error = %v, want ErrIdentityConfigNotFound", err)
+			}
+			if err := tt.store.Delete(ctx, "alias@example.com"); err != nil {
+				t.Errorf("Delete(missing) error = %v, want nil (idempotent)", err)
+			}
+		})
+	}
+}
+
 // fakeConfigS3 is the S3 subset used by the receiver config store.
 type fakeConfigS3 struct {
 	objects map[string][]byte
@@ -219,6 +270,11 @@ func (f *fakeConfigS3) PutObject(_ context.Context, params *s3.PutObjectInput, _
 	return &s3.PutObjectOutput{}, nil
 }
 
+func (f *fakeConfigS3) DeleteObject(_ context.Context, params *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	delete(f.objects, aws.ToString(params.Key))
+	return &s3.DeleteObjectOutput{}, nil
+}
+
 func (f *fakeConfigS3) ListObjectsV2(_ context.Context, params *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
 	prefix := aws.ToString(params.Prefix)
 	output := &s3.ListObjectsV2Output{}
@@ -238,18 +294,17 @@ func TestS3ConfigStoreUsesReceiverPrefix(t *testing.T) {
 	if _, err := LoadMailIdentityConfig(ctx, store); err != nil {
 		t.Fatalf("LoadMailIdentityConfig() error = %v", err)
 	}
-	key := configPrefix + "/" + FallbackIdentity + ".json"
-	if _, ok := client.objects[key]; !ok {
-		t.Fatalf("seeded object %q not found; objects = %v", key, client.objects)
+	if len(client.objects) != 0 {
+		t.Fatalf("LoadMailIdentityConfig() wrote objects: %v", client.objects)
 	}
 
-	rules := []HandlerRules{{Rules: []HandlerRule{Bounce}}}
+	rules := HandlerRules{MailIdentity: "blocked@example.com", Rules: []HandlerRule{Bounce}}
 	if err := store.Put(ctx, "blocked@example.com", rules); err != nil {
 		t.Fatalf("Put() error = %v", err)
 	}
 	keys, err := store.List(ctx)
-	if err != nil || !reflect.DeepEqual(keys, []string{FallbackIdentity, "blocked@example.com"}) {
-		t.Fatalf("List() = %v, %v; want both identities", keys, err)
+	if err != nil || !reflect.DeepEqual(keys, []string{"blocked@example.com"}) {
+		t.Fatalf("List() = %v, %v; want the saved identity only", keys, err)
 	}
 	got, err := store.Get(ctx, "blocked@example.com")
 	if err != nil || !reflect.DeepEqual(got, rules) {
@@ -276,6 +331,12 @@ func (f *fakeConfigDdb) PutItem(_ context.Context, params *dynamodb.PutItemInput
 	}
 	f.items[id] = params.Item
 	return &dynamodb.PutItemOutput{}, nil
+}
+
+func (f *fakeConfigDdb) DeleteItem(_ context.Context, params *dynamodb.DeleteItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error) {
+	id := params.Key["id"].(*ddbtypes.AttributeValueMemberS).Value
+	delete(f.items, id)
+	return &dynamodb.DeleteItemOutput{}, nil
 }
 
 func (f *fakeConfigDdb) Scan(_ context.Context, params *dynamodb.ScanInput, _ ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
@@ -311,38 +372,33 @@ func TestDdbConfigStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadMailIdentityConfig() error = %v", err)
 	}
-	seeded, ok := client.items[FallbackIdentity]
-	if !ok {
-		t.Fatalf("fallback item %q not written; items = %v", FallbackIdentity, client.items)
+	if len(client.items) != 0 {
+		t.Fatalf("LoadMailIdentityConfig() wrote items: %v", client.items)
 	}
-	// The table needs only the "id" partition key; rules are one list attr.
-	if len(seeded) != 2 || seeded["id"] == nil || seeded["rules"] == nil {
-		t.Errorf("seeded item attributes = %v, want only id and rules", seeded)
-	}
-	groups, err := config.Get("nobody@example.com")
-	if err != nil || len(groups) != 1 || len(groups[0].Rules) != 2 {
-		t.Fatalf("Get(fallback) = %+v, %v; want base rules", groups, err)
+	rules, err := config.Get("nobody@example.com")
+	if err != nil || len(rules.Rules) != 2 {
+		t.Fatalf("Get(fallback) = %+v, %v; want base rules", rules, err)
 	}
 
-	rules := []HandlerRules{{MailIdentity: "catchall@example.com", Rules: []HandlerRule{DeliverToMailIdentity}}}
-	if err := store.Put(ctx, "Alias@Example.com", rules); err != nil {
+	aliasRules := HandlerRules{MailIdentity: "alias@example.com", Rules: []HandlerRule{DeliverToMailIdentity}}
+	if err := store.Put(ctx, "Alias@Example.com", aliasRules); err != nil {
 		t.Fatalf("Put() error = %v", err)
 	}
 	got, err := store.Get(ctx, "ALIAS@example.com")
-	if err != nil || !reflect.DeepEqual(got, rules) {
-		t.Fatalf("Get(case-insensitive) = %+v, %v; want %+v", got, err, rules)
+	if err != nil || !reflect.DeepEqual(got, aliasRules) {
+		t.Fatalf("Get(case-insensitive) = %+v, %v; want %+v", got, err, aliasRules)
 	}
 	if _, err := store.Get(ctx, "missing@example.com"); !errors.Is(err, ErrIdentityConfigNotFound) {
 		t.Errorf("Get(missing) error = %v, want ErrIdentityConfigNotFound", err)
 	}
 
 	keys, err := store.List(ctx)
-	wantKeys := []string{FallbackIdentity, "alias@example.com"}
+	wantKeys := []string{"alias@example.com"}
 	if err != nil || !reflect.DeepEqual(keys, wantKeys) {
 		t.Fatalf("List() = %v, %v; want %v", keys, err, wantKeys)
 	}
 
-	// Loading an already-seeded store must not create a second fallback.
+	// Loading an already-populated store must stay read-only.
 	if _, err := LoadMailIdentityConfig(ctx, store); err != nil {
 		t.Fatalf("second LoadMailIdentityConfig() error = %v", err)
 	}

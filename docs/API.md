@@ -92,6 +92,10 @@ not generated from `users.yaml`: it is served directly by the configured
 | `GET` | `/api/support/configurations/{name}` | Bearer‡ | Get full settings for one configuration section. |
 | `GET` | `/api/support/bucket/root` | Bearer‡ | List unprocessed staging objects at the bucket root. |
 | `POST` | `/api/support/process-email` | Bearer‡ | Run the inbound pipeline on a staging object. |
+| `GET` | `/api/support/receiver/identities` | Bearer‡ | List receiving mail identities (verified SES identities) and their receiver rule coverage. |
+| `GET` | `/api/support/receiver/rules` | Bearer‡ | List the configured receiver rules. |
+| `PUT` | `/api/support/receiver/rules` | Bearer‡ | Add or replace receiver rules entries. |
+| `DELETE` | `/api/support/receiver/rules/{identity}` | Bearer‡ | Remove a configured receiving identity (never the `_` fallback). |
 | `GET` | `/.well-known/jmap` | Bearer | Get the JMAP Session object (capabilities, accounts). |
 | `POST` | `/api/jmap/` | Bearer | JMAP batch API endpoint for all mail operations. |
 | `POST` | `/upload/{accountId}` | Bearer | Upload binary data (attachments). |

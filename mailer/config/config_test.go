@@ -21,6 +21,8 @@ func TestLoad_Defaults(t *testing.T) {
 		os.Unsetenv("STORAGE")
 		os.Unsetenv("SENDER")
 		os.Unsetenv("RECEIVER")
+		os.Unsetenv("RECEIVER_BUCKET")
+		os.Unsetenv("RECEIVER_FILESYSTEM_DIR")
 		os.Unsetenv("RECEIVER_TABLE")
 		os.Unsetenv("RECEIVER_REGION")
 		os.Unsetenv("MTA_PORT")
@@ -489,6 +491,31 @@ func TestStorageConfig_Validate(t *testing.T) {
 	}
 }
 
+func TestReceiverConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     ReceiverConfig
+		wantErr bool
+	}{
+		{"unset", ReceiverConfig{}, false},
+		{"memory", ReceiverConfig{Type: "memory"}, false},
+		{"s3 with bucket", ReceiverConfig{Type: "s3", S3Bucket: "receiver-bucket"}, false},
+		{"s3 without bucket", ReceiverConfig{Type: "s3"}, true},
+		{"filesystem with dir", ReceiverConfig{Type: "filesystem", FilesystemDir: "/tmp/receiver"}, false},
+		{"filesystem without dir", ReceiverConfig{Type: "filesystem"}, true},
+		{"ddb", ReceiverConfig{Type: "ddb"}, false},
+		{"unknown type", ReceiverConfig{Type: "foo"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestSenderConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -627,6 +654,41 @@ func TestLoad_ReceiverAutoSelect(t *testing.T) {
 	}
 }
 
+func TestLoad_DedicatedReceiverTargets(t *testing.T) {
+	defer cleanupEnv()
+	clearAWSCredentialEnv()
+
+	os.Setenv("USERNAME", "testuser")
+	os.Setenv("STORAGE", "memory")
+	os.Setenv("RECEIVER", "s3")
+	os.Setenv("S3_BUCKET", "mail-bucket")
+	os.Setenv("RECEIVER_BUCKET", "receiver-bucket")
+
+	cfg, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Receiver.S3Bucket != "receiver-bucket" {
+		t.Errorf("Receiver.S3Bucket = %q, want %q", cfg.Receiver.S3Bucket, "receiver-bucket")
+	}
+
+	os.Unsetenv("RECEIVER_BUCKET")
+	clearAWSCredentialEnv()
+	os.Setenv("RECEIVER", "filesystem")
+	os.Setenv("RECEIVER_FILESYSTEM_DIR", t.TempDir())
+
+	cfg, err = Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load(filesystem) error = %v", err)
+	}
+	if cfg.Receiver.FilesystemDir == "" {
+		t.Error("Receiver.FilesystemDir is empty")
+	}
+	if cfg.Receiver.S3Bucket != "mail-bucket" {
+		t.Errorf("Receiver.S3Bucket fallback = %q, want %q", cfg.Receiver.S3Bucket, "mail-bucket")
+	}
+}
+
 func clearAWSCredentialEnv() {
 	for _, key := range []string{
 		"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_PROFILE", "AWS_DEFAULT_PROFILE",
@@ -741,6 +803,8 @@ func cleanupEnv() {
 	os.Unsetenv("STORAGE")
 	os.Unsetenv("SENDER")
 	os.Unsetenv("RECEIVER")
+	os.Unsetenv("RECEIVER_BUCKET")
+	os.Unsetenv("RECEIVER_FILESYSTEM_DIR")
 	os.Unsetenv("RECEIVER_TABLE")
 	os.Unsetenv("RECEIVER_REGION")
 	os.Unsetenv("SESSION")

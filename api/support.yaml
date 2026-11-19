@@ -232,6 +232,206 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/support/receiver/identities:
+    get:
+      tags:
+      - Support
+      summary: List receiving mail identities and their receiver rule coverage
+      description: |-
+        Lists the receiving mail identities: the verified identities returned
+        by the SES `ListIdentities` operation (both domains and individual
+        email addresses). `hasRules` is true when the receiver has its own
+        rules entry for that identity; otherwise the recipient is routed by
+        the `_` fallback. The GUI shows a tick for identities with rules and
+        a plus for those without.
+
+        Requires the `ses:ListIdentities` IAM permission. A failed SES query
+        returns `502 failed to list SES identities`.
+      operationId: listReceiverIdentities
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: The SES identities and their rule coverage
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiverIdentitiesResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: The SES identities could not be listed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/support/receiver/rules:
+    get:
+      tags:
+      - Support
+      summary: List the configured receiver rules
+      description: |-
+        Returns every receiving identity with its own rules entry, including
+        the `_` fallback. Each identity has one ordered list of rules evaluated
+        first-match-wins.
+
+        The rules are read from the configured receiver config store on every
+        request, so this operation also acts as the GUI's **Reload** action.
+      operationId: listReceiverRules
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: The configured receiver rules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiverRulesResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: The receiver config store could not be read
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      tags:
+      - Support
+      summary: Add or update receiver rules
+      description: |-
+        Adds or replaces the rules entries for the domains in the request.
+        Domains not included in the request (in particular the `_` fallback)
+        are left untouched. Use `DELETE` on
+        `/api/support/receiver/rules/{identity}` to remove an entry.
+
+        Each identity must have at least one rule, and every rule must be a
+        known `HandlerRule`. The `_` fallback must remain valid, otherwise the
+        request is rejected with `400 Bad Request`. Submitted entries are
+        persisted in the configured receiver config store and published to the
+        active receiver cache. The updated rules are returned in the response.
+      operationId: saveReceiverRules
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReceiverRulesRequest'
+      responses:
+        '200':
+          description: The saved receiver rules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiverRulesResponse'
+        '400':
+          description: Invalid domain or handler rule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: The receiver config store could not be updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/support/receiver/rules/{identity}:
+    delete:
+      tags:
+      - Support
+      summary: Remove a configured receiving identity
+      description: |-
+        Deletes the rules entry for `identity` from the receiver config store.
+        The identity then appears with a plus in the receiving mail identities
+        list and is routed by the `_` fallback until rules are added again.
+        The response is the full remaining rules list.
+
+        The `_` fallback can never be deleted: every recipient without its own
+        entry relies on it, so the operation returns `400 Bad Request` for it.
+        Unknown identities return `404 Not Found`.
+      operationId: deleteReceiverRules
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: identity
+        in: path
+        required: true
+        description: The receiving identity whose rules entry should be removed
+        schema:
+          type: string
+          minLength: 1
+      responses:
+        '200':
+          description: The rules remaining after the deletion
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiverRulesResponse'
+        '400':
+          description: Invalid identity or an attempt to delete the fallback
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: The receiving identity has no rules entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: The receiver config store could not be updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   securitySchemes:
     bearerAuth:
@@ -364,6 +564,79 @@ components:
           type: string
           description: Human-readable result message
       additionalProperties: false
+    ReceiverIdentitiesResponse:
+      type: object
+      description: Verified SES identities with their receiver rule coverage
+      required:
+      - identities
+      properties:
+        identities:
+          type: array
+          description: Identities sorted by name; those without a rules entry use the fallback
+          items:
+            $ref: '#/components/schemas/ReceiverIdentity'
+      additionalProperties: false
+    ReceiverIdentity:
+      type: object
+      description: One AWS SES identity and whether the receiver has rules for it
+      required:
+      - identity
+      - hasRules
+      properties:
+        identity:
+          type: string
+          description: Verified SES identity (a domain or an individual email address)
+        hasRules:
+          type: boolean
+          description: True when the receiver has its own rules entry for this identity
+      additionalProperties: false
+    ReceiverRulesResponse:
+      type: object
+      description: All domains with their own receiver rules entry
+      required:
+      - rules
+      properties:
+        rules:
+          type: array
+          description: Domains sorted by name, each with its ordered rules
+          items:
+            $ref: '#/components/schemas/ReceiverDomainRules'
+      additionalProperties: false
+    ReceiverRulesRequest:
+      type: object
+      description: Rules entries to add or replace; omitted domains are left untouched
+      required:
+      - rules
+      properties:
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReceiverDomainRules'
+      additionalProperties: false
+    ReceiverDomainRules:
+      type: object
+      description: The ordered rules for one receiving identity; `_` is the base fallback
+      required:
+      - domain
+      - rules
+      properties:
+        domain:
+          type: string
+          description: Receiving identity the rules apply to (for example `example.com` or `_`)
+          minLength: 1
+        rules:
+          type: array
+          description: Rules evaluated in order until one applies
+          items:
+            $ref: '#/components/schemas/HandlerRule'
+      additionalProperties: false
+    HandlerRule:
+      type: string
+      description: One receiver rule. `DeliverToUser` falls through when the user does not exist.
+      enum:
+      - DeliverToUser
+      - DeliverToMailIdentity
+      - Bounce
     Error:
       type: object
       required:

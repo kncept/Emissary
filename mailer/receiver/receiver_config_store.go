@@ -12,12 +12,15 @@ const configPrefix = "receiver"
 
 // ConfigStore persists one JSON configuration per mail identity under the
 // "receiver" prefix. Get returns ErrIdentityConfigNotFound when the identity
-// has no configuration; Put overwrites a configuration; List returns all
-// configured identities.
+// has no configuration; Put overwrites a configuration; Delete removes one;
+// List returns all configured identities. Every implementation refuses to
+// delete the FallbackIdentity ("_") because all unconfigured recipients rely
+// on it.
 type ConfigStore interface {
 	Name() string
-	Get(ctx context.Context, identity string) ([]HandlerRules, error)
-	Put(ctx context.Context, identity string, rules []HandlerRules) error
+	Get(ctx context.Context, identity string) (HandlerRules, error)
+	Put(ctx context.Context, identity string, rules HandlerRules) error
+	Delete(ctx context.Context, identity string) error
 	List(ctx context.Context) ([]string, error)
 }
 
@@ -47,8 +50,9 @@ func NewConfigStore(opts ConfigStoreOptions) (ConfigStore, error) {
 }
 
 // LoadMailIdentityConfig loads every configuration from store into a map. If
-// the store has no base fallback ("_"), it seeds one so unknown recipients
-// always have rules to apply.
+// the store has no base fallback ("_"), one is added to the returned config so
+// unknown recipients always have rules to apply. Loading never writes to the
+// store; the fallback is only persisted if a save explicitly includes it.
 func LoadMailIdentityConfig(ctx context.Context, store ConfigStore) (MailIdentityConfig, error) {
 	if store == nil {
 		store = NewMemoryConfigStore()
@@ -68,11 +72,7 @@ func LoadMailIdentityConfig(ctx context.Context, store ConfigStore) (MailIdentit
 	}
 
 	if _, ok := config[FallbackIdentity]; !ok {
-		base := BaseMailIdentityConfig()[FallbackIdentity]
-		if err := store.Put(ctx, FallbackIdentity, base); err != nil {
-			return nil, fmt.Errorf("seed %q receiver config: %w", FallbackIdentity, err)
-		}
-		config[FallbackIdentity] = base
+		config[FallbackIdentity] = BaseMailIdentityConfig()[FallbackIdentity]
 	}
 
 	if err := config.Validate(); err != nil {

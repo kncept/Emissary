@@ -68,10 +68,19 @@ type HandlerConfig struct {
 	SenderType       string
 	SenderMTAPort    string
 
-	ReceiverConfigType string // "s3", "filesystem", "memory" or "ddb"
-	ReceiverTable      string // DynamoDB table name for the "ddb" backend
-	ReceiverRegion     string // AWS region for the "ddb" backend
-	ReceiverConfig     receiver.MailIdentityConfig
+	ReceiverConfigType    string // "s3", "filesystem", "memory" or "ddb"
+	ReceiverBucket        string // S3_BUCKET for the "s3" receiver config backend
+	ReceiverFilesystemDir string // FILESYSTEM_DIR root for the "filesystem" receiver config backend
+	ReceiverTable         string // DynamoDB table name for the "ddb" backend
+	ReceiverRegion        string // AWS region for the "ddb" backend
+	ReceiverConfig        receiver.MailIdentityConfig
+	// ReceiverConfigStore is the active store behind ReceiverConfig. It is
+	// retained so the support API can add rules at runtime; a supplied
+	// ReceiverConfig (tests or programmatic callers) leaves it nil.
+	ReceiverConfigStore receiver.ConfigStore
+	// SESIdentityLister supplies the identities shown by the receiver rules
+	// editor. Nil means create an SES client lazily on first use.
+	SESIdentityLister SESIdentityLister
 
 	IsLambda bool
 }
@@ -104,6 +113,24 @@ func filesystemRoot(dir string) string {
 		return filepath.Join(home, ".emissary")
 	}
 	return ".emissary"
+}
+
+// receiverBucket returns the receiver-specific S3 target, falling back to the
+// shared mail bucket for programmatic callers that do not set it.
+func receiverBucket(cfg HandlerConfig) string {
+	if strings.TrimSpace(cfg.ReceiverBucket) != "" {
+		return cfg.ReceiverBucket
+	}
+	return cfg.S3Bucket
+}
+
+// receiverFilesystemRoot returns the receiver-specific filesystem root,
+// falling back to the shared root for programmatic callers.
+func receiverFilesystemRoot(cfg HandlerConfig) string {
+	if strings.TrimSpace(cfg.ReceiverFilesystemDir) != "" {
+		return cfg.ReceiverFilesystemDir
+	}
+	return filesystemRoot(cfg.FilesystemDir)
 }
 
 func New(cfg HandlerConfig) (http.Handler, error) {
@@ -212,8 +239,8 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 	if identityConfig == nil {
 		configStore, err := receiver.NewConfigStore(receiver.ConfigStoreOptions{
 			Type:          cfg.ReceiverConfigType,
-			FilesystemDir: filesystemRoot(cfg.FilesystemDir),
-			Bucket:        cfg.S3Bucket,
+			FilesystemDir: receiverFilesystemRoot(cfg),
+			Bucket:        receiverBucket(cfg),
 			TableName:     resolveDDBTable(cfg.ReceiverTable, cfg.DDBTablePrefix, "receiver"),
 			Region:        cfg.ReceiverRegion,
 		})
@@ -224,6 +251,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 		if err != nil {
 			return nil, err
 		}
+		cfg.ReceiverConfigStore = configStore
 	}
 	cfg.ReceiverConfig = identityConfig
 
@@ -343,7 +371,7 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 		writeJSON(w, http.StatusOK, map[string]any{"users": matches})
 	})))
 
-	supportHandler := newSupportHandler(cfg, emailStore, metaStore, sessionStore, mailSender, userManager)
+	supportHandler := newSupportHandler(context.Background(), cfg, emailStore, metaStore, sessionStore, mailSender, userManager)
 	supportServer, err := supportapi.NewServer(supportHandler, supportSecurityHandler{authenticator}, supportapi.WithErrorHandler(supportErrorHandler))
 	if err != nil {
 		log.Printf("failed to create support server: %v", err)
@@ -352,6 +380,8 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 		// with the method-specific JMAP catch-all (POST /api/jmap/).
 		mux.Handle("GET /api/support/", supportServer)
 		mux.Handle("POST /api/support/", supportServer)
+		mux.Handle("PUT /api/support/", supportServer)
+		mux.Handle("DELETE /api/support/", supportServer)
 	}
 
 	if mgr, ok := userManager.(EmissaryAuthManager); ok {
@@ -380,6 +410,11 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 				writeError(w, http.StatusInternalServerError, "internal server error")
 			}
 		}()
+		// Support data changes at runtime. Prevent browsers or proxies from
+		// serving a cached rules response after OK has saved new rules.
+		if strings.HasPrefix(r.URL.Path, "/api/support/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		mux.ServeHTTP(w, r)
 	})
 }

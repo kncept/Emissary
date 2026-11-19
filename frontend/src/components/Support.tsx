@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   getSupportBucketRoot,
   getSupportConfiguration,
@@ -132,7 +133,12 @@ export default function Support() {
           <div style={{ marginTop: '1.5rem' }}>
             <div className="email-list-header" style={{ marginBottom: '0.75rem' }}>
               <h3 style={{ margin: 0 }}>{selected.name} details</h3>
-              <button className="btn btn-secondary" onClick={() => setSelected(null)}>Close</button>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {selected.name === 'receiver' && (
+                  <Link className="btn btn-primary" to="/support/receiver">Edit</Link>
+                )}
+                <button className="btn btn-secondary" onClick={() => setSelected(null)}>Close</button>
+              </div>
             </div>
             <p style={{ color: 'var(--color-text-muted)', marginBottom: '0.75rem' }}>
               {selected.description} · implementation <code>{selected.implementation}</code>

@@ -50,6 +50,7 @@ AWS, not the application directly):
 | `USER_MANAGER` | no | User-manager backend for the deployed app. Unset → the app auto-selects `s3` (storage is always S3 in a deploy); users then live as `users/<email>/user.json` objects in the mail bucket. When set to `ddb`, a users table is created. |
 | `SESSION` | no | Session backend for the deployed app. When set to `ddb`, a sessions table is created. |
 | `RECEIVER` | no | Receiver config backend. Unset → the app uses `s3` (routing files in the mail bucket). When set to `ddb`/`dynamodb`, a receiver table is created for the inbound routing rules. |
+| `RECEIVER_BUCKET` | no | S3 bucket for receiver rules when `RECEIVER=s3` (default: the mail bucket). IAM access is granted on both buckets. |
 | `RECEIVER_TABLE` | no | Override the generated receiver table name (default `<TABLE_PREFIX>receiver`). |
 | `JWT_SECRET` | no | Signing secret for the app. Unset → CDK generates a 64-character secret in Secrets Manager. |
 
@@ -103,10 +104,12 @@ Skipped (with a warning) unless `mailer/cmd/frontend/bootstrap` exists.
   domain, admin credentials (password only if provided),
   `JWT_SECRET` as a Secrets Manager ARN, and the JWT audience/issuer.
 - IAM role `emissary-<domain>-app`: Lambda basic execution (logs to
-  `/logs/emissary/<domain>`, 3-month retention), read and delete access
-  to the inbound bucket, `ses:SendEmail`/`ses:SendRawEmail` on the
-  account's identities, read/write on the metadata table, and read on
-  the JWT secret.
+  `/logs/emissary/<domain>`, 3-month retention), read, write and delete access
+  to the inbound bucket (including the `receiver/` config prefix),
+  `ses:SendEmail`/`ses:SendRawEmail` on the
+  account's identities, `ses:ListIdentities` (account-wide, for the support
+  receiver rules editor), read/write on the metadata and receiver tables,
+  and read on the JWT secret.
 - DynamoDB tables for application state (pay-per-request), named from `TABLE_PREFIX` the same way as the
   household project (default prefix `emissary-`): `metadata` for
   per-message metadata (JMAP keywords and `receivedAt`; partition key `id`, sort key `userId`, plus the `userId-index` global secondary index for per-user listing; created when `METADATA=ddb`), `sessions` for refresh tokens (partition key `id`, sort key `userEmail`; created when `SESSION=ddb`), `users` for the `ddb` user manager (partition key `id`; created when `USER_MANAGER=ddb`), and `receiver` for inbound routing rules (partition key `id` only, with a `rules` list attribute; created when `RECEIVER=ddb` and granted to both the frontend and s3-receiver roles).

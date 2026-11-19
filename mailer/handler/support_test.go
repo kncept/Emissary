@@ -64,6 +64,9 @@ func TestSupportEndpointsUseSystemManagerClaim(t *testing.T) {
 		{http.MethodGet, "/api/support/configurations/storage", ""},
 		{http.MethodGet, "/api/support/bucket/root", ""},
 		{http.MethodPost, "/api/support/process-email", `{"id":"   "}`},
+		{http.MethodGet, "/api/support/receiver/rules", ""},
+		{http.MethodPut, "/api/support/receiver/rules", `{"rules":[]}`},
+		{http.MethodDelete, "/api/support/receiver/rules/_", ""},
 	}
 	for _, test := range requests {
 		// A System Manager passes authorization; the response then reflects
@@ -106,6 +109,9 @@ func TestSupportEndpointsRequireSystemManager(t *testing.T) {
 		{http.MethodGet, "/api/support/configurations/storage", ""},
 		{http.MethodGet, "/api/support/bucket/root", ""},
 		{http.MethodPost, "/api/support/process-email", `{"id":"staging"}`},
+		{http.MethodGet, "/api/support/receiver/rules", ""},
+		{http.MethodPut, "/api/support/receiver/rules", `{"rules":[]}`},
+		{http.MethodDelete, "/api/support/receiver/rules/_", ""},
 	}
 	for _, test := range requests {
 		w := request(t, h, test.method, test.target, test.body, userToken)
@@ -256,8 +262,8 @@ func TestSupportGetsReceiverConfigurationWithRules(t *testing.T) {
 	if detail.Implementation == "" {
 		t.Error("implementation is missing")
 	}
-	if detail.Settings["prefix"] != "receiver" {
-		t.Errorf("prefix = %q, want receiver", detail.Settings["prefix"])
+	if _, ok := detail.Settings["prefix"]; ok {
+		t.Errorf("prefix should not be reported in receiver settings: %v", detail.Settings)
 	}
 	if detail.Settings["identityCount"] != "1" {
 		t.Errorf("identityCount = %q, want 1", detail.Settings["identityCount"])

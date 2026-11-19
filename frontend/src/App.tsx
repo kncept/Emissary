@@ -9,6 +9,7 @@ import Compose from './components/Compose';
 import Users from './components/Users';
 import Settings from './components/Settings';
 import Support from './components/Support';
+import ReceiverSupport from './components/ReceiverSupport';
 import Layout from './components/Layout';
 import './App.css';
 
@@ -76,6 +77,16 @@ function App() {
                     element={
                       auth.systemManager ? (
                         <Support />
+                      ) : (
+                        <Navigate to="/" replace />
+                      )
+                    }
+                  />
+                  <Route
+                    path="/support/receiver"
+                    element={
+                      auth.systemManager ? (
+                        <ReceiverSupport />
                       ) : (
                         <Navigate to="/" replace />
                       )

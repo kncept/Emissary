@@ -58,9 +58,11 @@ func main() {
 		SenderType:    cfg.Sender.Type,
 		SenderMTAPort: cfg.Sender.MTAPort,
 
-		ReceiverConfigType: cfg.Receiver.Type,
-		ReceiverTable:      cfg.ReceiverTableName(),
-		ReceiverRegion:     cfg.Receiver.Region,
+		ReceiverConfigType:    cfg.Receiver.Type,
+		ReceiverBucket:        cfg.Receiver.S3Bucket,
+		ReceiverFilesystemDir: cfg.Receiver.FilesystemDir,
+		ReceiverTable:         cfg.ReceiverTableName(),
+		ReceiverRegion:        cfg.Receiver.Region,
 
 		IsLambda: awsutil.IsAwsLambda(),
 	}
