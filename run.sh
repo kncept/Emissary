@@ -15,9 +15,15 @@ get_build_time() {
 	date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "unknown"
 }
 
+# Get the version for ldflags (from git tag or "dev")
+get_version() {
+	git describe --tags --exact-match 2>/dev/null | sed 's/^v//' || echo "dev"
+}
+
 COMMIT_HASH=$(get_commit_hash)
 BUILD_TIME=$(get_build_time)
-LDFLAGS="-X github.com/kncept/Emissary/mailer/envutil.CommitHash=${COMMIT_HASH} -X github.com/kncept/Emissary/mailer/envutil.BuildTime=${BUILD_TIME}"
+VERSION=$(get_version)
+LDFLAGS="-X github.com/kncept/Emissary/mailer/envutil.CommitHash=${COMMIT_HASH} -X github.com/kncept/Emissary/mailer/envutil.BuildTime=${BUILD_TIME} -X github.com/kncept/Emissary/mailer/envutil.Version=${VERSION}"
 
 usage() {
 	cat <<EOF

@@ -13,11 +13,12 @@ import (
 
 var CommitHash string = "unknown"
 var BuildTime string = "unknown"
+var Version string = "dev"
 
 // StartupMessage returns the startup log line for a binary:
-// "<name> (<commit hash>) built: <build time>".
+// "<name> <version> (<commit hash>) built: <build time>".
 func StartupMessage(name string) string {
-	return fmt.Sprintf("%s (%s) built: %s\n", name, CommitHash, formatBuildTime(BuildTime))
+	return fmt.Sprintf("%s %s (%s) built: %s\n", name, Version, CommitHash, formatBuildTime(BuildTime))
 }
 
 // formatBuildTime renders the ldflag-provided timestamp as DD/MM/YYYY HH:MM:SS.
