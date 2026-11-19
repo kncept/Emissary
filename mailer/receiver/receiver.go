@@ -153,7 +153,7 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 	// handler rules in order. The first rule that applies wins.
 	var plans []recipientPlan
 	for _, recipient := range recipients {
-		rules, err := r.cfg.IdentityConfig.Get(recipient)
+		rules, err := r.cfg.IdentityConfig.GetByRecipient(recipient)
 		if err != nil {
 			log.Printf("receiver: no routing rules for %s: %v (bouncing)", recipient, err)
 			plans = append(plans, recipientPlan{recipient: recipient, action: Bounce})

@@ -21,40 +21,67 @@ import (
 
 func TestBaseMailIdentityConfig(t *testing.T) {
 	got := BaseMailIdentityConfig()
-	groups, err := got.Get("anyone@example.com")
+	groups, err := got.GetByRecipient("anyone@example.com")
 	if err != nil {
-		t.Fatalf("Get() error = %v", err)
+		t.Fatalf("GetByRecipient() error = %v", err)
 	}
 	want := HandlerRules{MailIdentity: FallbackIdentity, Rules: []HandlerRule{DeliverToUser, Bounce}}
 	if !reflect.DeepEqual(groups, want) {
-		t.Errorf("Get() = %+v, want %+v", groups, want)
+		t.Errorf("GetByRecipient() = %+v, want %+v", groups, want)
 	}
 }
 
-func TestMailIdentityConfigGet(t *testing.T) {
+func TestMailIdentityConfigGetByRecipient(t *testing.T) {
+	config := MailIdentityConfig{
+		"example.com":    {Rules: []HandlerRule{Bounce}},
+		FallbackIdentity: {Rules: []HandlerRule{DeliverToUser, Bounce}},
+	}
+
+	got, err := config.GetByRecipient("ALIAS@Example.com")
+	if err != nil {
+		t.Fatalf("GetByRecipient(configured) error = %v", err)
+	}
+	if len(got.Rules) != 1 || got.Rules[0] != Bounce {
+		t.Errorf("GetByRecipient(configured) = %+v, want Bounce", got)
+	}
+
+	got, err = config.GetByRecipient("unknown@other.example")
+	if err != nil {
+		t.Fatalf("GetByRecipient(fallback) error = %v", err)
+	}
+	if len(got.Rules) != 2 {
+		t.Errorf("GetByRecipient(fallback) = %+v, want the base rules", got)
+	}
+
+	if _, err := (MailIdentityConfig{}).GetByRecipient("anyone@example.com"); !errors.Is(err, ErrIdentityConfigNotFound) {
+		t.Errorf("GetByRecipient() without fallback error = %v, want ErrIdentityConfigNotFound", err)
+	}
+}
+
+func TestMailIdentityConfigGetByIdentity(t *testing.T) {
 	config := MailIdentityConfig{
 		"alias@example.com": {Rules: []HandlerRule{Bounce}},
 		FallbackIdentity:    {Rules: []HandlerRule{DeliverToUser, Bounce}},
 	}
 
-	got, err := config.Get("ALIAS@Example.com")
+	got, err := config.GetByIdentity("ALIAS@Example.com")
 	if err != nil {
-		t.Fatalf("Get(configured) error = %v", err)
+		t.Fatalf("GetByIdentity(configured) error = %v", err)
 	}
 	if len(got.Rules) != 1 || got.Rules[0] != Bounce {
-		t.Errorf("Get(configured) = %+v, want Bounce", got)
+		t.Errorf("GetByIdentity(configured) = %+v, want Bounce", got)
 	}
 
-	got, err = config.Get("unknown@example.com")
+	got, err = config.GetByIdentity("unknown@example.com")
 	if err != nil {
-		t.Fatalf("Get(fallback) error = %v", err)
+		t.Fatalf("GetByIdentity(fallback) error = %v", err)
 	}
 	if len(got.Rules) != 2 {
-		t.Errorf("Get(fallback) = %+v, want the base rules", got)
+		t.Errorf("GetByIdentity(fallback) = %+v, want the base rules", got)
 	}
 
-	if _, err := (MailIdentityConfig{}).Get("anyone@example.com"); !errors.Is(err, ErrIdentityConfigNotFound) {
-		t.Errorf("Get() without fallback error = %v, want ErrIdentityConfigNotFound", err)
+	if _, err := (MailIdentityConfig{}).GetByIdentity("anyone@example.com"); !errors.Is(err, ErrIdentityConfigNotFound) {
+		t.Errorf("GetByIdentity() without fallback error = %v, want ErrIdentityConfigNotFound", err)
 	}
 }
 
@@ -107,9 +134,9 @@ func TestLoadMailIdentityConfigProvidesFallbackWithoutWriting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadMailIdentityConfig() error = %v", err)
 	}
-	rules, err := config.Get("nobody@example.com")
+	rules, err := config.GetByRecipient("nobody@example.com")
 	if err != nil || len(rules.Rules) != 2 {
-		t.Fatalf("Get() = %+v, %v; want base rules", rules, err)
+		t.Fatalf("GetByRecipient() = %+v, %v; want base rules", rules, err)
 	}
 
 	// Loading is read-only: the fallback exists in memory but is not written
@@ -135,12 +162,12 @@ func TestLoadMailIdentityConfigLoadsEveryConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadMailIdentityConfig() error = %v", err)
 	}
-	got, err := config.Get("alias@example.com")
+	got, err := config.GetByIdentity("alias@example.com")
 	if err != nil {
-		t.Fatalf("Get() error = %v", err)
+		t.Fatalf("GetByIdentity() error = %v", err)
 	}
 	if !reflect.DeepEqual(got, aliasRules) {
-		t.Errorf("Get() = %+v, want %+v", got, aliasRules)
+		t.Errorf("GetByIdentity() = %+v, want %+v", got, aliasRules)
 	}
 	if _, ok := config[FallbackIdentity]; !ok {
 		t.Error("fallback was not seeded alongside existing configurations")
@@ -375,9 +402,9 @@ func TestDdbConfigStoreRoundTrip(t *testing.T) {
 	if len(client.items) != 0 {
 		t.Fatalf("LoadMailIdentityConfig() wrote items: %v", client.items)
 	}
-	rules, err := config.Get("nobody@example.com")
+	rules, err := config.GetByRecipient("nobody@example.com")
 	if err != nil || len(rules.Rules) != 2 {
-		t.Fatalf("Get(fallback) = %+v, %v; want base rules", rules, err)
+		t.Fatalf("GetByRecipient(fallback) = %+v, %v; want base rules", rules, err)
 	}
 
 	aliasRules := HandlerRules{MailIdentity: "alias@example.com", Rules: []HandlerRule{DeliverToMailIdentity}}

@@ -87,11 +87,22 @@ func BaseMailIdentityConfig() MailIdentityConfig {
 	}
 }
 
-// Get returns the rules for identity. Matching is case-insensitive, and
-// identities without their own entry use the FallbackIdentity ("_") entry. It
-// returns an error when neither exists so a misconfigured store cannot make
+// GetByRecipient returns the rules for the mail identity of recipient, which
+// is the hostname after the last "@" in the address. A recipient without a
+// hostname uses the fallback entry, just like an unconfigured identity.
+func (c MailIdentityConfig) GetByRecipient(recipient string) (HandlerRules, error) {
+	at := strings.LastIndex(recipient, "@")
+	if at < 0 || at == len(recipient)-1 {
+		return c.GetByIdentity("")
+	}
+	return c.GetByIdentity(recipient[at+1:])
+}
+
+// GetByIdentity returns the rules for identity. Matching is case-insensitive,
+// and identities without their own entry use the FallbackIdentity ("_") entry.
+// It returns an error when neither exists so a misconfigured store cannot make
 // the receiver drop mail silently.
-func (c MailIdentityConfig) Get(identity string) (HandlerRules, error) {
+func (c MailIdentityConfig) GetByIdentity(identity string) (HandlerRules, error) {
 	if rules, ok := c.lookup(identity); ok {
 		return cloneHandlerRules(rules), nil
 	}

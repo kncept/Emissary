@@ -285,7 +285,7 @@ func newRoutingTestReceiver(identity MailIdentityConfig, users usermanager.UserM
 func TestProcessMessageDeliversToMailIdentityWithoutAUser(t *testing.T) {
 	const key = "routing-mail-identity"
 	identity := BaseMailIdentityConfig()
-	identity["alias@example.com"] = HandlerRules{
+	identity["example.com"] = HandlerRules{
 		MailIdentity: "alias@example.com",
 		Rules:        []HandlerRule{DeliverToMailIdentity},
 	}
@@ -313,7 +313,7 @@ func TestProcessMessageDeliversToMailIdentityWithoutAUser(t *testing.T) {
 func TestProcessMessageFallsThroughToRecipientIdentity(t *testing.T) {
 	const key = "routing-fallthrough"
 	identity := BaseMailIdentityConfig()
-	identity["missing@example.com"] = HandlerRules{
+	identity["example.com"] = HandlerRules{
 		MailIdentity: "missing@example.com",
 		Rules:        []HandlerRule{DeliverToUser, DeliverToMailIdentity},
 	}
@@ -339,8 +339,8 @@ func TestProcessMessageFallsThroughToRecipientIdentity(t *testing.T) {
 func TestProcessMessageBounceRuleOverridesUserLookup(t *testing.T) {
 	const key = "routing-bounce"
 	identity := BaseMailIdentityConfig()
-	identity["blocked@example.com"] = HandlerRules{
-		MailIdentity: "blocked@example.com",
+	identity["example.com"] = HandlerRules{
+		MailIdentity: "example.com",
 		Rules:        []HandlerRule{Bounce},
 	}
 	client := &fakeS3{objects: map[string][]byte{key: messageTo("blocked@example.com")}}
@@ -361,8 +361,8 @@ func TestProcessMessageBounceRuleOverridesUserLookup(t *testing.T) {
 func TestProcessMessageMatchesIdentityCaseInsensitively(t *testing.T) {
 	const key = "routing-case"
 	identity := BaseMailIdentityConfig()
-	identity["alias@example.com"] = HandlerRules{
-		MailIdentity: "alias@example.com",
+	identity["example.com"] = HandlerRules{
+		MailIdentity: "example.com",
 		Rules:        []HandlerRule{Bounce},
 	}
 	client := &fakeS3{objects: map[string][]byte{key: messageTo("Alias@Example.com")}}
