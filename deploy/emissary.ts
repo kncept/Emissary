@@ -289,6 +289,8 @@ async function emailClientStack(
   const receiverBucketName = (env.RECEIVER_BUCKET || '').trim() || inboundEmailBucketName
   const receiverPolicyBucketNames = Array.from(new Set([inboundEmailBucketName, receiverBucketName]))
 
+  // Both Lambdas share this role so the frontend and the S3 receiver always
+  // have identical permissions.
   const role = new iam.Role(stack, 'emissary-app-role', {
     assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
     roleName: `emissary-${emissaryDomain.replaceAll(".", "-")}-app`,
@@ -408,10 +410,9 @@ async function emailClientStack(
   const receiverType = (env.RECEIVER || '').toLowerCase().trim()
   const usesDdbReceiver = receiverType === 'ddb' || receiverType === 'dynamodb'
   let receiverTableName = env.RECEIVER_TABLE || ''
-  let receiverTable: dynamodb.Table | undefined
   if (usesDdbReceiver) {
     if (receiverTableName === '') receiverTableName = `${ddbTablePrefix}receiver`
-    receiverTable = new dynamodb.Table(stack, 'emissary-receiver', {
+    const receiverTable = new dynamodb.Table(stack, 'emissary-receiver', {
       tableName: receiverTableName,
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
@@ -556,58 +557,15 @@ async function emailClientStack(
     exportName: `EmissaryAppUrl-${emissaryDomain.replaceAll(".", "-")}`,
   })
 
-  // S3 Receiver Lambda - processes inbound emails when written to S3
-  const s3ReceiverRole = new iam.Role(stack, 'emissary-s3-receiver-role', {
-    assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
-    roleName: `emissary-${emissaryDomain.replaceAll(".", "-")}-s3-receiver`,
-    managedPolicies: [
-      iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
-    ],
-  })
-
+  // S3 Receiver Lambda - processes inbound emails when written to S3. It uses
+  // the same role as the frontend, so the permissions above already cover its
+  // DynamoDB, S3, SES, and JWT needs.
   const s3ReceiverLogGroup = new logs.LogGroup(stack, 'emissary-s3-receiver-logs', {
     logGroupName: `/logs/emissary/${emissaryDomain.replaceAll(".", "-")}-s3-receiver`,
     retention: logs.RetentionDays.THREE_MONTHS,
     removalPolicy: cdk.RemovalPolicy.DESTROY,
   })
-  s3ReceiverLogGroup.grantWrite(s3ReceiverRole)
-
-  // The inbound receiver loads/seeds its routing rules too, so it needs the
-  // same DynamoDB access as the frontend when RECEIVER selects that backend.
-  if (receiverTable) receiverTable.grantReadWriteData(s3ReceiverRole)
-
-  // Grant S3 access to the inbound email bucket (read staging objects, write
-  // user mailboxes, delete staging) and to the receiver config bucket.
-  s3ReceiverRole.addToPolicy(new iam.PolicyStatement({
-    sid: 'InboundEmailAccess',
-    actions: [
-      's3:GetObject',
-      's3:PutObject',
-      's3:DeleteObject',
-      's3:ListBucket',
-    ],
-    resources: receiverPolicyBucketNames.flatMap((bucketName) => [
-      `arn:aws:s3:::${bucketName}`,
-      `arn:aws:s3:::${bucketName}/*`,
-    ]),
-    effect: iam.Effect.ALLOW,
-  }))
-
-  // Grant read access to the JWT secret (same as frontend)
-  jwtSecret.grantRead(s3ReceiverRole)
-
-  // Grant SES send permissions for bounce messages
-  s3ReceiverRole.addToPolicy(new iam.PolicyStatement({
-    sid: 'SesSendEmail',
-    actions: [
-      'ses:SendEmail',
-      'ses:SendRawEmail',
-    ],
-    resources: [
-      `arn:aws:ses:${awsRegion}:${accountId}:identity/*`,
-    ],
-    effect: iam.Effect.ALLOW,
-  }))
+  s3ReceiverLogGroup.grantWrite(role)
 
   const s3ReceiverFn = new lambda.Function(stack, 'emissary-s3-receiver-fn', {
     runtime: lambda.Runtime.PROVIDED_AL2023,
@@ -616,7 +574,7 @@ async function emailClientStack(
     description: 'Processes inbound emails when written to S3',
     code: lambda.Code.fromAsset(s3ReceiverAssetDirectory, { exclude: ['**', '!bootstrap'] }),
     handler: 'bootstrap',
-    role: s3ReceiverRole,
+    role: role,
     logGroup: s3ReceiverLogGroup,
     timeout: cdk.Duration.seconds(30),
     memorySize: 256,

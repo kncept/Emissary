@@ -187,6 +187,52 @@ func TestHandler_EmailQuery(t *testing.T) {
 	t.Logf("EmailQuery result: %s", string(result))
 }
 
+func TestEmailQueryListsMessagesWithoutMetadata(t *testing.T) {
+	ctx := context.Background()
+	const accountID = "alice@example.com"
+	store := storage.NewMemoryStorage()
+	messageDate := time.Date(2026, time.November, 19, 4, 16, 0, 0, time.UTC)
+	for _, id := range []string{"with-meta", "without-meta"} {
+		addTestEmail(store, id, accountID, "inbox", &email.UserEmail{Subject: id, Date: messageDate})
+	}
+
+	// Only one delivered message has a metadata record; the other represents
+	// a receiver delivery that persisted the message but failed to save its
+	// metadata. Listing is driven by stored messages, so both must appear.
+	metaStore := metadata.NewMemoryMetadata()
+	if err := metaStore.Save(ctx, metadata.NewEmailMetadata(accountID, "with-meta")); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	handler := NewHandler(store, metaStore,
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+
+	result, err := handler.EmailQuery(ctx, accountID, json.RawMessage(
+		`{"accountId":"alice@example.com","calculateTotal":true}`))
+	if err != nil {
+		t.Fatalf("EmailQuery() error = %v", err)
+	}
+	var resp struct {
+		IDs   []string `json:"ids"`
+		Total int      `json:"total"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.IDs) != 2 || resp.Total != 2 {
+		t.Fatalf("EmailQuery() ids = %v, total = %d, want both messages", resp.IDs, resp.Total)
+	}
+	got := make(map[string]bool, len(resp.IDs))
+	for _, id := range resp.IDs {
+		got[id] = true
+	}
+	for _, id := range []string{"with-meta", "without-meta"} {
+		if !got[id] {
+			t.Errorf("EmailQuery() missing id %q in %v", id, resp.IDs)
+		}
+	}
+}
+
 func TestEmailQuerySortsByStoredReceivedAt(t *testing.T) {
 	ctx := context.Background()
 	store := storage.NewMemoryStorage()

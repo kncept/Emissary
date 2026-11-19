@@ -103,16 +103,27 @@ Skipped (with a warning) unless `mailer/cmd/frontend/bootstrap` exists.
   names (including `RECEIVER_TABLE`/`RECEIVER_REGION` when `RECEIVER=ddb`),
   domain, admin credentials (password only if provided),
   `JWT_SECRET` as a Secrets Manager ARN, and the JWT audience/issuer.
-- IAM role `emissary-<domain>-app`: Lambda basic execution (logs to
-  `/logs/emissary/<domain>`, 3-month retention), read, write and delete access
-  to the inbound bucket (including the `receiver/` config prefix),
-  `ses:SendEmail`/`ses:SendRawEmail` on the
-  account's identities, `ses:ListIdentities` (account-wide, for the support
-  receiver rules editor), read/write on the metadata and receiver tables,
-  and read on the JWT secret.
+- Lambda function `emissary-<domain>-s3-receiver`: custom runtime
+  `provided.al2023`, x86_64, 256 MB, 30s timeout, handler `bootstrap`,
+  triggered by `OBJECT_CREATED` events on the inbound bucket. It uses the
+  same role and environment as the frontend function.
+- IAM role `emissary-<domain>-app`: shared by both Lambda functions. Lambda
+  basic execution (logs to `/logs/emissary/<domain>` and
+  `/logs/emissary/<domain>-s3-receiver`, 3-month retention), read, write and
+  delete access to the inbound bucket (including the `receiver/` config
+  prefix), `ses:SendEmail`/`ses:SendRawEmail` on the account's identities,
+  `ses:ListIdentities` (account-wide, for the support receiver rules editor),
+  read/write on all DynamoDB tables created for the configured backends, and
+  read on the JWT secret.
 - DynamoDB tables for application state (pay-per-request), named from `TABLE_PREFIX` the same way as the
-  household project (default prefix `emissary-`): `metadata` for
-  per-message metadata (JMAP keywords and `receivedAt`; partition key `id`, sort key `userId`, plus the `userId-index` global secondary index for per-user listing; created when `METADATA=ddb`), `sessions` for refresh tokens (partition key `id`, sort key `userEmail`; created when `SESSION=ddb`), `users` for the `ddb` user manager (partition key `id`; created when `USER_MANAGER=ddb`), and `receiver` for inbound routing rules (partition key `id` only, with a `rules` list attribute; created when `RECEIVER=ddb` and granted to both the frontend and s3-receiver roles).
+  household project (default prefix `emissary-`). Each table below is created only when its backend is
+  selected and is granted read/write to that shared role:
+  - `metadata`: per-message metadata (JMAP keywords and `receivedAt`; partition key `id`, sort key
+    `userId`, plus the `userId-index` global secondary index for per-user listing; `METADATA=ddb`).
+  - `sessions`: refresh tokens (partition key `id`, sort key `userEmail`; `SESSION=ddb`).
+  - `users`: the `ddb` user manager (partition key `id`; `USER_MANAGER=ddb`).
+  - `receiver`: inbound routing rules (partition key `id` only, with a `rules` list attribute;
+    `RECEIVER=ddb`).
 - Secrets Manager secret `emissary/<domain>/jwt-secret` — generated
   when `JWT_SECRET` is not supplied, otherwise seeded with the given
   value via a custom resource. The app resolves the ARN at runtime.
