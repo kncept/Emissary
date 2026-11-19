@@ -165,11 +165,16 @@ it. When renaming tests, keep this table in sync.
     `npm run test -- <file>` for one file, or `npm run test:watch`
     while iterating (no `npx`; see
     [DEVELOPMENT.md](DEVELOPMENT.md#no-npx)).
-- CI (`.github/workflows/ci.yml`) runs `./run.sh test` on every push
-  to any branch and on every pull request. The release workflow
-  (`release.yml`) only builds and uploads binaries on `v*` tags — it
-  does not run tests — so treat branch/PR CI as the gate that
-  actually validated a commit.
+- `./run.sh check:generated` — regenerates the API code and fails if the
+  committed generated trees (`api/*/generated/`,
+  `frontend/src/api/generated/`) would change. Run it after editing a
+  spec or bumping a generator; it is CI's generated-code-freshness gate.
+- CI (`.github/workflows/ci.yml`) runs both `./run.sh test` and
+  `./run.sh check:generated` as separate jobs on every push to any
+  branch and on every pull request. The release workflow (`release.yml`)
+  only builds and uploads binaries on `v*` tags — it does not run tests
+  or freshness checks — so treat branch/PR CI as the gate that actually
+  validated a commit.
 
 ## Conventions for new tests
 

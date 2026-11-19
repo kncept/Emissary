@@ -10,6 +10,31 @@ on:
   workflow_dispatch:
 
 jobs:
+  generated-code-freshness:
+    name: Generated code freshness
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: mailer/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Regenerates from the OpenAPI specs and fails if the committed
+      # generated trees differ (including new or deleted files).
+      - name: Check generated code is up to date
+        run: ./run.sh check:generated
+
   test:
     name: Test (Go + TypeScript)
     runs-on: ubuntu-latest

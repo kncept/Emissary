@@ -67,8 +67,9 @@ when `dist/` is missing.
 
 ### API interface generation
 
-`run.sh generate_api` (invoked automatically by `build` and `test`)
-runs two generators against the three OpenAPI documents in `api/`:
+`./run.sh generate:api` (the `generate_api` helper, invoked automatically
+by `build` and `test`) runs two generators against the OpenAPI documents
+in `api/`:
 
 - **Backend (Go)**: `go tool ogen` targeting `api/auth/generated`,
   `api/users/generated`, `api/jmap/generated`. Outputs include:
@@ -89,6 +90,13 @@ The generated frontend client is imported by `frontend/src/api.ts`
 (which becomes a thin re-export or wrapper for auth token handling),
 and the generated types replace the manual `frontend/src/types.ts`.
 
+The generated trees (`api/*/generated/` and `frontend/src/api/generated/`)
+are committed. After changing a spec or a generator version, run
+`./run.sh generate:api` and commit the regenerated files along with the
+change. `./run.sh check:generated` regenerates and fails if those trees
+would change; CI runs it as a separate job on every push and pull
+request so stale generated code cannot be merged.
+
 ## Test
 
 The full testing strategy — layers, test doubles, conventions and
@@ -108,9 +116,11 @@ the invariants that must stay covered — is documented in
 - `npm run test` in `frontend/` — vitest (`*.test.ts(x)`). The shared
   setup makes any surviving native browser dialog throw.
 
-CI (`.github/workflows/ci.yml`) runs `./run.sh test` on every push and
-pull request. Tagging `v*` triggers the release workflow, which runs
-`./run.sh build` and uploads the `.build/frontend` binary as an artifact.
+CI (`.github/workflows/ci.yml`) runs `./run.sh test` and the separate
+generated-code-freshness check (`./run.sh check:generated`) on every
+push and pull request. Tagging `v*` triggers the release workflow,
+which runs `./run.sh build` and uploads the `.build/frontend` binary
+as an artifact.
 
 ## Run locally
 

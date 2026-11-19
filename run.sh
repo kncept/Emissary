@@ -24,16 +24,18 @@ usage() {
 Usage: $0 <command>
 
 Commands:
-  build         Build the frontend, compile the Go packages and build the Lambda binary
-  build:lambda  Build only the Lambda binary (bootstrap), for linux/amd64
-  test          Run the test suite (Go and TypeScript)
-  run           Build and run the frontend server
-  deploy        Build app assets and deploy all stacks (id, in, client)
-  deploy:id     Deploy the email identity stack (SES verification, DKIM, MX, SPF, DMARC)
-  deploy:in     Deploy the email identity and inbound stacks (id + in)
-  deploy:client Build app assets and deploy the application stack (Lambda, API Gateway, DynamoDB)
-  deploy:init   Initialize the deploy directory (run npm ci)
-  deploy:list   List CDK stacks (runs deploy:init then cdk ls)
+  build            Build the frontend, compile the Go packages and build the Lambda binary
+  build:lambda     Build only the Lambda binary (bootstrap), for linux/amd64
+  generate:api     Regenerate Go and TypeScript API code from the OpenAPI specs
+  check:generated  Fail if committed generated API code is stale
+  test             Run the test suite (Go and TypeScript)
+  run              Build and run the frontend server
+  deploy           Build app assets and deploy all stacks (id, in, client)
+  deploy:id        Deploy the email identity stack (SES verification, DKIM, MX, SPF, DMARC)
+  deploy:in        Deploy the email identity and inbound stacks (id + in)
+  deploy:client    Build app assets and deploy the application stack (Lambda, API Gateway, DynamoDB)
+  deploy:init      Initialize the deploy directory (run npm ci)
+  deploy:list      List CDK stacks (runs deploy:init then cdk ls)
 EOF
 }
 
@@ -57,6 +59,32 @@ generate_api() {
 		npm ci
 		npm run orval
 	)
+}
+
+# Generated trees that are committed to git, so a fresh generation must not
+# leave any changes in them.
+GENERATED_PATHS=(
+	api/jmap/generated
+	api/auth/generated
+	api/support/generated
+	api/users/generated
+	frontend/src/api/generated
+)
+
+# Regenerate the API code and fail if the committed generated trees differ.
+# This is the entry point for the generated-code-freshness CI check.
+check_generated() {
+	generate_api
+
+	local changes
+	changes=$(git status --porcelain -- "${GENERATED_PATHS[@]}")
+	if [[ -n "$changes" ]]; then
+		echo "Generated code is stale. Run './run.sh generate:api' and commit the result:" >&2
+		echo "$changes" >&2
+		return 1
+	fi
+
+	echo "Generated code is up to date."
 }
 
 # Build the frontend and place the output where the //go:embed
@@ -299,6 +327,12 @@ main() {
 		;;
 	build:lambda)
 		build_lambda
+		;;
+	generate:api)
+		generate_api
+		;;
+	check:generated)
+		check_generated
 		;;
 	test)
 		test
