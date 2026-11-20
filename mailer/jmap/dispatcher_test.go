@@ -7,7 +7,10 @@ import (
 	"testing"
 
 	"github.com/kncept/Emissary/mailer/auth"
+	"github.com/kncept/Emissary/mailer/metadata"
+	"github.com/kncept/Emissary/mailer/sender"
 	"github.com/kncept/Emissary/mailer/storage"
+	"github.com/kncept/Emissary/mailer/usermanager"
 )
 
 func TestResolveCreationIDs(t *testing.T) {
@@ -208,5 +211,42 @@ func TestDispatchRequestPersistsCreatedIDsPerSession(t *testing.T) {
 	submission := string(handler.submissionSetArgs["create"])
 	if !strings.Contains(submission, `"emailId":"real-email-id"`) {
 		t.Errorf("persisted reference was not resolved: %s", submission)
+	}
+}
+
+func TestDispatchRequestMalformedRecipientReturnsInvalidArguments(t *testing.T) {
+	handler := NewHandler(storage.NewMemoryStorage(), metadata.NewMemoryMetadata(),
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+	dispatcher := NewDispatcher(handler, nil)
+	req := &Request{
+		MethodCalls: []Invocation{{
+			Name:     "Email/set",
+			ClientID: "c1",
+			Arguments: map[string]json.RawMessage{
+				"accountId": json.RawMessage(`"alice@example.com"`),
+				"create":    json.RawMessage(`{"c1":{"to":[{"email":123}]}}`),
+			},
+		}},
+	}
+
+	resp, err := dispatcher.DispatchRequest(context.Background(), "alice@example.com",
+		&auth.Claims{Subject: "alice@example.com"}, req)
+	if err != nil {
+		t.Fatalf("DispatchRequest() error = %v", err)
+	}
+	if len(resp.MethodResponses) != 1 {
+		t.Fatalf("method responses = %d, want 1", len(resp.MethodResponses))
+	}
+	response := resp.MethodResponses[0]
+	if response.Name != "error" {
+		t.Fatalf("response name = %q, want error", response.Name)
+	}
+	var errorType string
+	if err := json.Unmarshal(response.Arguments["type"], &errorType); err != nil {
+		t.Fatalf("unmarshal error type: %v", err)
+	}
+	if errorType != "invalidArguments" {
+		t.Errorf("error type = %q, want invalidArguments", errorType)
 	}
 }

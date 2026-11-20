@@ -257,10 +257,14 @@ func (h *Handler) MailboxQuery(ctx context.Context, accountID string, args json.
 		mailboxes = filtered
 	}
 
-	// Apply position/limit for pagination
+	// Apply position/limit for pagination. Untrusted values are clamped so a
+	// negative position or limit cannot produce an invalid slice.
 	position := 0
 	if req.Position != nil {
 		position = *req.Position
+	}
+	if position < 0 {
+		position = 0
 	}
 	if position > len(mailboxes) {
 		position = len(mailboxes)
@@ -269,6 +273,9 @@ func (h *Handler) MailboxQuery(ctx context.Context, accountID string, args json.
 	limit := len(mailboxes) - position
 	if req.Limit != nil && *req.Limit < limit {
 		limit = *req.Limit
+	}
+	if limit < 0 {
+		limit = 0
 	}
 
 	result := mailboxes[position : position+limit]
@@ -555,6 +562,29 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 	return json.Marshal(resp)
 }
 
+// jmapAddressList converts a JMAP address property (to, cc, bcc) into internal
+// addresses. Client-supplied values are untrusted, so malformed entries are
+// reported as invalidArguments instead of panicking on a type assertion.
+func jmapAddressList(createMap map[string]interface{}, property string) ([]email.Address, error) {
+	entries, ok := createMap[property].([]interface{})
+	if !ok {
+		return nil, nil
+	}
+	addresses := make([]email.Address, 0, len(entries))
+	for _, entry := range entries {
+		object, ok := entry.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("invalidArguments: %s entries must be objects", property)
+		}
+		address, ok := object["email"].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalidArguments: %s entry has a non-string email", property)
+		}
+		addresses = append(addresses, email.Address{Address: address})
+	}
+	return addresses, nil
+}
+
 func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
 		AccountID string                 `json:"accountId"`
@@ -615,31 +645,17 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 		// "from" header is ignored.
 		from, _ := lockedFrom(ctx, accountID)
 
-		var to []email.Address
-		if toArr, ok := createMap["to"].([]interface{}); ok {
-			for _, t := range toArr {
-				if tm, ok := t.(map[string]interface{}); ok {
-					to = append(to, email.Address{Address: tm["email"].(string)})
-				}
-			}
+		to, err := jmapAddressList(createMap, "to")
+		if err != nil {
+			return nil, err
 		}
-
-		var cc []email.Address
-		if ccArr, ok := createMap["cc"].([]interface{}); ok {
-			for _, c := range ccArr {
-				if cm, ok := c.(map[string]interface{}); ok {
-					cc = append(cc, email.Address{Address: cm["email"].(string)})
-				}
-			}
+		cc, err := jmapAddressList(createMap, "cc")
+		if err != nil {
+			return nil, err
 		}
-
-		var bcc []email.Address
-		if bccArr, ok := createMap["bcc"].([]interface{}); ok {
-			for _, b := range bccArr {
-				if bm, ok := b.(map[string]interface{}); ok {
-					bcc = append(bcc, email.Address{Address: bm["email"].(string)})
-				}
-			}
+		bcc, err := jmapAddressList(createMap, "bcc")
+		if err != nil {
+			return nil, err
 		}
 
 		var replyTo []email.Address
@@ -914,10 +930,14 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 		return left.After(right)
 	})
 
-	// Apply position/limit for pagination
+	// Apply position/limit for pagination. Untrusted values are clamped so a
+	// negative position or limit cannot produce an invalid slice.
 	position := 0
 	if req.Position != nil {
 		position = *req.Position
+	}
+	if position < 0 {
+		position = 0
 	}
 	if position > len(filtered) {
 		position = len(filtered)
@@ -926,6 +946,9 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 	limit := len(filtered) - position
 	if req.Limit != nil && *req.Limit < limit {
 		limit = *req.Limit
+	}
+	if limit < 0 {
+		limit = 0
 	}
 
 	result := filtered[position : position+limit]

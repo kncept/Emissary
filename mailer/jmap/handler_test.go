@@ -1313,6 +1313,111 @@ func updateForAccount(t *testing.T, handler *Handler, accountID, id string) (map
 	return resp.Updated, resp.NotUpdated
 }
 
+func TestEmailSetRejectsMalformedAddressEntries(t *testing.T) {
+	tests := []struct {
+		name     string
+		property string
+		entry    string
+	}{
+		{"to email is not a string", "to", `{"email":123}`},
+		{"to email is missing", "to", `{}`},
+		{"cc email is not a string", "cc", `{"email":123}`},
+		{"bcc email is not a string", "bcc", `{"email":123}`},
+		{"to entry is not an object", "to", `123`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := NewHandler(storage.NewMemoryStorage(), metadata.NewMemoryMetadata(),
+				usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+				sender.NewLogSender())
+			args := json.RawMessage(fmt.Sprintf(
+				`{"accountId":"alice@example.com","create":{"c1":{"%s":[%s]}}}`, tt.property, tt.entry))
+
+			_, err := handler.EmailSet(context.Background(), "alice@example.com", args)
+			if err == nil || !strings.Contains(err.Error(), "invalidArguments") {
+				t.Fatalf("EmailSet() error = %v, want an invalidArguments error", err)
+			}
+		})
+	}
+}
+
+func TestMailboxQueryClampsNegativePagination(t *testing.T) {
+	const accountID = "alice@example.com"
+	handler := NewHandler(storage.NewMemoryStorage(), metadata.NewMemoryMetadata(),
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+
+	idsFor := func(t *testing.T, args string) []string {
+		t.Helper()
+		result, err := handler.MailboxQuery(context.Background(), accountID, json.RawMessage(args))
+		if err != nil {
+			t.Fatalf("MailboxQuery(%s) error = %v", args, err)
+		}
+		var resp struct {
+			IDs []string `json:"ids"`
+		}
+		if err := json.Unmarshal(result, &resp); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		return resp.IDs
+	}
+
+	baseline := idsFor(t, `{"accountId":"alice@example.com"}`)
+	if len(baseline) == 0 {
+		t.Fatal("MailboxQuery() returned no ids")
+	}
+	if got := idsFor(t, `{"accountId":"alice@example.com","position":-5}`); fmt.Sprint(got) != fmt.Sprint(baseline) {
+		t.Errorf("negative position ids = %v, want %v", got, baseline)
+	}
+	if got := idsFor(t, `{"accountId":"alice@example.com","limit":-1}`); len(got) != 0 {
+		t.Errorf("negative limit ids = %v, want none", got)
+	}
+	if got := idsFor(t, `{"accountId":"alice@example.com","position":-1,"limit":1}`); len(got) != 1 || got[0] != baseline[0] {
+		t.Errorf("negative position with limit ids = %v, want [%s]", got, baseline[0])
+	}
+}
+
+func TestEmailQueryClampsNegativePagination(t *testing.T) {
+	const accountID = "alice@example.com"
+	store := storage.NewMemoryStorage()
+	for _, id := range []string{"e1", "e2"} {
+		addTestEmail(store, id, accountID, "inbox", &email.UserEmail{Subject: id})
+	}
+	handler := NewHandler(store, metadata.NewMemoryMetadata(),
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+
+	idsFor := func(t *testing.T, args string) []string {
+		t.Helper()
+		result, err := handler.EmailQuery(context.Background(), accountID, json.RawMessage(args))
+		if err != nil {
+			t.Fatalf("EmailQuery(%s) error = %v", args, err)
+		}
+		var resp struct {
+			IDs []string `json:"ids"`
+		}
+		if err := json.Unmarshal(result, &resp); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		return resp.IDs
+	}
+
+	baseline := idsFor(t, `{"accountId":"alice@example.com"}`)
+	if len(baseline) != 2 {
+		t.Fatalf("EmailQuery() ids = %v, want two messages", baseline)
+	}
+	if got := idsFor(t, `{"accountId":"alice@example.com","position":-5}`); fmt.Sprint(got) != fmt.Sprint(baseline) {
+		t.Errorf("negative position ids = %v, want %v", got, baseline)
+	}
+	if got := idsFor(t, `{"accountId":"alice@example.com","limit":-1}`); len(got) != 0 {
+		t.Errorf("negative limit ids = %v, want none", got)
+	}
+	if got := idsFor(t, `{"accountId":"alice@example.com","position":-1,"limit":1}`); len(got) != 1 || got[0] != baseline[0] {
+		t.Errorf("negative position with limit ids = %v, want [%s]", got, baseline[0])
+	}
+}
+
 func TestCountUnreadInMailboxUsesKeywords(t *testing.T) {
 	ctx := context.Background()
 	const accountID = "alice@example.com"
