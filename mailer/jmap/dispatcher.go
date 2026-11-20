@@ -92,6 +92,39 @@ type Response struct {
 	MethodResponses []Invocation      `json:"methodResponses"`
 	CreatedIDs      map[string]string `json:"createdIds,omitempty"`
 	SessionState    string            `json:"sessionState"`
+
+	// includeCreatedIDs records whether the request supplied createdIds. An
+	// empty map must still be emitted as {} (RFC 8620 section 3.4), which
+	// omitempty alone would drop.
+	includeCreatedIDs bool
+}
+
+// MarshalJSON emits createdIds when the client opted in, even if the map is
+// empty. Responses built directly with a non-empty map keep the old behavior.
+func (r Response) MarshalJSON() ([]byte, error) {
+	fields := make(map[string]json.RawMessage, 3)
+	methodResponses, err := json.Marshal(r.MethodResponses)
+	if err != nil {
+		return nil, err
+	}
+	fields["methodResponses"] = methodResponses
+	sessionState, err := json.Marshal(r.SessionState)
+	if err != nil {
+		return nil, err
+	}
+	fields["sessionState"] = sessionState
+	if r.includeCreatedIDs || len(r.CreatedIDs) > 0 {
+		createdIDs := r.CreatedIDs
+		if createdIDs == nil {
+			createdIDs = map[string]string{}
+		}
+		encoded, err := json.Marshal(createdIDs)
+		if err != nil {
+			return nil, err
+		}
+		fields["createdIds"] = encoded
+	}
+	return json.Marshal(fields)
 }
 
 // resolveCreationIDs recursively replaces creation references ("#creationId")
@@ -313,11 +346,18 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 		}
 	}
 
-	return &Response{
+	response := &Response{
 		MethodResponses: responses,
-		CreatedIDs:      createdIDs,
 		SessionState:    "", // Will be set by caller
-	}, nil
+	}
+	// RFC 8620 section 3.4: createdIds is only returned when the client sent
+	// it. Resolution above still uses the session and newly created ids, so
+	// #create1 references work in requests that omit createdIds.
+	if req.CreatedIDs != nil {
+		response.CreatedIDs = createdIDs
+		response.includeCreatedIDs = true
+	}
+	return response, nil
 }
 
 func sameStringMap(a, b map[string]string) bool {

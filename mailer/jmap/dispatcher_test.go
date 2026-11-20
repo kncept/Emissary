@@ -162,6 +162,106 @@ func TestDispatchRequestResolvesCreationReferences(t *testing.T) {
 	}
 }
 
+func TestDispatchRequestCreatedIDsOnlyWhenRequested(t *testing.T) {
+	handler := &stubMethodHandler{}
+	dispatcher := NewDispatcher(handler, nil)
+	claims := &auth.Claims{Subject: "alice@example.com"}
+	ctx := context.Background()
+	call := Invocation{
+		Name:     "Email/set",
+		ClientID: "c1",
+		Arguments: map[string]json.RawMessage{
+			"accountId": json.RawMessage(`"alice@example.com"`),
+			"create":    json.RawMessage(`{"create1":{"subject":"draft"}}`),
+		},
+	}
+
+	resp, err := dispatcher.DispatchRequest(ctx, "alice@example.com", claims,
+		&Request{MethodCalls: []Invocation{call}})
+	if err != nil {
+		t.Fatalf("DispatchRequest() error = %v", err)
+	}
+	if resp.CreatedIDs != nil {
+		t.Errorf("CreatedIDs = %v, want nil when the request omitted createdIds", resp.CreatedIDs)
+	}
+	encoded, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	if strings.Contains(string(encoded), `"createdIds"`) {
+		t.Errorf("response JSON contains createdIds: %s", encoded)
+	}
+
+	// An empty createdIds object still opts in to receiving the full map.
+	resp, err = dispatcher.DispatchRequest(ctx, "alice@example.com", claims,
+		&Request{CreatedIDs: map[string]string{}, MethodCalls: []Invocation{call}})
+	if err != nil {
+		t.Fatalf("DispatchRequest() error = %v", err)
+	}
+	if resp.CreatedIDs == nil || resp.CreatedIDs["create1"] != "real-email-id" {
+		t.Errorf("CreatedIDs = %v, want create1 mapped to real-email-id", resp.CreatedIDs)
+	}
+}
+
+func TestResponseMarshalIncludesEmptyCreatedIDsWhenRequested(t *testing.T) {
+	withIDs, err := json.Marshal(Response{includeCreatedIDs: true})
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	if !strings.Contains(string(withIDs), `"createdIds":{}`) {
+		t.Errorf("response JSON = %s, want an empty createdIds object", withIDs)
+	}
+
+	withoutIDs, err := json.Marshal(Response{})
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	if strings.Contains(string(withoutIDs), `"createdIds"`) {
+		t.Errorf("response JSON = %s, want no createdIds property", withoutIDs)
+	}
+
+	direct, err := json.Marshal(Response{CreatedIDs: map[string]string{"c1": "id-1"}})
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	if !strings.Contains(string(direct), `"createdIds":{"c1":"id-1"}`) {
+		t.Errorf("response JSON = %s, want createdIds from a directly built response", direct)
+	}
+}
+
+func TestDispatchRequestResolvesCreationReferencesWithoutRequestCreatedIDs(t *testing.T) {
+	handler := &stubMethodHandler{}
+	dispatcher := NewDispatcher(handler, nil)
+
+	resp, err := dispatcher.DispatchRequest(context.Background(), "alice@example.com",
+		&auth.Claims{Subject: "alice@example.com"}, &Request{MethodCalls: []Invocation{
+			{
+				Name:     "Email/set",
+				ClientID: "c1",
+				Arguments: map[string]json.RawMessage{
+					"accountId": json.RawMessage(`"alice@example.com"`),
+					"create":    json.RawMessage(`{"create1":{"subject":"draft"}}`),
+				},
+			},
+			{
+				Name:     "EmailSubmission/set",
+				ClientID: "c2",
+				Arguments: map[string]json.RawMessage{
+					"create": json.RawMessage(`{"sub1":{"emailId":"#create1"}}`),
+				},
+			},
+		}})
+	if err != nil {
+		t.Fatalf("DispatchRequest() error = %v", err)
+	}
+	if got := string(handler.submissionSetArgs["create"]); !strings.Contains(got, `"emailId":"real-email-id"`) {
+		t.Errorf("creation reference was not resolved without request createdIds: %s", got)
+	}
+	if resp.CreatedIDs != nil {
+		t.Errorf("CreatedIDs = %v, want nil when the request omitted createdIds", resp.CreatedIDs)
+	}
+}
+
 func TestDispatchRequestPersistsCreatedIDsPerSession(t *testing.T) {
 	store := storage.NewMemoryStorage()
 	handler := &stubMethodHandler{}

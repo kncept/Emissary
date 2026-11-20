@@ -540,10 +540,13 @@ dispatcher resolves these references in argument values and map keys before
 invoking each method. Unresolved references are passed through unchanged and
 are reported as `notFound` by the method handler.
 
-The response includes a `createdIds` map of every creation id used in the
-batch to its server-assigned id. A client may send that map back as the
-request's `createdIds` to continue a batch after a dropped connection. For
-authenticated requests with a JWT `sid`, the map is also persisted under
+When the request includes a `createdIds` property (it may be empty), the
+response includes a `createdIds` map of every creation id used in the batch
+to its server-assigned id. Requests that omit `createdIds` do not receive
+the property back, though creation references still resolve within those
+requests. A client may send that map back as the request's `createdIds` to
+continue a batch after a dropped connection. For authenticated requests with
+a JWT `sid`, the map is also persisted under
 `_storage/<sid>/created-ids.json`, so a later Lambda invocation can resolve
 earlier references without the client echoing the map.
 

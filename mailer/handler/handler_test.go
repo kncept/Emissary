@@ -181,12 +181,17 @@ func responseIDs(t *testing.T, w *httptest.ResponseRecorder) map[string]bool {
 	return ids
 }
 
-// jmapRequest makes a JMAP batch request and returns the parsed response
-func jmapRequest(t *testing.T, h http.Handler, token string, using []string, methodCalls []JmapMethodCall) map[string]interface{} {
+// jmapRequest makes a JMAP batch request and returns the parsed response. An
+// optional createdIds map is included in the request when supplied, including
+// an empty map (which must still produce a createdIds property in the reply).
+func jmapRequest(t *testing.T, h http.Handler, token string, using []string, methodCalls []JmapMethodCall, createdIDs ...map[string]string) map[string]interface{} {
 	t.Helper()
 	requestBody := map[string]interface{}{
 		"using":       using,
 		"methodCalls": methodCalls,
+	}
+	if len(createdIDs) > 0 {
+		requestBody["createdIds"] = createdIDs[0]
 	}
 	body, _ := json.Marshal(requestBody)
 	w := request(t, h, http.MethodPost, "/api/jmap/", string(body), token)
@@ -1002,7 +1007,7 @@ func TestSendEmailWithCreationReference(t *testing.T) {
 					"#submission1": map[string]interface{}{"keywords/$draft": nil},
 				},
 			}, "submissionCreate"},
-		})
+		}, map[string]string{})
 
 	responses, _ := resp["methodResponses"].([]interface{})
 	for _, raw := range responses {
@@ -1116,6 +1121,63 @@ func TestJMAPResultReference(t *testing.T) {
 	args, _ = call[1].(map[string]interface{})
 	if call[0] != "error" || args["type"] != "invalidResultReference" {
 		t.Errorf("second response = %v, want invalidResultReference error", responses[1])
+	}
+}
+
+// TestJMAPCreatedIDsOnlyWhenRequested checks RFC 8620 section 3.4: a batch
+// that creates records only receives createdIds if the request supplied it.
+func TestJMAPCreatedIDsOnlyWhenRequested(t *testing.T) {
+	h, _, _ := newHandlerForTest(t, "secret")
+	_, token, _ := login(t, h, "bob@example.com", "anything")
+	using := []string{"urn:ietf:params:jmap:mail"}
+
+	createCall := JmapMethodCall{"Email/set", map[string]interface{}{
+		"accountId": "bob@example.com",
+		"create": map[string]interface{}{
+			"create1": map[string]interface{}{
+				"mailboxIds": map[string]bool{"drafts": true},
+				"keywords":   map[string]bool{"$draft": true},
+				"from":       []map[string]string{{"email": "bob@example.com", "name": ""}},
+				"to":         []map[string]string{{"email": "dave@example.com", "name": ""}},
+				"subject":    "conditional created ids",
+				"textBody":   []map[string]interface{}{{"partId": "text1", "type": "text/plain", "size": 4}},
+				"bodyValues": map[string]interface{}{"text1": map[string]interface{}{"value": "body"}},
+			},
+		},
+	}, "e1"}
+
+	resp := jmapRequest(t, h, token, using, []JmapMethodCall{createCall})
+	if _, ok := resp["createdIds"]; ok {
+		t.Errorf("response contains createdIds when the request omitted it: %v", resp["createdIds"])
+	}
+	responses, _ := resp["methodResponses"].([]interface{})
+	if len(responses) != 1 {
+		t.Fatalf("methodResponses = %d, want 1: %v", len(responses), responses)
+	}
+	call, _ := responses[0].([]interface{})
+	result, _ := call[1].(map[string]interface{})
+	created, _ := result["created"].(map[string]interface{})
+	if len(created) != 1 {
+		t.Fatalf("Email/set created = %v, want one record", created)
+	}
+
+	// Supplying an empty createdIds object opts in to receiving the map.
+	resp = jmapRequest(t, h, token, using, []JmapMethodCall{createCall}, map[string]string{})
+	createdIDs, ok := resp["createdIds"].(map[string]interface{})
+	if !ok || createdIDs["create1"] == "" {
+		t.Fatalf("createdIds = %v, want create1 mapped to a real id", resp["createdIds"])
+	}
+
+	// Even a read-only batch must echo createdIds. Use a fresh server so no
+	// ids persisted from earlier requests in this test are included.
+	fresh, _, _ := newHandlerForTest(t, "secret")
+	_, freshToken, _ := login(t, fresh, "bob@example.com", "anything")
+	resp = jmapRequest(t, fresh, freshToken, []string{"urn:ietf:params:jmap:core"}, []JmapMethodCall{
+		{"Core/echo", map[string]interface{}{}, "echo1"},
+	}, map[string]string{})
+	createdIDs, ok = resp["createdIds"].(map[string]interface{})
+	if !ok || len(createdIDs) != 0 {
+		t.Fatalf("createdIds = %v, want an empty object echoed", resp["createdIds"])
 	}
 }
 
