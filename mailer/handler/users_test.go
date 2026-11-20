@@ -267,6 +267,235 @@ func TestDeleteSelfOverHTTP(t *testing.T) {
 	}
 }
 
+func TestSelfServiceChangePasswordOverHTTP(t *testing.T) {
+	manager, err := usermanager.NewFile(usermanager.Config{
+		AdminUsername: "admin",
+		AdminPassword: "admin-pass",
+		FilesystemDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewFile() error = %v", err)
+	}
+	h, err := New(HandlerConfig{
+		AuthUser:     "admin",
+		AuthPass:     "admin-pass",
+		JWTSecret:    "secret",
+		JWTSecretTTL: time.Hour,
+		MetadataType: "memory",
+		Storage:      storage.NewMemoryStorage(),
+		Session:      session.NewMemorySessionStore(),
+		UserManager:  manager,
+		UserDomain:   "example.com",
+		Sender:       sender.NewInMemoryRecording(),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	status, adminToken, _ := login(t, h, "admin", "admin-pass")
+	if status != http.StatusOK {
+		t.Fatalf("admin login status = %d, want 200", status)
+	}
+	for _, body := range []string{
+		`{"email":"user@example.com","password":"user-pass"}`,
+		`{"email":"other@example.com","password":"other-pass"}`,
+	} {
+		if w := request(t, h, http.MethodPost, "/api/user/", body, adminToken); w.Code != http.StatusCreated {
+			t.Fatalf("create user status = %d, body = %s, want 201", w.Code, w.Body.String())
+		}
+	}
+
+	status, userToken, _ := login(t, h, "user@example.com", "user-pass")
+	if status != http.StatusOK {
+		t.Fatalf("user login status = %d, want 200", status)
+	}
+	claims := decodeAuthClaims(t, userToken)
+	if claims.EmissaryUserManagement {
+		t.Fatal("ordinary user unexpectedly has the EmissaryUserManagement claim")
+	}
+
+	// Management operations are still denied at the handler level.
+	if w := request(t, h, http.MethodGet, "/api/user/", "", userToken); w.Code != http.StatusForbidden {
+		t.Errorf("list users status = %d, body = %s, want 403", w.Code, w.Body.String())
+	}
+	// Changing somebody else's password is still denied at the handler level.
+	w := request(t, h, http.MethodPost, "/api/user/other@example.com/password", `{"newPassword":"stolen"}`, userToken)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("reset other user status = %d, body = %s, want 403", w.Code, w.Body.String())
+	}
+
+	// The self-service path itself must work for a user without management privileges.
+	w = request(t, h, http.MethodPost, "/api/user/user@example.com/password",
+		`{"oldPassword":"user-pass","newPassword":"user-new"}`, userToken)
+	if w.Code != http.StatusOK {
+		t.Fatalf("self password change status = %d, body = %s, want 200", w.Code, w.Body.String())
+	}
+	if status, _, _ := login(t, h, "user@example.com", "user-pass"); status != http.StatusUnauthorized {
+		t.Errorf("old password login status = %d, want 401", status)
+	}
+	if status, _, _ := login(t, h, "user@example.com", "user-new"); status != http.StatusOK {
+		t.Errorf("new password login status = %d, want 200", status)
+	}
+}
+
+func TestChangeOwnPasswordOverHTTP(t *testing.T) {
+	manager, err := usermanager.NewFile(usermanager.Config{
+		AdminUsername: "admin",
+		AdminPassword: "admin-pass",
+		FilesystemDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewFile() error = %v", err)
+	}
+	h, err := New(HandlerConfig{
+		AuthUser:     "admin",
+		AuthPass:     "admin-pass",
+		JWTSecret:    "secret",
+		JWTSecretTTL: time.Hour,
+		MetadataType: "memory",
+		Storage:      storage.NewMemoryStorage(),
+		Session:      session.NewMemorySessionStore(),
+		UserManager:  manager,
+		UserDomain:   "example.com",
+		Sender:       sender.NewInMemoryRecording(),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	status, adminToken, _ := login(t, h, "admin", "admin-pass")
+	if status != http.StatusOK {
+		t.Fatalf("admin login status = %d, want 200", status)
+	}
+	w := request(t, h, http.MethodPost, "/api/user/",
+		`{"email":"user@example.com","password":"user-pass"}`, adminToken)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create user status = %d, body = %s, want 201", w.Code, w.Body.String())
+	}
+
+	status, userToken, _ := login(t, h, "user@example.com", "user-pass")
+	if status != http.StatusOK {
+		t.Fatalf("user login status = %d, want 200", status)
+	}
+	if claims := decodeAuthClaims(t, userToken); claims.EmissaryUserManagement {
+		t.Fatal("ordinary user unexpectedly has the EmissaryUserManagement claim")
+	}
+
+	const endpoint = "/api/user/change-password"
+	if w := request(t, h, http.MethodPost, endpoint,
+		`{"newPassword":"user-new"}`, userToken); w.Code != http.StatusBadRequest {
+		t.Errorf("missing old password status = %d, body = %s, want 400", w.Code, w.Body.String())
+	}
+	if w := request(t, h, http.MethodPost, endpoint,
+		`{"oldPassword":"wrong","newPassword":"user-new"}`, userToken); w.Code != http.StatusConflict {
+		t.Errorf("wrong old password status = %d, body = %s, want 409", w.Code, w.Body.String())
+	}
+	if w := request(t, h, http.MethodPost, endpoint,
+		`{"oldPassword":"user-pass","newPassword":"user-new"}`, ""); w.Code != http.StatusUnauthorized {
+		t.Errorf("unauthenticated status = %d, body = %s, want 401", w.Code, w.Body.String())
+	}
+
+	w = request(t, h, http.MethodPost, endpoint,
+		`{"oldPassword":"user-pass","newPassword":"user-new"}`, userToken)
+	if w.Code != http.StatusOK {
+		t.Fatalf("change own password status = %d, body = %s, want 200", w.Code, w.Body.String())
+	}
+	if status, _, _ := login(t, h, "user@example.com", "user-pass"); status != http.StatusUnauthorized {
+		t.Errorf("old password login status = %d, want 401", status)
+	}
+	if status, _, _ := login(t, h, "user@example.com", "user-new"); status != http.StatusOK {
+		t.Errorf("new password login status = %d, want 200", status)
+	}
+}
+
+func TestPasswordChangeSupportedOverHTTP(t *testing.T) {
+	manager, err := usermanager.NewFile(usermanager.Config{
+		AdminUsername: "admin",
+		AdminPassword: "admin-pass",
+		FilesystemDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewFile() error = %v", err)
+	}
+	h, err := New(HandlerConfig{
+		AuthUser:     "admin",
+		AuthPass:     "admin-pass",
+		JWTSecret:    "secret",
+		JWTSecretTTL: time.Hour,
+		MetadataType: "memory",
+		Storage:      storage.NewMemoryStorage(),
+		Session:      session.NewMemorySessionStore(),
+		UserManager:  manager,
+		UserDomain:   "example.com",
+		Sender:       sender.NewInMemoryRecording(),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	status, adminToken, _ := login(t, h, "admin", "admin-pass")
+	if status != http.StatusOK {
+		t.Fatalf("admin login status = %d, want 200", status)
+	}
+	w := request(t, h, http.MethodPost, "/api/user/",
+		`{"email":"user@example.com","password":"user-pass"}`, adminToken)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create user status = %d, body = %s, want 201", w.Code, w.Body.String())
+	}
+	status, userToken, _ := login(t, h, "user@example.com", "user-pass")
+	if status != http.StatusOK {
+		t.Fatalf("user login status = %d, want 200", status)
+	}
+	if claims := decodeAuthClaims(t, userToken); claims.EmissaryUserManagement {
+		t.Fatal("ordinary user unexpectedly has the EmissaryUserManagement claim")
+	}
+
+	w = request(t, h, http.MethodGet, "/api/user/password-change-supported", "", userToken)
+	if w.Code != http.StatusOK {
+		t.Fatalf("capability status = %d, body = %s, want 200", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"supported":true`) {
+		t.Errorf("capability body = %s, want supported=true", w.Body.String())
+	}
+	if w := request(t, h, http.MethodGet, "/api/user/password-change-supported", "", ""); w.Code != http.StatusUnauthorized {
+		t.Errorf("unauthenticated capability status = %d, body = %s, want 401", w.Code, w.Body.String())
+	}
+}
+
+func TestPasswordChangeUnsupportedBackendReportsFalse(t *testing.T) {
+	// testUserManager does not implement EmissaryAuthManager.
+	h, _, _ := newHandlerForTest(t, "secret")
+	status, token, _ := login(t, h, "admin", "secret")
+	if status != http.StatusOK {
+		t.Fatalf("login status = %d, want 200", status)
+	}
+	w := request(t, h, http.MethodGet, "/api/user/password-change-supported", "", token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("capability status = %d, body = %s, want 200", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"supported":false`) {
+		t.Errorf("capability body = %s, want supported=false", w.Body.String())
+	}
+}
+
+func TestChangeOwnPasswordUnsupportedBackend(t *testing.T) {
+	// testUserManager does not implement EmissaryAuthManager: it cannot store
+	// a password verifier, so the endpoint must fail rather than appear to work.
+	h, _, _ := newHandlerForTest(t, "secret")
+	status, token, _ := login(t, h, "admin", "secret")
+	if status != http.StatusOK {
+		t.Fatalf("login status = %d, want 200", status)
+	}
+	w := request(t, h, http.MethodPost, "/api/user/change-password",
+		`{"oldPassword":"secret","newPassword":"new-secret"}`, token)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("unsupported backend status = %d, body = %s, want 403", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "not supported") {
+		t.Errorf("unsupported backend body = %s, want an explanatory message", w.Body.String())
+	}
+}
+
 func newPasswordTestHandler(t *testing.T) (*usersHandler, *usermanager.FileManager, *auth.Authenticator) {
 	t.Helper()
 	manager, err := usermanager.NewFile(usermanager.Config{

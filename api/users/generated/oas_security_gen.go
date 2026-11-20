@@ -14,7 +14,8 @@ import (
 // SecurityHandler is handler for security parameters.
 type SecurityHandler interface {
 	// HandleBearerAuth handles bearerAuth security.
-	// The access token from login or refresh (requires EmissaryUserManagement claim).
+	// The access token from login or refresh (management operations require the EmissaryUserManagement
+	// claim).
 	HandleBearerAuth(ctx context.Context, operationName OperationName, t BearerAuth) (context.Context, error)
 }
 
@@ -35,12 +36,14 @@ func findAuthorization(h http.Header, prefix string) (string, bool) {
 
 // operationRolesBearerAuth is a private map storing roles per operation.
 var operationRolesBearerAuth = map[string][]string{
-	ChangePasswordOperation: []string{},
-	CreateUserOperation:     []string{},
-	DeleteUserOperation:     []string{},
-	GetUserOperation:        []string{},
-	ListUsersOperation:      []string{},
-	UpdateUserOperation:     []string{},
+	ChangeOwnPasswordOperation:       []string{},
+	ChangePasswordOperation:          []string{},
+	CreateUserOperation:              []string{},
+	DeleteUserOperation:              []string{},
+	GetUserOperation:                 []string{},
+	ListUsersOperation:               []string{},
+	PasswordChangeSupportedOperation: []string{},
+	UpdateUserOperation:              []string{},
 }
 
 // GetRolesForBearerAuth returns the required roles for the given operation.
@@ -84,7 +87,8 @@ func (s *Server) securityBearerAuth(ctx context.Context, operationName Operation
 // SecuritySource is provider of security values (tokens, passwords, etc.).
 type SecuritySource interface {
 	// BearerAuth provides bearerAuth security value.
-	// The access token from login or refresh (requires EmissaryUserManagement claim).
+	// The access token from login or refresh (management operations require the EmissaryUserManagement
+	// claim).
 	BearerAuth(ctx context.Context, operationName OperationName) (BearerAuth, error)
 }
 

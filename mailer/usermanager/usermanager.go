@@ -7,11 +7,14 @@ package usermanager
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/mail"
 	"strings"
+	"sync"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -158,16 +161,28 @@ func New(cfg Config) (UserManager, error) {
 }
 
 // adminAuth implements the built-in administrator checks shared by every
-// backend.
+// backend. The configured password is checked with bcrypt at the same cost as
+// Emissary-mastered users, so a wrong admin guess is not dramatically cheaper
+// than a wrong managed-user guess.
 type adminAuth struct {
 	username string
 	password string
+	// verifier is a pointer because adminAuth is copied into each backend;
+	// copies must share the one lazily generated hash.
+	verifier *adminVerifier
+}
+
+type adminVerifier struct {
+	once sync.Once
+	hash []byte
+	err  error
 }
 
 func newAdminAuth(cfg Config) adminAuth {
 	return adminAuth{
 		username: strings.TrimSpace(cfg.AdminUsername),
 		password: cfg.AdminPassword,
+		verifier: &adminVerifier{},
 	}
 }
 
@@ -190,10 +205,32 @@ func (a adminAuth) authenticate(username, password string) (*User, bool, error) 
 	if a.username == "" || !strings.EqualFold(strings.TrimSpace(username), a.username) {
 		return nil, false, nil
 	}
-	if a.password == "" || !equal(password, a.password) {
+	if a.password == "" || !a.verifier.match(a.password, password) {
 		return nil, true, ErrInvalidCredentials
 	}
 	return a.user(), true, nil
+}
+
+// match compares the supplied password with the configured one using bcrypt.
+// Hashing is lazy so manager construction stays cheap. The password is
+// SHA-256 pre-hashed before bcrypt: bcrypt ignores input past 72 bytes, and a
+// configuration secret should not be silently truncated.
+func (v *adminVerifier) match(configured, supplied string) bool {
+	if v == nil {
+		return false
+	}
+	v.once.Do(func() {
+		v.hash, v.err = bcrypt.GenerateFromPassword([]byte(adminPasswordDigest(configured)), bcryptCost)
+	})
+	if v.err != nil {
+		return false
+	}
+	return bcrypt.CompareHashAndPassword(v.hash, []byte(adminPasswordDigest(supplied))) == nil
+}
+
+func adminPasswordDigest(password string) string {
+	digest := sha256.Sum256([]byte(password))
+	return base64.RawStdEncoding.EncodeToString(digest[:])
 }
 
 func (a adminAuth) isAdmin(username string) bool {
@@ -283,10 +320,4 @@ func normalizeAddress(value string) (string, bool) {
 		return "", false
 	}
 	return strings.ToLower(parsed.Address), true
-}
-
-func equal(left, right string) bool {
-	leftHash := sha256.Sum256([]byte(left))
-	rightHash := sha256.Sum256([]byte(right))
-	return subtle.ConstantTimeCompare(leftHash[:], rightHash[:]) == 1
 }

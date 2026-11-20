@@ -74,6 +74,10 @@ paths:
         users; see docs/USERS.md), the password is checked against
         the user's stored salted password, and a disabled user is
         rejected with 403.
+
+        Failed attempts are rate limited per client IP and per account.
+        Once the limit is reached, further attempts receive 429 with a
+        `Retry-After` header until the window elapses.
       operationId: login
       security: []
       requestBody:
@@ -103,6 +107,18 @@ paths:
                 $ref: '#/components/schemas/Error'
         '403':
           description: Valid credentials, but the user is disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Too many failed login attempts; retry after the interval in the Retry-After header
+          headers:
+            Retry-After:
+              description: Seconds until another attempt is accepted
+              schema:
+                type: integer
+                minimum: 1
           content:
             application/json:
               schema:

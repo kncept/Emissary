@@ -111,6 +111,41 @@ export async function changeUserPassword(email: string, body: { oldPassword?: st
   return data;
 }
 
+// Cached in memory only: the capability is fixed for the lifetime of the
+// deployed backend, and the client must never make this request more than
+// once. A rejected promise is cached too, so a failed check is not retried.
+let passwordChangeSupport: Promise<boolean> | undefined;
+
+export function isPasswordChangeSupported(): Promise<boolean> {
+  if (!passwordChangeSupport) {
+    passwordChangeSupport = (async () => {
+      const response = await authenticatedFetch(`${API_BASE}/user/password-change-supported`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error((data as { error?: string }).error || 'Failed to check password change support');
+      }
+      const data = await response.json() as { supported?: boolean };
+      return data.supported === true;
+    })();
+  }
+  return passwordChangeSupport;
+}
+
+export async function changeOwnPassword(body: { oldPassword?: string; newPassword: string }) {
+  const response = await authenticatedFetch(`${API_BASE}/user/change-password`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    if (response.status === 403 || response.status === 404) {
+      throw new Error('Password changes are not supported by the configured user backend.');
+    }
+    throw new Error((data as { error?: string }).error || 'Failed to change password');
+  }
+  return data;
+}
+
 export async function getSupportConfigurations(): Promise<ConfigurationsResponse> {
   const response = await authenticatedFetch(`${API_BASE}/support/configurations`);
   const data = await response.json().catch(() => ({}));

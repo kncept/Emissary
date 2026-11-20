@@ -35,6 +35,9 @@ type Invoker interface {
 	// users; see docs/USERS.md), the password is checked against the user's stored salted password, and a
 	// disabled user is rejected with 403.
 	//
+	// Failed attempts are rate limited per client IP and per account. Once the limit is reached, further
+	// attempts receive 429 with a `Retry-After` header until the window elapses.
+	//
 	// POST /api/auth/login
 	Login(ctx context.Context, request *LoginRequest) (LoginRes, error)
 	// Refresh invokes refresh operation.
@@ -95,6 +98,9 @@ func (c *Client) requestURL(ctx context.Context) *url.URL {
 // (9 hours) and a refresh token (30 days). When the backend is Emissary-mastered (it manages its own
 // users; see docs/USERS.md), the password is checked against the user's stored salted password, and a
 // disabled user is rejected with 403.
+//
+// Failed attempts are rate limited per client IP and per account. Once the limit is reached, further
+// attempts receive 429 with a `Retry-After` header until the window elapses.
 //
 // POST /api/auth/login
 func (c *Client) Login(ctx context.Context, request *LoginRequest) (LoginRes, error) {

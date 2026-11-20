@@ -3,7 +3,10 @@ package usermanager
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestNoneManager_AdminOnly(t *testing.T) {
@@ -22,6 +25,34 @@ func TestNoneManager_AdminOnly(t *testing.T) {
 	}
 	if _, err := m.Authenticate(context.Background(), "other@example.com", "secret"); !errors.Is(err, ErrInvalidCredentials) {
 		t.Errorf("non-admin login error = %v, want ErrInvalidCredentials", err)
+	}
+}
+
+func TestAdminPasswordUsesBcryptWorkFactor(t *testing.T) {
+	a := newAdminAuth(Config{AdminUsername: "admin", AdminPassword: "secret"})
+	if _, handled, err := a.authenticate("admin", "secret"); !handled || err != nil {
+		t.Fatalf("admin authenticate() = handled %v, err %v; want true, nil", handled, err)
+	}
+	cost, err := bcrypt.Cost(a.verifier.hash)
+	if err != nil {
+		t.Fatalf("admin verifier is not a bcrypt hash: %v", err)
+	}
+	if cost != bcryptCost {
+		t.Errorf("admin bcrypt cost = %d, want %d", cost, bcryptCost)
+	}
+	if _, _, err := a.authenticate("admin", "wrong"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Errorf("wrong admin password error = %v, want ErrInvalidCredentials", err)
+	}
+
+	// bcrypt truncates input past 72 bytes; pre-hashing must keep long
+	// administrator passwords distinct from their 72-byte prefix.
+	long := strings.Repeat("x", 100)
+	a = newAdminAuth(Config{AdminUsername: "admin", AdminPassword: long})
+	if _, _, err := a.authenticate("admin", long); err != nil {
+		t.Errorf("long admin password rejected: %v", err)
+	}
+	if _, _, err := a.authenticate("admin", long[:72]); !errors.Is(err, ErrInvalidCredentials) {
+		t.Errorf("truncated admin password accepted, error = %v", err)
 	}
 }
 

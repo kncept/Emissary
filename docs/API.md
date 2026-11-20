@@ -70,7 +70,8 @@ not generated from `users.yaml`: it is served directly by the configured
 - Missing/invalid tokens produce `401` with
   `WWW-Authenticate: Bearer realm="emissary"`.
 - Errors are `{"error": "<message>"}`. Messages are generic; details
-  are only logged server-side.
+  are only logged server-side. A rate-limited login returns `429` with
+  a `Retry-After` header (see [AUTH.md](AUTH.md)).
 - A message outside the selected account is not discoverable: it is
   omitted from `Email/query` and reported in `Email/get`'s `notFound`
   list, the same as a message that does not exist.
@@ -87,6 +88,8 @@ not generated from `users.yaml`: it is served directly by the configured
 | `GET` | `/api/user/{email}` | Bearer\* | Get a user by email. |
 | `PATCH` | `/api/user/{email}` | Bearer\* | Update a user. |
 | `DELETE` | `/api/user/{email}` | Bearer\* | Delete another user (not yourself). |
+| `GET` | `/api/user/password-change-supported` | Bearer | Whether this backend supports password changes. |
+| `POST` | `/api/user/change-password` | Bearer | Change the authenticated user's own password. |
 | `POST` | `/api/user/{email}/password` | Bearer† | Change a user's password. |
 | `GET` | `/api/user/autocomplete` | Bearer | Search user IDs (email addresses) for admin masquerade. |
 | `GET` | `/api/support/configurations` | Bearer‡ | List configuration sections and implementations. |
@@ -104,9 +107,18 @@ not generated from `users.yaml`: it is served directly by the configured
 | `GET` | `/api/email/raw` | Bearer | Get the original RFC 5322 message for one email id. |
 | `GET` | `/eventsource/` | Bearer | EventSource push connection. |
 
-\* Requires `EmissaryUserManagement` JWT claim and Emissary-mastered user manager (the `ddb` backend). A user cannot delete their own account (`403 Forbidden`).
+\* Requires `EmissaryUserManagement` JWT claim and an Emissary-mastered user manager (`ddb`, `filesystem` or `s3`). A user cannot delete their own account (`403 Forbidden`).
 
-† Any authenticated user can change their own password. Administrators with `EmissaryUserManagement` can change any user's password. Requires Emissary-mastered user manager (`ddb` backend).
+† Any authenticated user can change their own password. Administrators with `EmissaryUserManagement` can change any user's password. Requires an Emissary-mastered user manager (`ddb`, `filesystem` or `s3`).
+
+`/api/user/password-change-supported` and `/api/user/change-password` need
+only a valid bearer token: no management claim. The capability endpoint
+returns `{"supported": true|false}` for every backend and is intended to be
+cached in memory by clients; the Settings screen uses it to hide the password
+UI when it is unsupported. The change endpoint takes no email in the path,
+verifies the supplied current password, and revokes all sessions for that
+account, so the user must sign in again. It returns `403` when the configured
+backend cannot store a password verifier.
 
 ‡ Requires the `systemManager` JWT claim. See [SUPPORT.md](SUPPORT.md).
 

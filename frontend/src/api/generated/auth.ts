@@ -98,10 +98,15 @@ export type loginResponse403 = {
   status: 403
 }
 
+export type loginResponse429 = {
+  data: Error
+  status: 429
+}
+
 export type loginResponseSuccess = (loginResponse200) & {
   headers: Headers;
 };
-export type loginResponseError = (loginResponse400 | loginResponse401 | loginResponse403) & {
+export type loginResponseError = (loginResponse400 | loginResponse401 | loginResponse403 | loginResponse429) & {
   headers: Headers;
 };
 
@@ -124,6 +129,10 @@ export const getLoginUrl = () => {
  * users; see docs/USERS.md), the password is checked against
  * the user's stored salted password, and a disabled user is
  * rejected with 403.
+ *
+ * Failed attempts are rate limited per client IP and per account.
+ * Once the limit is reached, further attempts receive 429 with a
+ * `Retry-After` header until the window elapses.
  * @summary Exchange credentials for an access token and a refresh token
  */
 export const login = async (loginRequest: LoginRequest, options?: RequestInit): Promise<loginResponse> => {

@@ -13,6 +13,25 @@ type UnimplementedHandler struct{}
 
 var _ Handler = UnimplementedHandler{}
 
+// ChangeOwnPassword implements changeOwnPassword operation.
+//
+// Changes the password of the user identified by the bearer token's `sub` claim. No special
+// permissions are required: any authenticated user may change their own password. The current password
+// is verified against the stored verifier.
+//
+// `oldPassword` is optional in the request schema for compatibility with the administrator reset
+// endpoint, but this endpoint rejects a request that omits it. A successful change revokes every
+// session for that user, including the session carrying this token, so the user must sign in again
+// with the new password.
+//
+// This endpoint is only available when the configured user manager is Emissary-mastered (`ddb`,
+// `filesystem` or `s3`). With any other backend it returns `403 Forbidden`.
+//
+// POST /api/user/change-password
+func (UnimplementedHandler) ChangeOwnPassword(ctx context.Context, req *ChangeOwnPasswordRequest) (r ChangeOwnPasswordRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // ChangePassword implements changePassword operation.
 //
 // Changes the password for the user with the given email address.
@@ -27,8 +46,8 @@ var _ Handler = UnimplementedHandler{}
 //     account. When an admin changes another user's password, the `oldPassword` field is optional (but
 //     if provided, it is verified).
 //
-// Every successful password change revokes all sessions for that user, invalidating their
-// refresh tokens.
+// Every successful password change revokes all sessions for that user, invalidating their refresh
+// tokens.
 //
 // This endpoint is only available when the configured user manager implements `EmissaryAuthManager`
 // (i.e., the `ddb` backend). Otherwise, it returns `403 Forbidden`.
@@ -79,6 +98,17 @@ func (UnimplementedHandler) GetUser(ctx context.Context, params GetUserParams) (
 //
 // GET /api/user/
 func (UnimplementedHandler) ListUsers(ctx context.Context, params ListUsersParams) (r ListUsersRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// PasswordChangeSupported implements passwordChangeSupported operation.
+//
+// Returns a boolean telling the client whether self-service password change is available for the
+// configured user manager. Any valid bearer token may read it; no management permission is required.
+// Clients may cache the answer for the lifetime of the page.
+//
+// GET /api/user/password-change-supported
+func (UnimplementedHandler) PasswordChangeSupported(ctx context.Context) (r PasswordChangeSupportedRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 

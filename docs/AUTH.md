@@ -26,7 +26,9 @@ Login and refresh are public: the credentials (login) or the refresh
 token (refresh) travel in the JSON body, so no `Authorization` header
 is involved. Logout requires the access token as a bearer token.
 A malformed body is a `400`; a rejected credential or token is a `401`
-with a generic message (details are only logged server-side).
+with a generic message (details are only logged server-side). A rejected
+login also counts against a rate limit; once it is reached, further
+login attempts receive `429` with a `Retry-After` header (see below).
 
 ## Login
 
@@ -52,6 +54,19 @@ return `401`; a disabled user (see [USERS.md](USERS.md)) is rejected
 with `403`, even with a correct password. Users created without a
 password are always rejected with `401` — a blank password never
 authenticates anyone.
+
+Failed logins are rate limited in two independent fixed windows: one
+per client IP and one per account. The default is 10 failures per
+minute in each window; a successful login clears that account's
+window but not the IP window. An attempt over either limit returns
+`429` with `Retry-After` (seconds) instead of checking the password.
+The limiter is per process, so deployments with more than one instance
+should also limit login attempts at the edge. The leftmost
+`X-Forwarded-For` value is used as the client IP when present; edge
+proxies should overwrite that header. The per-account limit is
+independent of it, so a spoofed header cannot bypass the account
+limit. Administrator and managed-user passwords both use bcrypt at
+cost 12, so a wrong guess is expensive in either case.
 
 ## The token pair
 

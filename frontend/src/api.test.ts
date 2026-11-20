@@ -453,6 +453,42 @@ describe('auth api', () => {
     });
   });
 
+  describe('isPasswordChangeSupported', () => {
+    it('calls the capability endpoint once and caches the result in memory', async () => {
+      const { isPasswordChangeSupported } = await importApi();
+      window.localStorage.setItem(TOKEN_KEY, 'abc123');
+      const fetchMock = vi.fn(async (_input: RequestInfo | URL) => createMockResponse({ supported: true }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const [first, second] = await Promise.all([
+        isPasswordChangeSupported(),
+        isPasswordChangeSupported(),
+      ]);
+
+      expect(first).toBe(true);
+      expect(second).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/user/password-change-supported');
+      // The answer lives only in the module cache, never in browser storage.
+      expect(window.localStorage.length).toBe(1);
+    });
+
+    it('caches a failed check instead of retrying it', async () => {
+      const { isPasswordChangeSupported } = await importApi();
+      window.localStorage.setItem(TOKEN_KEY, 'abc123');
+      const fetchMock = vi.fn(async (_input: RequestInfo | URL) => createMockResponse(
+        { error: 'check failed' },
+        { status: 500, ok: false },
+      ));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(isPasswordChangeSupported()).rejects.toThrow('check failed');
+      await expect(isPasswordChangeSupported()).rejects.toThrow('check failed');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('parseAddressList', () => {
     it('splits, trims and drops empty entries', async () => {
       const { parseAddressList } = await importApi();

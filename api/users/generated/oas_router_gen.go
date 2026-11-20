@@ -11,16 +11,22 @@ import (
 )
 
 var (
-	rn1AllowedHeaders = map[string]string{
+	rn2AllowedHeaders = map[string]string{
 		"GET":  "Authorization",
 		"POST": "Authorization,Content-Type",
 	}
-	rn2AllowedHeaders = map[string]string{
+	rn1AllowedHeaders = map[string]string{
+		"POST": "Authorization,Content-Type",
+	}
+	rn5AllowedHeaders = map[string]string{
+		"GET": "Authorization",
+	}
+	rn3AllowedHeaders = map[string]string{
 		"DELETE": "Authorization",
 		"GET":    "Authorization",
 		"PATCH":  "Authorization,Content-Type",
 	}
-	rn3AllowedHeaders = map[string]string{
+	rn4AllowedHeaders = map[string]string{
 		"POST": "Authorization,Content-Type",
 	}
 )
@@ -81,13 +87,67 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				default:
 					s.notAllowed(w, r, notAllowedParams{
 						allowedMethods: "GET,POST",
-						allowedHeaders: rn1AllowedHeaders,
+						allowedHeaders: rn2AllowedHeaders,
 						acceptPost:     "application/json",
 						acceptPatch:    "",
 					})
 				}
 
 				return
+			}
+			switch elem[0] {
+			case 'c': // Prefix: "change-password"
+				origElem := elem
+				if l := len("change-password"); len(elem) >= l && elem[0:l] == "change-password" {
+					elem = elem[l:]
+				} else {
+					break
+				}
+
+				if len(elem) == 0 {
+					// Leaf node.
+					switch r.Method {
+					case "POST":
+						s.handleChangeOwnPasswordRequest([0]string{}, elemIsEscaped, w, r)
+					default:
+						s.notAllowed(w, r, notAllowedParams{
+							allowedMethods: "POST",
+							allowedHeaders: rn1AllowedHeaders,
+							acceptPost:     "application/json",
+							acceptPatch:    "",
+						})
+					}
+
+					return
+				}
+
+				elem = origElem
+			case 'p': // Prefix: "password-change-supported"
+				origElem := elem
+				if l := len("password-change-supported"); len(elem) >= l && elem[0:l] == "password-change-supported" {
+					elem = elem[l:]
+				} else {
+					break
+				}
+
+				if len(elem) == 0 {
+					// Leaf node.
+					switch r.Method {
+					case "GET":
+						s.handlePasswordChangeSupportedRequest([0]string{}, elemIsEscaped, w, r)
+					default:
+						s.notAllowed(w, r, notAllowedParams{
+							allowedMethods: "GET",
+							allowedHeaders: rn5AllowedHeaders,
+							acceptPost:     "",
+							acceptPatch:    "",
+						})
+					}
+
+					return
+				}
+
+				elem = origElem
 			}
 			// Param: "email"
 			// Match until "/"
@@ -115,7 +175,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				default:
 					s.notAllowed(w, r, notAllowedParams{
 						allowedMethods: "DELETE,GET,PATCH",
-						allowedHeaders: rn2AllowedHeaders,
+						allowedHeaders: rn3AllowedHeaders,
 						acceptPost:     "",
 						acceptPatch:    "application/json",
 					})
@@ -142,7 +202,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					default:
 						s.notAllowed(w, r, notAllowedParams{
 							allowedMethods: "POST",
-							allowedHeaders: rn3AllowedHeaders,
+							allowedHeaders: rn4AllowedHeaders,
 							acceptPost:     "application/json",
 							acceptPatch:    "",
 						})
@@ -270,6 +330,60 @@ func (s *Server) FindPath(method string, u *url.URL) (r Route, _ bool) {
 				default:
 					return
 				}
+			}
+			switch elem[0] {
+			case 'c': // Prefix: "change-password"
+				origElem := elem
+				if l := len("change-password"); len(elem) >= l && elem[0:l] == "change-password" {
+					elem = elem[l:]
+				} else {
+					break
+				}
+
+				if len(elem) == 0 {
+					// Leaf node.
+					switch method {
+					case "POST":
+						r.name = ChangeOwnPasswordOperation
+						r.summary = "Change the authenticated user's password"
+						r.operationID = "changeOwnPassword"
+						r.operationGroup = ""
+						r.pathPattern = "/api/user/change-password"
+						r.args = args
+						r.count = 0
+						return r, true
+					default:
+						return
+					}
+				}
+
+				elem = origElem
+			case 'p': // Prefix: "password-change-supported"
+				origElem := elem
+				if l := len("password-change-supported"); len(elem) >= l && elem[0:l] == "password-change-supported" {
+					elem = elem[l:]
+				} else {
+					break
+				}
+
+				if len(elem) == 0 {
+					// Leaf node.
+					switch method {
+					case "GET":
+						r.name = PasswordChangeSupportedOperation
+						r.summary = "Report whether this backend supports password changes"
+						r.operationID = "passwordChangeSupported"
+						r.operationGroup = ""
+						r.pathPattern = "/api/user/password-change-supported"
+						r.args = args
+						r.count = 0
+						return r, true
+					default:
+						return
+					}
+				}
+
+				elem = origElem
 			}
 			// Param: "email"
 			// Match until "/"

@@ -85,6 +85,11 @@ type HandlerConfig struct {
 	SESIdentityLister SESIdentityLister
 
 	IsLambda bool
+
+	// LoginRateLimit caps failed login attempts per window for both the
+	// client IP and the account. Zero selects the default (10 per minute).
+	LoginRateLimit       int
+	LoginRateLimitWindow time.Duration
 }
 
 func applyDDBTablePrefix(prefix, name string) string {
@@ -260,6 +265,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 
 func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, metaStore metadata.MetadataStore, sessionStore session.SessionStore, mailSender sender.Sender, userManager usermanager.UserManager, cfg HandlerConfig) http.Handler {
 	mux := http.NewServeMux()
+	loginLimiter := newLoginLimiter(cfg.LoginRateLimit, cfg.LoginRateLimitWindow)
 
 	// Create JMAP handler with sender for EmailSubmission
 	jmapHandler := jmap.NewHandler(emailStore, metaStore, userManager, mailSender)
@@ -280,8 +286,23 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 			return
 		}
 
+		ipKey, userKey := loginIPKey(r), loginUserKey(req.Username)
+		for _, key := range []string{ipKey, userKey} {
+			if ok, retry := loginLimiter.Allow(key); !ok {
+				seconds := int((retry + time.Second - 1) / time.Second)
+				if seconds < 1 {
+					seconds = 1
+				}
+				w.Header().Set("Retry-After", strconv.Itoa(seconds))
+				writeError(w, http.StatusTooManyRequests, "too many login attempts")
+				return
+			}
+		}
+
 		result, err := authenticator.Login(r.Context(), req.Username, req.Password)
 		if err != nil {
+			loginLimiter.Record(ipKey)
+			loginLimiter.Record(userKey)
 			logRequestWarn(r, "authenticate "+strconv.Quote(req.Username), err)
 			if errors.Is(err, usermanager.ErrUserDisabled) {
 				writeError(w, http.StatusForbidden, "user is disabled")
@@ -290,6 +311,9 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 			writeError(w, http.StatusUnauthorized, "invalid credentials")
 			return
 		}
+		// Don't let earlier failures against the same account penalise its
+		// owner after a successful login.
+		loginLimiter.Reset(userKey)
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"accessToken":  result.AccessToken,
@@ -392,6 +416,18 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 		} else {
 			mux.Handle("/api/user/", usersServer)
 		}
+	} else {
+		// Self-service password change needs a manager that owns the user's
+		// password verifier. Give a clear answer instead of the generic 404
+		// that the rest of the user API returns for unsupported backends.
+		mux.Handle("POST /api/user/change-password", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeError(w, http.StatusForbidden, "password changes are not supported by the configured user manager")
+		})))
+		// The capability check must work for every backend so the UI can hide
+		// the password form before the user tries to use it.
+		mux.Handle("GET /api/user/password-change-supported", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]bool{"supported": false})
+		})))
 	}
 
 	mux.Handle("POST /api/auth/logout", requireAuth(authenticator, handleLogout(authenticator)))
@@ -454,18 +490,17 @@ type usersSecurityHandler struct {
 	authenticator *auth.Authenticator
 }
 
-func (h usersSecurityHandler) HandleBearerAuth(ctx context.Context, operationName usersapi.OperationName, t usersapi.BearerAuth) (context.Context, error) {
+// HandleBearerAuth validates the bearer token and makes its claims available
+// to the operation handlers. Authorization is enforced per operation in
+// usersHandler: management operations require EmissaryUserManagement, while
+// ChangePassword and ChangeOwnPassword allow a user to change their own
+// password. Checking the claim here would make those paths unreachable.
+func (h usersSecurityHandler) HandleBearerAuth(ctx context.Context, _ usersapi.OperationName, t usersapi.BearerAuth) (context.Context, error) {
 	claims, err := h.authenticator.ValidateClaims(t.Token)
 	if err != nil {
 		return nil, err
 	}
-
-	if !claims.EmissaryUserManagement {
-		return nil, &authErr{message: "insufficient permissions"}
-	}
-
-	ctx = context.WithValue(ctx, claimsContextKey{}, claims)
-	return ctx, nil
+	return context.WithValue(ctx, claimsContextKey{}, claims), nil
 }
 
 // EmissaryAuthManager and EmissaryUser live in the usermanager package. The
@@ -473,14 +508,6 @@ func (h usersSecurityHandler) HandleBearerAuth(ctx context.Context, operationNam
 type EmissaryAuthManager = usermanager.EmissaryAuthManager
 
 type EmissaryUser = usermanager.EmissaryUser
-
-type authErr struct {
-	message string
-}
-
-func (e *authErr) Error() string {
-	return e.message
-}
 
 func currentClaims(r *http.Request) *auth.Claims {
 	claims, _ := r.Context().Value(claimsContextKey{}).(*auth.Claims)

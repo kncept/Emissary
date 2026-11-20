@@ -29,6 +29,22 @@ func trimTrailingSlashes(u *url.URL) {
 
 // Invoker invokes operations described by OpenAPI v3 specification.
 type Invoker interface {
+	// ChangeOwnPassword invokes changeOwnPassword operation.
+	//
+	// Changes the password of the user identified by the bearer token's `sub` claim. No special
+	// permissions are required: any authenticated user may change their own password. The current password
+	// is verified against the stored verifier.
+	//
+	// `oldPassword` is optional in the request schema for compatibility with the administrator reset
+	// endpoint, but this endpoint rejects a request that omits it. A successful change revokes every
+	// session for that user, including the session carrying this token, so the user must sign in again
+	// with the new password.
+	//
+	// This endpoint is only available when the configured user manager is Emissary-mastered (`ddb`,
+	// `filesystem` or `s3`). With any other backend it returns `403 Forbidden`.
+	//
+	// POST /api/user/change-password
+	ChangeOwnPassword(ctx context.Context, request *ChangeOwnPasswordRequest) (ChangeOwnPasswordRes, error)
 	// ChangePassword invokes changePassword operation.
 	//
 	// Changes the password for the user with the given email address.
@@ -43,9 +59,8 @@ type Invoker interface {
 	//    account. When an admin changes another user's password, the `oldPassword` field is optional (but
 	//    if provided, it is verified).
 	//
-	//
-	// Every successful password change revokes all sessions for that user, invalidating their
-	// refresh tokens.
+	// Every successful password change revokes all sessions for that user, invalidating their refresh
+	// tokens.
 	//
 	// This endpoint is only available when the configured user manager implements `EmissaryAuthManager`
 	// (i.e., the `ddb` backend). Otherwise, it returns `403 Forbidden`.
@@ -84,6 +99,14 @@ type Invoker interface {
 	//
 	// GET /api/user/
 	ListUsers(ctx context.Context, params ListUsersParams) (ListUsersRes, error)
+	// PasswordChangeSupported invokes passwordChangeSupported operation.
+	//
+	// Returns a boolean telling the client whether self-service password change is available for the
+	// configured user manager. Any valid bearer token may read it; no management permission is required.
+	// Clients may cache the answer for the lifetime of the page.
+	//
+	// GET /api/user/password-change-supported
+	PasswordChangeSupported(ctx context.Context) (PasswordChangeSupportedRes, error)
 	// UpdateUser invokes updateUser operation.
 	//
 	// Updates an existing user. Only the provided fields are changed. The email address (ID) cannot be
@@ -135,6 +158,132 @@ func (c *Client) requestURL(ctx context.Context) *url.URL {
 	return u
 }
 
+// ChangeOwnPassword invokes changeOwnPassword operation.
+//
+// Changes the password of the user identified by the bearer token's `sub` claim. No special
+// permissions are required: any authenticated user may change their own password. The current password
+// is verified against the stored verifier.
+//
+// `oldPassword` is optional in the request schema for compatibility with the administrator reset
+// endpoint, but this endpoint rejects a request that omits it. A successful change revokes every
+// session for that user, including the session carrying this token, so the user must sign in again
+// with the new password.
+//
+// This endpoint is only available when the configured user manager is Emissary-mastered (`ddb`,
+// `filesystem` or `s3`). With any other backend it returns `403 Forbidden`.
+//
+// POST /api/user/change-password
+func (c *Client) ChangeOwnPassword(ctx context.Context, request *ChangeOwnPasswordRequest) (ChangeOwnPasswordRes, error) {
+	res, err := c.sendChangeOwnPassword(ctx, request)
+	return res, err
+}
+
+func (c *Client) sendChangeOwnPassword(ctx context.Context, request *ChangeOwnPasswordRequest) (res ChangeOwnPasswordRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("changeOwnPassword"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/user/change-password"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ChangeOwnPasswordOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/user/change-password"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeChangeOwnPasswordRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+			stage = "Security:BearerAuth"
+			switch err := c.securityBearerAuth(ctx, ChangeOwnPasswordOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"BearerAuth\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	stage = "DecodeResponse"
+	result, err := decodeChangeOwnPasswordResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // ChangePassword invokes changePassword operation.
 //
 // Changes the password for the user with the given email address.
@@ -149,8 +298,8 @@ func (c *Client) requestURL(ctx context.Context) *url.URL {
 //     account. When an admin changes another user's password, the `oldPassword` field is optional (but
 //     if provided, it is verified).
 //
-// Every successful password change revokes all sessions for that user, invalidating their
-// refresh tokens.
+// Every successful password change revokes all sessions for that user, invalidating their refresh
+// tokens.
 //
 // This endpoint is only available when the configured user manager implements `EmissaryAuthManager`
 // (i.e., the `ddb` backend). Otherwise, it returns `403 Forbidden`.
@@ -816,6 +965,121 @@ func (c *Client) sendListUsers(ctx context.Context, params ListUsersParams) (res
 
 	stage = "DecodeResponse"
 	result, err := decodeListUsersResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// PasswordChangeSupported invokes passwordChangeSupported operation.
+//
+// Returns a boolean telling the client whether self-service password change is available for the
+// configured user manager. Any valid bearer token may read it; no management permission is required.
+// Clients may cache the answer for the lifetime of the page.
+//
+// GET /api/user/password-change-supported
+func (c *Client) PasswordChangeSupported(ctx context.Context) (PasswordChangeSupportedRes, error) {
+	res, err := c.sendPasswordChangeSupported(ctx)
+	return res, err
+}
+
+func (c *Client) sendPasswordChangeSupported(ctx context.Context) (res PasswordChangeSupportedRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("passwordChangeSupported"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/user/password-change-supported"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, PasswordChangeSupportedOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/user/password-change-supported"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+			stage = "Security:BearerAuth"
+			switch err := c.securityBearerAuth(ctx, PasswordChangeSupportedOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"BearerAuth\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	stage = "DecodeResponse"
+	result, err := decodePasswordChangeSupportedResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

@@ -3,10 +3,14 @@ info:
   title: Emissary User Management API
   version: 1.0.0
   description: |-
-    User management endpoints for Emissary. These endpoints are available
-    only when the authenticated user carries the `EmissaryUserManagement`
-    permission (a JWT claim) and the configured user manager is
-    Emissary-mastered (the `ddb` backend).
+    User management endpoints for Emissary. Management operations require
+    the authenticated user to carry the `EmissaryUserManagement` permission
+    (a JWT claim). Any authenticated user may change their own password via
+    the self-service password endpoint, or via the password endpoint when
+    the target is their own account. All operations except the capability
+    check require an Emissary-mastered user manager (`ddb`, `filesystem` or
+    `s3`); `GET /api/user/password-change-supported` reports whether that is
+    the case and needs only a valid bearer token.
 
     Every operation in this document lives under the reserved URL prefix
     `/api/user/`. The prefix is owned exclusively by this document: it never
@@ -26,7 +30,7 @@ servers:
       default: mail.example.com
 tags:
 - name: Users
-  description: User management operations (admin only)
+  description: User management operations (admin only, plus self-service password change)
 paths:
   /api/user/:
     get:
@@ -119,6 +123,98 @@ paths:
                 $ref: '#/components/schemas/Error'
         '409':
           description: User already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/user/password-change-supported:
+    get:
+      tags:
+      - Users
+      summary: Report whether this backend supports password changes
+      description: |-
+        Returns a boolean telling the client whether self-service password
+        change is available for the configured user manager. Any valid bearer
+        token may read it; no management permission is required. Clients may
+        cache the answer for the lifetime of the page.
+      operationId: passwordChangeSupported
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: Whether password changes are supported
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PasswordChangeSupportedResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/user/change-password:
+    post:
+      tags:
+      - Users
+      summary: Change the authenticated user's password
+      description: |-
+        Changes the password of the user identified by the bearer token's
+        `sub` claim. No special permissions are required: any authenticated
+        user may change their own password. The current password is verified
+        against the stored verifier.
+
+        `oldPassword` is optional in the request schema for compatibility with
+        the administrator reset endpoint, but this endpoint rejects a request
+        that omits it. A successful change revokes every session for that
+        user, including the session carrying this token, so the user must
+        sign in again with the new password.
+
+        This endpoint is only available when the configured user manager is
+        Emissary-mastered (`ddb`, `filesystem` or `s3`). With any other
+        backend it returns `403 Forbidden`.
+      operationId: changeOwnPassword
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeOwnPasswordRequest'
+      responses:
+        '200':
+          description: Password changed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangePasswordResponse'
+        '400':
+          description: Invalid request (missing or empty oldPassword or newPassword)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The configured user manager does not support password changes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: The authenticated user no longer exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Old password is incorrect
           content:
             application/json:
               schema:
@@ -357,7 +453,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: The access token from login or refresh (requires EmissaryUserManagement claim)
+      description: The access token from login or refresh (management operations require the EmissaryUserManagement claim)
   schemas:
     User:
       type: object
@@ -493,6 +589,24 @@ components:
           type: boolean
           default: true
       additionalProperties: false
+    ChangeOwnPasswordRequest:
+      type: object
+      required:
+      - newPassword
+      properties:
+        oldPassword:
+          type: string
+          format: password
+          description: |-
+            The user's current password. Optional in this schema for
+            compatibility with the administrator reset request, but required
+            and verified by the self-service endpoint.
+        newPassword:
+          type: string
+          format: password
+          minLength: 1
+          description: The new password (will be salted and stored)
+      additionalProperties: false
     ChangePasswordRequest:
       type: object
       required:
@@ -516,6 +630,15 @@ components:
         success:
           type: boolean
           default: true
+      additionalProperties: false
+    PasswordChangeSupportedResponse:
+      type: object
+      required:
+      - supported
+      properties:
+        supported:
+          type: boolean
+          description: True when the configured user manager can store password verifiers
       additionalProperties: false
     Error:
       type: object

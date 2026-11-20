@@ -27,6 +27,55 @@ func (s *BearerAuth) SetRoles(val []string) {
 	s.Roles = val
 }
 
+type ChangeOwnPasswordBadRequest Error
+
+func (*ChangeOwnPasswordBadRequest) changeOwnPasswordRes() {}
+
+type ChangeOwnPasswordConflict Error
+
+func (*ChangeOwnPasswordConflict) changeOwnPasswordRes() {}
+
+type ChangeOwnPasswordForbidden Error
+
+func (*ChangeOwnPasswordForbidden) changeOwnPasswordRes() {}
+
+type ChangeOwnPasswordNotFound Error
+
+func (*ChangeOwnPasswordNotFound) changeOwnPasswordRes() {}
+
+// Ref: #/components/schemas/ChangeOwnPasswordRequest
+type ChangeOwnPasswordRequest struct {
+	// The user's current password. Optional in this schema for compatibility with the administrator reset
+	// request, but required and verified by the self-service endpoint.
+	OldPassword OptString `json:"oldPassword"`
+	// The new password (will be salted and stored).
+	NewPassword string `json:"newPassword"`
+}
+
+// GetOldPassword returns the value of OldPassword.
+func (s *ChangeOwnPasswordRequest) GetOldPassword() OptString {
+	return s.OldPassword
+}
+
+// GetNewPassword returns the value of NewPassword.
+func (s *ChangeOwnPasswordRequest) GetNewPassword() string {
+	return s.NewPassword
+}
+
+// SetOldPassword sets the value of OldPassword.
+func (s *ChangeOwnPasswordRequest) SetOldPassword(val OptString) {
+	s.OldPassword = val
+}
+
+// SetNewPassword sets the value of NewPassword.
+func (s *ChangeOwnPasswordRequest) SetNewPassword(val string) {
+	s.NewPassword = val
+}
+
+type ChangeOwnPasswordUnauthorized Error
+
+func (*ChangeOwnPasswordUnauthorized) changeOwnPasswordRes() {}
+
 type ChangePasswordBadRequest Error
 
 func (*ChangePasswordBadRequest) changePasswordRes() {}
@@ -87,7 +136,8 @@ func (s *ChangePasswordResponse) SetSuccess(val bool) {
 	s.Success = val
 }
 
-func (*ChangePasswordResponse) changePasswordRes() {}
+func (*ChangePasswordResponse) changeOwnPasswordRes() {}
+func (*ChangePasswordResponse) changePasswordRes()    {}
 
 type ChangePasswordUnauthorized Error
 
@@ -230,6 +280,8 @@ func (s *Error) GetError() string {
 func (s *Error) SetError(val string) {
 	s.Error = val
 }
+
+func (*Error) passwordChangeSupportedRes() {}
 
 type GetUserForbidden Error
 
@@ -388,6 +440,24 @@ func (o OptString) Or(d string) string {
 	}
 	return d
 }
+
+// Ref: #/components/schemas/PasswordChangeSupportedResponse
+type PasswordChangeSupportedResponse struct {
+	// True when the configured user manager can store password verifiers.
+	Supported bool `json:"supported"`
+}
+
+// GetSupported returns the value of Supported.
+func (s *PasswordChangeSupportedResponse) GetSupported() bool {
+	return s.Supported
+}
+
+// SetSupported sets the value of Supported.
+func (s *PasswordChangeSupportedResponse) SetSupported(val bool) {
+	s.Supported = val
+}
+
+func (*PasswordChangeSupportedResponse) passwordChangeSupportedRes() {}
 
 type UpdateUserBadRequest Error
 

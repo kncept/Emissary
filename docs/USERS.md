@@ -89,15 +89,17 @@ later with the Change Password endpoint.
 
 ## Change Password
 
-Any authenticated user can change their own password via `POST /api/user/{email}/password`. The endpoint requires the current password (for verification) and the new password.
+Clients can discover whether password change is available with `GET /api/user/password-change-supported`. It needs only a valid bearer token and returns `{"supported": true}` or `{"supported": false}` for every backend. The frontend calls this once per page load, caches the answer in memory, and hides the Settings screen's **Change password** UI when it is unsupported.
 
-Administrators with the `EmissaryUserManagement` claim can change any user's password. When an admin changes another user's password, the `oldPassword` field is optional (but if provided, it is verified).
+Any authenticated user can change their own password via `POST /api/user/change-password`. The account is taken from the bearer token's `sub` claim, so no email or special permission is needed. The current password is verified against the stored verifier, and the new password is stored with the backend's password hashing scheme.
+
+The same operation is available via `POST /api/user/{email}/password` when the path names the authenticated user. Administrators with the `EmissaryUserManagement` claim can also use that endpoint to change any user's password. When an admin changes another user's password, the `oldPassword` field is optional in the spec (but if provided, it is verified).
 
 Resetting a privileged account (one with the System Manager or User Manager role) additionally requires the caller to have the `systemManager` claim. This prevents a User Manager from escalating to System Manager by resetting a System Manager's password. Users can always change their own password with their current password.
 
 Every successful password change revokes all sessions for that user, so refresh tokens issued before the change can no longer be exchanged.
 
-The endpoint is only available when the configured user manager implements `EmissaryAuthManager` (i.e., the `ddb` or `s3` backend). Otherwise, it returns `403 Forbidden`.
+The change endpoints are only available when the configured user manager implements `EmissaryAuthManager` (i.e., the `ddb`, `filesystem` or `s3` backend). Otherwise, they return `403 Forbidden`; the capability endpoint still returns `{"supported": false}`.
 
 Request body:
 ```json
@@ -212,7 +214,7 @@ The autocomplete endpoint lives under the `/api/user/` prefix but is served dire
 | --- | --- | --- | --- |
 | `GET` | `/api/user/autocomplete` | Bearer\* | Search users by partial user ID (email address) for admin masquerade. |
 
-\* Requires `EmissaryUserManagement` JWT claim and Emissary-mastered user manager (`ddb` or `s3` backend).
+\* Requires `EmissaryUserManagement` JWT claim and an Emissary-mastered user manager (`ddb`, `filesystem` or `s3` backend).
 
 **Request:**
 - Query parameter `q` (string): the partial user ID (email address) to search (minimum 3 characters).
@@ -251,6 +253,6 @@ masquerade by checking the `EmissaryUserManagement` claim.
 
 ## Status
 
-The user management API is implemented in `api/users.yaml` and `mailer/handler/users.go`. The `ddb` user manager is implemented in `mailer/usermanager/ddb.go` and backs the `users` DynamoDB table, using the user's email address as the `id` partition key. The `s3` user manager is implemented in `mailer/usermanager/s3.go` and stores each user as a plain JSON write-out of the `EmissaryUser` at `users/<email>/user.json` in the mail storage bucket; a mailbox directory without a `user.json` is not a user. Passwords are stored using the salt-prefix scheme described above (defaulting to bcrypt for new hashes; existing `ddb` records use `p2-` PBKDF2-SHA256). The `ldap` and `none` backends do not implement `EmissaryAuthManager` and therefore do not support user management operations (including password change).
+The user management API is implemented in `api/users.yaml` and `mailer/handler/users.go`. The `ddb` user manager is implemented in `mailer/usermanager/ddb.go` and backs the `users` DynamoDB table, using the user's email address as the `id` partition key. The `s3` user manager is implemented in `mailer/usermanager/s3.go` and stores each user as a plain JSON write-out of the `EmissaryUser` at `users/<email>/user.json` in the mail storage bucket; a mailbox directory without a `user.json` is not a user. The `filesystem` backend stores users under the configured filesystem root. Passwords are stored using the salt-prefix scheme described above (defaulting to bcrypt for new hashes; existing `ddb` records use `p2-` PBKDF2-SHA256). The `ldap` and `none` backends do not implement `EmissaryAuthManager` and therefore do not support user management operations (including password change).
 
 See [AUTH.md](AUTH.md) for login, refresh and the token claims, [API.md](API.md) for the endpoints as implemented, and [CONFIGURATION.md](CONFIGURATION.md) for `USER_MANAGER` and the backend settings.

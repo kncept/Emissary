@@ -16,6 +16,9 @@ type Handler interface {
 	// users; see docs/USERS.md), the password is checked against the user's stored salted password, and a
 	// disabled user is rejected with 403.
 	//
+	// Failed attempts are rate limited per client IP and per account. Once the limit is reached, further
+	// attempts receive 429 with a `Retry-After` header until the window elapses.
+	//
 	// POST /api/auth/login
 	Login(ctx context.Context, req *LoginRequest) (LoginRes, error)
 	// Refresh implements refresh operation.

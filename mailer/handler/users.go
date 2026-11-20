@@ -289,7 +289,7 @@ func (h *usersHandler) ChangePassword(ctx context.Context, req *usersapi.ChangeP
 		return &usersapi.ChangePasswordBadRequest{Error: "new password is required"}, nil
 	}
 
-	if err := h.manager.ChangePassword(ctx, params.Email, oldPassword, req.NewPassword); err != nil {
+	if err := h.applyPasswordChange(ctx, params.Email, oldPassword, req.NewPassword); err != nil {
 		switch {
 		case errors.Is(err, usermanager.ErrUserNotFound):
 			slog.Debug("Change password: user not found", "email", params.Email)
@@ -297,25 +297,82 @@ func (h *usersHandler) ChangePassword(ctx context.Context, req *usersapi.ChangeP
 		case errors.Is(err, usermanager.ErrInvalidCredentials):
 			slog.Warn("Change password: old password incorrect", "email", params.Email)
 			return &usersapi.ChangePasswordConflict{Error: "old password is incorrect"}, nil
+		case errors.Is(err, errSessionRevocation):
+			return &usersapi.ChangePasswordBadRequest{Error: "password changed but failed to revoke sessions"}, nil
 		default:
 			slog.Error("Change password failed", "email", params.Email, "err", err)
 			return &usersapi.ChangePasswordBadRequest{Error: "failed to change password"}, nil
 		}
 	}
-	// Every successful password set/reset invalidates the target's sessions,
-	// including self-service changes and resets of non-privileged accounts.
-	// Otherwise a session created before the change could still be refreshed.
-	if h.auth != nil {
-		if err := h.auth.RevokeUserSessions(ctx, params.Email); err != nil {
-			slog.Error("Failed to revoke sessions after password change", "email", params.Email, "err", err)
-			return &usersapi.ChangePasswordBadRequest{Error: "password changed but failed to revoke sessions"}, nil
-		}
-	} else {
-		slog.Warn("Password changed without session revocation: no authenticator configured", "email", params.Email)
-	}
-	slog.Info("Password changed", "email", params.Email)
 
 	return &usersapi.ChangePasswordResponse{Success: true}, nil
+}
+
+// PasswordChangeSupported reports that the generated users API is backed by a
+// manager that owns password verifiers. A plain JWT is enough; the generated
+// security handler has already validated the token.
+func (h *usersHandler) PasswordChangeSupported(context.Context) (usersapi.PasswordChangeSupportedRes, error) {
+	return &usersapi.PasswordChangeSupportedResponse{Supported: true}, nil
+}
+
+// ChangeOwnPassword changes the password of the account in the bearer token.
+// No management claim is needed, but the current password must be supplied:
+// possessing a token alone must not be enough to take over an account.
+func (h *usersHandler) ChangeOwnPassword(ctx context.Context, req *usersapi.ChangeOwnPasswordRequest) (usersapi.ChangeOwnPasswordRes, error) {
+	claims := currentClaimsFromContext(ctx)
+	email := ""
+	if claims != nil {
+		email = strings.TrimSpace(claims.Subject)
+	}
+	if email == "" {
+		return &usersapi.ChangeOwnPasswordUnauthorized{Error: "authentication required"}, nil
+	}
+	if !req.OldPassword.IsSet() || req.OldPassword.Value == "" {
+		return &usersapi.ChangeOwnPasswordBadRequest{Error: "old password is required"}, nil
+	}
+	if req.NewPassword == "" {
+		return &usersapi.ChangeOwnPasswordBadRequest{Error: "new password is required"}, nil
+	}
+
+	if err := h.applyPasswordChange(ctx, email, req.OldPassword.Value, req.NewPassword); err != nil {
+		switch {
+		case errors.Is(err, usermanager.ErrUserNotFound):
+			slog.Debug("Change own password: user not found", "email", email)
+			return &usersapi.ChangeOwnPasswordNotFound{Error: "user not found"}, nil
+		case errors.Is(err, usermanager.ErrInvalidCredentials):
+			slog.Warn("Change own password: old password incorrect", "email", email)
+			return &usersapi.ChangeOwnPasswordConflict{Error: "old password is incorrect"}, nil
+		case errors.Is(err, errSessionRevocation):
+			return &usersapi.ChangeOwnPasswordBadRequest{Error: "password changed but failed to revoke sessions"}, nil
+		default:
+			slog.Error("Change own password failed", "email", email, "err", err)
+			return &usersapi.ChangeOwnPasswordBadRequest{Error: "failed to change password"}, nil
+		}
+	}
+
+	return &usersapi.ChangePasswordResponse{Success: true}, nil
+}
+
+var errSessionRevocation = errors.New("failed to revoke sessions")
+
+// applyPasswordChange stores the new verifier and revokes the target's
+// sessions. Every successful password set/reset invalidates those sessions,
+// including self-service changes, so a session created before the change
+// cannot still be refreshed.
+func (h *usersHandler) applyPasswordChange(ctx context.Context, email, oldPassword, newPassword string) error {
+	if err := h.manager.ChangePassword(ctx, email, oldPassword, newPassword); err != nil {
+		return err
+	}
+	if h.auth != nil {
+		if err := h.auth.RevokeUserSessions(ctx, email); err != nil {
+			slog.Error("Failed to revoke sessions after password change", "email", email, "err", err)
+			return errSessionRevocation
+		}
+	} else {
+		slog.Warn("Password changed without session revocation: no authenticator configured", "email", email)
+	}
+	slog.Info("Password changed", "email", email)
+	return nil
 }
 
 // isPrivilegedUser reports whether the account holds a management role. Both
