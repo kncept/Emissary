@@ -12,9 +12,14 @@
  * - the Session resource (`/.well-known/jmap`);
  * - the batched API request/response envelope (`/api/jmap/`);
  * - binary upload/download (`uploadUrl`, `downloadUrl`);
- * - the EventSource push endpoint (`eventSourceUrl`);
  * - the request and response arguments for every method required by a
  *   minimal RFC 8621 mail implementation.
+ *
+ * State changes are observed by polling `Foo/changes` and
+ * `Foo/queryChanges`. As Lambda is a primary target, this document defines
+ * polling-only behaviour; working out state change events is a future
+ * requirement. EventSource `StateChange` events, including `EmailDelivery`,
+ * are not advertised by the Session object.
  *
  * This document defines no authentication operations. All auth
  * operations (login, refresh, and any future auth endpoints) are
@@ -40,8 +45,6 @@
  * - VacationResponse: `get`, `set`
  * - PushSubscription: `get`, `set`
  * - Blob: `copy`
- *
- * `EmailDelivery` is a push-only type; it has no methods.
  * OpenAPI spec version: 1.0.0
  */
 import type {
@@ -50,7 +53,6 @@ import type {
   JmapRequest,
   JmapResponse,
   ProblemDetails,
-  PushConnectionParams,
   Session,
   UploadResponse
 } from './schemas/jmap';
@@ -316,64 +318,4 @@ export const downloadBinary = async (accountId: Id,
   const body = [204, 205, 304].includes(res.status) ? null : await res.blob();
   const data: downloadBinaryResponse['data'] = body as downloadBinaryResponse['data']
   return { data, status: res.status, headers: res.headers } as downloadBinaryResponse
-}
-
-
-
-export type pushConnectionResponse200 = {
-  data: string
-  status: 200
-}
-
-export type pushConnectionResponse401 = {
-  data: ProblemDetails
-  status: 401
-}
-
-export type pushConnectionResponseSuccess = (pushConnectionResponse200) & {
-  headers: Headers;
-};
-export type pushConnectionResponseError = (pushConnectionResponse401) & {
-  headers: Headers;
-};
-
-export type pushConnectionResponse = (pushConnectionResponseSuccess | pushConnectionResponseError)
-
-export const getPushConnectionUrl = (params: PushConnectionParams,) => {
-  const normalizedParams = new URLSearchParams();
-
-  Object.entries(params || {}).forEach(([key, value]) => {
-
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? 'null' : String(value))
-    }
-  });
-
-  const stringifiedParams = normalizedParams.toString();
-
-  return stringifiedParams.length > 0 ? `/eventsource?${stringifiedParams}` : `/eventsource`
-}
-
-/**
- * Long-running `text/event-stream` connection. The server emits `state`
- * events whose data is a `StateChange` object, and `ping` events whose
- * data is `{"interval": <seconds>}`.
- * @summary EventSource push connection
- */
-export const pushConnection = async (params: PushConnectionParams, options?: RequestInit): Promise<pushConnectionResponse> => {
-
-  const res = await fetch(getPushConnectionUrl(params),
-  {
-    ...options,
-    method: 'GET'
-
-
-  }
-)
-
-  const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
-  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
-
-  const data: pushConnectionResponse['data'] = body ? (contentType.includes('json') ? JSON.parse(body) : body) : {}
-  return { data, status: res.status, headers: res.headers } as pushConnectionResponse
 }

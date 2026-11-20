@@ -57,7 +57,10 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 		return nil, nil, err
 	}
 
-	oldState := h.deps.Changes.State(accountID, base.StateSubmission)
+	oldState, err := h.deps.Changes.State(ctx, accountID, base.StateSubmission)
+	if err != nil {
+		return nil, nil, err
+	}
 	created := make(map[string]interface{})
 	notCreated := make(map[string]interface{})
 	notUpdated := make(map[string]interface{})
@@ -275,7 +278,9 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 		}
 		successful[submission.EmailID] = submission.EmailID
 		successful["#"+createID] = submission.EmailID
-		h.deps.Changes.Record(accountID, base.StateSubmission, submission.EmailID, base.ChangeCreate)
+		if err := h.deps.Changes.Record(ctx, accountID, base.StateSubmission, submission.EmailID, base.ChangeCreate); err != nil {
+			return nil, nil, err
+		}
 
 		// Success - create the submission object
 		created[createID] = map[string]interface{}{
@@ -343,10 +348,14 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 		}
 	}
 
+	newState, err := h.deps.Changes.State(ctx, accountID, base.StateSubmission)
+	if err != nil {
+		return nil, nil, err
+	}
 	resp := map[string]interface{}{
 		"accountId":    accountID,
 		"oldState":     oldState,
-		"newState":     h.deps.Changes.State(accountID, base.StateSubmission),
+		"newState":     newState,
 		"created":      created,
 		"notCreated":   notCreated,
 		"notUpdated":   notUpdated,
@@ -368,7 +377,7 @@ func (h *Handler) EmailSubmissionChanges(ctx context.Context, accountID string, 
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
-	result, err := h.deps.Changes.ChangesFrom(accountID, base.StateSubmission, req.SinceState, req.MaxChanges)
+	result, err := h.deps.Changes.ChangesFrom(ctx, accountID, base.StateSubmission, req.SinceState, req.MaxChanges)
 	if err != nil {
 		return nil, err
 	}

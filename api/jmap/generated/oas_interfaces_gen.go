@@ -13,10 +13,6 @@ type GetSessionRes interface {
 	getSessionRes()
 }
 
-type PushConnectionRes interface {
-	pushConnectionRes()
-}
-
 type UploadBinaryRes interface {
 	uploadBinaryRes()
 }

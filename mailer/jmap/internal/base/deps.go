@@ -40,7 +40,7 @@ func NewDeps(store storage.Storage, meta metadata.MetadataStore, userMgr userman
 		Metadata: meta,
 		UserMgr:  userMgr,
 		Sender:   mailSender,
-		Changes:  NewTracker(),
+		Changes:  NewTracker(store),
 	}
 	for _, validator := range validators {
 		if validator != nil {

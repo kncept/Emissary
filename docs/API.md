@@ -39,10 +39,9 @@ never overlap:
   path under it. These endpoints require the `EmissaryUserManagement`
   JWT claim and an Emissary-mastered user manager (the `ddb` backend).
 - [`api/jmap.yaml`](../api/jmap.yaml) — JMAP (RFC 8620/8621): the
-  session resource, the batched API endpoint, binary upload/download
-  and the EventSource connection. It defines **no** auth operations;
-  none of its paths may fall under `/api/auth/`, `/api/user/` or
-  `/api/support/`.
+  session resource, the batched API endpoint, and binary upload/download.
+  It defines **no** auth operations; none of its paths may fall under
+  `/api/auth/`, `/api/user/` or `/api/support/`.
 - [`api/support.yaml`](../api/support.yaml) — administrative support and
   diagnostics (System Managers only). **Every operation lives under the reserved
   URL prefix `/api/support/`.** The prefix is owned exclusively by this
@@ -105,7 +104,6 @@ not generated from `users.yaml`: it is served directly by the configured
 | `POST` | `/upload/{accountId}` | Bearer | Upload binary data (attachments). |
 | `GET` | `/download/{accountId}/{blobId}/{name}` | Bearer | Download binary data. |
 | `GET` | `/api/email/raw` | Bearer | Get the original RFC 5322 message for one email id. |
-| `GET` | `/eventsource` | Bearer | EventSource push connection. |
 
 \* Requires `EmissaryUserManagement` JWT claim and an Emissary-mastered user manager (`ddb`, `filesystem` or `s3`). A user cannot delete their own account (`403 Forbidden`).
 
@@ -458,7 +456,6 @@ and API endpoints:
   "apiUrl": "/api/jmap/",
   "downloadUrl": "/download/{accountId}/{blobId}/{name}?type={type}",
   "uploadUrl": "/upload/{accountId}",
-  "eventSourceUrl": "/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
   "state": "session-0"
 }
 ```
@@ -620,6 +617,27 @@ them when placing an ID in a route. The `mailboxIds` returned by
 - `POST /upload/{accountId}` — Upload binary data (e.g., attachments). Returns `{ "accountId": "...", "blobId": "...", "type": "application/pdf", "size": 12345 }`
 - `GET /download/{accountId}/{blobId}/{name}?type=...` — Download binary data
 
-## EventSource Push
+## State changes and polling
 
-- `GET /eventsource?types=*&ping=30` — Long-running Server-Sent Events connection for push notifications.
+Emissary is polling-only. The per-type `state` tokens returned by `Foo/get`
+and the `queryState` tokens returned by `Foo/query` are persisted with the
+account's mail data, so they survive restarts and do not regress when
+concurrent Lambda invocations update the same account. A state token changes
+only when the underlying data (or, for query states, the ordered query result
+set) changes. Query states are scoped to the filter and sort that produced
+them.
+
+Clients detect changes by polling:
+
+- `Foo/changes` with `sinceState` returns `created`, `updated`, `destroyed`,
+  `newState` and `hasMoreChanges`.
+- `Foo/queryChanges` with `sinceQueryState` returns `added` (with the new
+  `index` of each item), `removed`, `newQueryState` and
+  `canCalculateChanges`. When `canCalculateChanges` is `false`, refetch the
+  query with `Foo/query`.
+
+As we are supporting Lambda as a primary target, we document polling-only
+behaviour: working out state change events is a future requirement. There is
+no `/eventsource` route and the Session object does not advertise
+`eventSourceUrl`. EventSource `StateChange` events, including `EmailDelivery`
+notifications, are not available.

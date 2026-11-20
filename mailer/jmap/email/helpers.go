@@ -123,19 +123,19 @@ func messageIDDomain(address string) string {
 }
 
 // syncEmailState refreshes the Email snapshots from storage.
-func (h *Handler) syncEmailState(ctx context.Context, accountID string) string {
+func (h *Handler) syncEmailState(ctx context.Context, accountID string) (string, error) {
 	listed, err := h.deps.Storage.ListEmails(ctx, accountID, "")
 	if err != nil {
 		// Keep the last known state; a storage failure must not invent a
 		// change or erase the delta history.
-		return h.deps.Changes.State(accountID, base.StateEmail)
+		return h.deps.Changes.State(ctx, accountID, base.StateEmail)
 	}
 	return h.syncEmailStateFromListed(ctx, accountID, listed)
 }
 
 // syncEmailStateFromListed avoids a second storage listing when the caller has
 // already loaded the account's full mailbox (Email/get does this).
-func (h *Handler) syncEmailStateFromListed(ctx context.Context, accountID string, listed []*mailemail.ListedEmail) string {
+func (h *Handler) syncEmailStateFromListed(ctx context.Context, accountID string, listed []*mailemail.ListedEmail) (string, error) {
 	snapshot := make(map[string]string, len(listed))
 	for _, item := range listed {
 		if item == nil || item.Ref == nil || item.Email == nil {
@@ -143,11 +143,12 @@ func (h *Handler) syncEmailStateFromListed(ctx context.Context, accountID string
 		}
 		snapshot[item.Ref.ID] = emailFingerprint(item, base.EmailMetadata(ctx, h.deps, accountID, item.Ref.ID))
 	}
-	h.deps.Changes.Sync(accountID, map[base.StateKind]map[string]string{
-		base.StateEmail:      snapshot,
-		base.StateEmailQuery: snapshot,
-	})
-	return h.deps.Changes.State(accountID, base.StateEmail)
+	if err := h.deps.Changes.Sync(ctx, accountID, map[base.StateKind]map[string]string{
+		base.StateEmail: snapshot,
+	}); err != nil {
+		return "", err
+	}
+	return h.deps.Changes.State(ctx, accountID, base.StateEmail)
 }
 
 // emailFingerprint incorporates every property Emissary can change on an

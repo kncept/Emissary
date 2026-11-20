@@ -13,9 +13,14 @@ info:
     - the Session resource (`/.well-known/jmap`);
     - the batched API request/response envelope (`/api/jmap/`);
     - binary upload/download (`uploadUrl`, `downloadUrl`);
-    - the EventSource push endpoint (`eventSourceUrl`);
     - the request and response arguments for every method required by a
       minimal RFC 8621 mail implementation.
+
+    State changes are observed by polling `Foo/changes` and
+    `Foo/queryChanges`. As Lambda is a primary target, this document defines
+    polling-only behaviour; working out state change events is a future
+    requirement. EventSource `StateChange` events, including `EmailDelivery`,
+    are not advertised by the Session object.
 
     This document defines no authentication operations. All auth
     operations (login, refresh, and any future auth endpoints) are
@@ -41,8 +46,6 @@ info:
     - VacationResponse: `get`, `set`
     - PushSubscription: `get`, `set`
     - Blob: `copy`
-
-    `EmailDelivery` is a push-only type; it has no methods.
   contact:
     name: IETF
     email: jmap@ietf.org
@@ -243,53 +246,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
-  /eventsource:
-    get:
-      tags:
-      - Push
-      summary: EventSource push connection
-      description: |-
-        Long-running `text/event-stream` connection. The server emits `state`
-        events whose data is a `StateChange` object, and `ping` events whose
-        data is `{"interval": <seconds>}`.
-      operationId: pushConnection
-      parameters:
-      - name: types
-        in: query
-        required: true
-        description: Comma-separated type names, or `*` for all types
-        schema:
-          type: string
-      - name: closeafter
-        in: query
-        required: false
-        schema:
-          type: string
-          enum:
-          - state
-          - 'no'
-          default: 'no'
-      - name: ping
-        in: query
-        required: false
-        description: Ping interval in seconds; 0 disables ping events
-        schema:
-          type: integer
-          minimum: 0
-          default: 0
-      responses:
-        '200':
-          description: Server-sent event stream
-          content:
-            text/event-stream:
-              schema:
-                type: string
-        '401':
-          description: Authentication required
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProblemDetails'
 components:
   securitySchemes:
     basicAuth:
@@ -362,7 +318,6 @@ components:
       - apiUrl
       - downloadUrl
       - uploadUrl
-      - eventSourceUrl
       - state
       properties:
         capabilities:
@@ -391,11 +346,6 @@ components:
           description: |-
             URI Template (RFC 6570 level 1) containing the variable
             `accountId`.
-        eventSourceUrl:
-          type: string
-          description: |-
-            URI Template (RFC 6570 level 1) containing the variables
-            `types`, `closeafter`, and `ping`.
         state:
           type: string
       additionalProperties: true
@@ -2968,38 +2918,6 @@ components:
             $ref: '#/components/schemas/SetError'
           nullable: true
       additionalProperties: true
-    StateChange:
-      type: object
-      description: |-
-        The object pushed as the data of a `state` event on the Event
-        Source connection (RFC 8620 Section 7.1).
-      required:
-      - '@type'
-      - changed
-      properties:
-        '@type':
-          type: string
-          enum:
-          - StateChange
-          description: MUST be the string "StateChange"
-        changed:
-          type: object
-          description: |-
-            Map of account id to the types that changed for that
-            account since the last StateChange object
-          propertyNames:
-            $ref: '#/components/schemas/Id'
-          additionalProperties:
-            $ref: '#/components/schemas/TypeState'
-      additionalProperties: false
-    TypeState:
-      type: object
-      description: |-
-        A map of type name (for example `Email`) to the `state` string
-        that would currently be returned by a `Foo/get` call for that
-        type in this account.
-      additionalProperties:
-        type: string
 x-jmap-methods:
 - name: Core/echo
   capability: urn:ietf:params:jmap:core

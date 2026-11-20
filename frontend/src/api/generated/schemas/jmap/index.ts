@@ -12,9 +12,14 @@
  * - the Session resource (`/.well-known/jmap`);
  * - the batched API request/response envelope (`/api/jmap/`);
  * - binary upload/download (`uploadUrl`, `downloadUrl`);
- * - the EventSource push endpoint (`eventSourceUrl`);
  * - the request and response arguments for every method required by a
  *   minimal RFC 8621 mail implementation.
+ *
+ * State changes are observed by polling `Foo/changes` and
+ * `Foo/queryChanges`. As Lambda is a primary target, this document defines
+ * polling-only behaviour; working out state change events is a future
+ * requirement. EventSource `StateChange` events, including `EmailDelivery`,
+ * are not advertised by the Session object.
  *
  * This document defines no authentication operations. All auth
  * operations (login, refresh, and any future auth endpoints) are
@@ -40,8 +45,6 @@
  * - VacationResponse: `get`, `set`
  * - PushSubscription: `get`, `set`
  * - Blob: `copy`
- *
- * `EmailDelivery` is a push-only type; it has no methods.
  * OpenAPI spec version: 1.0.0
  */
 
@@ -203,8 +206,6 @@ export * from './mailCapability';
 export * from './patchObject';
 export * from './problemDetails';
 export * from './problemDetailsLimit';
-export * from './pushConnectionCloseafter';
-export * from './pushConnectionParams';
 export * from './pushKeys';
 export * from './pushSubscription';
 export * from './pushSubscriptionCreate';
@@ -233,9 +234,6 @@ export * from './sessionCapabilitiesUrnIetfParamsJmapSubmission';
 export * from './sessionCapabilitiesUrnIetfParamsJmapVacationresponse';
 export * from './sessionPrimaryAccounts';
 export * from './setError';
-export * from './stateChange';
-export * from './stateChangeChanged';
-export * from './stateChangeType';
 export * from './stringBooleanMap';
 export * from './submissionCapability';
 export * from './submissionCapabilitySubmissionExtensions';
@@ -244,7 +242,6 @@ export * from './threadChangesRequest';
 export * from './threadChangesResponse';
 export * from './threadGetRequest';
 export * from './threadGetResponse';
-export * from './typeState';
 export * from './unsignedInt';
 export * from './uploadResponse';
 export * from './uTCDate';

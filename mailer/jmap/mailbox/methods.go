@@ -24,7 +24,10 @@ func (h *Handler) MailboxGet(ctx context.Context, accountID string, args json.Ra
 	mailboxes := h.getMailboxes(ctx, accountID)
 	var list []Mailbox
 	var notFound []string
-	state := h.syncMailboxState(ctx, accountID, mailboxes)
+	state, err := h.syncMailboxState(ctx, accountID, mailboxes)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(req.IDs) > 0 {
 		mailboxMap := make(map[string]Mailbox)
@@ -85,7 +88,10 @@ func (h *Handler) MailboxSet(ctx context.Context, accountID string, args json.Ra
 		notDestroyed[id] = map[string]string{"type": "forbidden", "description": "Cannot destroy mailboxes"}
 	}
 
-	state := h.deps.Changes.State(accountID, base.StateMailbox)
+	state, err := h.deps.Changes.State(ctx, accountID, base.StateMailbox)
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]interface{}{
 		"accountId":    accountID,
 		"oldState":     state,
@@ -110,55 +116,50 @@ func (h *Handler) MailboxChanges(ctx context.Context, accountID string, args jso
 		return nil, err
 	}
 
-	h.syncMailboxState(ctx, accountID, h.getMailboxes(ctx, accountID))
-	result, err := h.deps.Changes.ChangesFrom(accountID, base.StateMailbox, req.SinceState, req.MaxChanges)
+	if _, err := h.syncMailboxState(ctx, accountID, h.getMailboxes(ctx, accountID)); err != nil {
+		return nil, err
+	}
+	result, err := h.deps.Changes.ChangesFrom(ctx, accountID, base.StateMailbox, req.SinceState, req.MaxChanges)
 	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(result)
 }
 
-func (h *Handler) MailboxQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		AccountID string `json:"accountId"`
-		Filter    *struct {
-			ParentID     *string `json:"parentId,omitempty"`
-			Name         *string `json:"name,omitempty"`
-			Role         *string `json:"role,omitempty"`
-			HasAnyRole   *bool   `json:"hasAnyRole,omitempty"`
-			IsSubscribed *bool   `json:"isSubscribed,omitempty"`
-		} `json:"filter,omitempty"`
-		Sort         []interface{} `json:"sort,omitempty"`
-		Position     *int          `json:"position,omitempty"`
-		Anchor       *string       `json:"anchor,omitempty"`
-		AnchorOffset *int          `json:"anchorOffset,omitempty"`
-		Limit        *int          `json:"limit,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
+// mailboxFilter is shared by Mailbox/query and Mailbox/queryChanges so the
+// queryState token always describes the same result set.
+type mailboxFilter struct {
+	ParentID     *string `json:"parentId,omitempty"`
+	Name         *string `json:"name,omitempty"`
+	Role         *string `json:"role,omitempty"`
+	HasAnyRole   *bool   `json:"hasAnyRole,omitempty"`
+	IsSubscribed *bool   `json:"isSubscribed,omitempty"`
+}
+
+// queryMailboxIDs refreshes the object state and returns the full filtered
+// result set, before pagination.
+func (h *Handler) queryMailboxIDs(ctx context.Context, accountID string, filter *mailboxFilter) ([]string, error) {
+	mailboxes := h.getMailboxes(ctx, accountID)
+	if _, err := h.syncMailboxState(ctx, accountID, mailboxes); err != nil {
 		return nil, err
 	}
-
-	mailboxes := h.getMailboxes(ctx, accountID)
-	state := h.syncMailboxState(ctx, accountID, mailboxes)
-
-	// Apply filter if provided
-	if req.Filter != nil {
-		filtered := make([]Mailbox, 0)
+	if filter != nil {
+		filtered := make([]Mailbox, 0, len(mailboxes))
 		for _, mb := range mailboxes {
 			match := true
-			if req.Filter.ParentID != nil && (mb.ParentID == nil || *mb.ParentID != *req.Filter.ParentID) {
+			if filter.ParentID != nil && (mb.ParentID == nil || *mb.ParentID != *filter.ParentID) {
 				match = false
 			}
-			if req.Filter.Name != nil && !strings.Contains(strings.ToLower(mb.Name), strings.ToLower(*req.Filter.Name)) {
+			if filter.Name != nil && !strings.Contains(strings.ToLower(mb.Name), strings.ToLower(*filter.Name)) {
 				match = false
 			}
-			if req.Filter.Role != nil && (mb.Role == nil || *mb.Role != *req.Filter.Role) {
+			if filter.Role != nil && (mb.Role == nil || *mb.Role != *filter.Role) {
 				match = false
 			}
-			if req.Filter.HasAnyRole != nil && *req.Filter.HasAnyRole && (mb.Role == nil || *mb.Role == "") {
+			if filter.HasAnyRole != nil && *filter.HasAnyRole && (mb.Role == nil || *mb.Role == "") {
 				match = false
 			}
-			if req.Filter.IsSubscribed != nil && mb.IsSubscribed != *req.Filter.IsSubscribed {
+			if filter.IsSubscribed != nil && mb.IsSubscribed != *filter.IsSubscribed {
 				match = false
 			}
 			if match {
@@ -167,38 +168,75 @@ func (h *Handler) MailboxQuery(ctx context.Context, accountID string, args json.
 		}
 		mailboxes = filtered
 	}
-
-	start, end := base.PageBounds(len(mailboxes), req.Position, req.Limit)
-	result := mailboxes[start:end]
-	ids := make([]string, len(result))
-	for i, mb := range result {
+	ids := make([]string, len(mailboxes))
+	for i, mb := range mailboxes {
 		ids[i] = mb.ID
+	}
+	return ids, nil
+}
+
+func (h *Handler) MailboxQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
+	var req struct {
+		AccountID    string         `json:"accountId"`
+		Filter       *mailboxFilter `json:"filter,omitempty"`
+		Sort         []interface{}  `json:"sort,omitempty"`
+		Position     *int           `json:"position,omitempty"`
+		Anchor       *string        `json:"anchor,omitempty"`
+		AnchorOffset *int           `json:"anchorOffset,omitempty"`
+		Limit        *int           `json:"limit,omitempty"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, err
+	}
+	queryKey, err := base.QueryKey(req.Filter, req.Sort)
+	if err != nil {
+		return nil, err
+	}
+
+	allIDs, err := h.queryMailboxIDs(ctx, accountID, req.Filter)
+	if err != nil {
+		return nil, err
+	}
+	start, end := base.PageBounds(len(allIDs), req.Position, req.Limit)
+	ids := append([]string{}, allIDs[start:end]...)
+	queryState, err := h.deps.Changes.SyncQuery(ctx, accountID, base.StateMailboxQuery, queryKey, allIDs)
+	if err != nil {
+		return nil, err
 	}
 
 	resp := map[string]interface{}{
 		"accountId":  accountID,
-		"queryState": state,
+		"queryState": queryState,
 		"ids":        ids,
-		"total":      len(mailboxes),
+		"total":      len(allIDs),
 	}
 	return json.Marshal(resp)
 }
 
 func (h *Handler) MailboxQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID       string  `json:"accountId"`
-		SinceQueryState string  `json:"sinceQueryState"`
-		MaxChanges      *int    `json:"maxChanges,omitempty"`
-		UpToID          *string `json:"upToId,omitempty"`
+		AccountID       string         `json:"accountId"`
+		SinceQueryState string         `json:"sinceQueryState"`
+		Filter          *mailboxFilter `json:"filter,omitempty"`
+		Sort            []interface{}  `json:"sort,omitempty"`
+		MaxChanges      *int           `json:"maxChanges,omitempty"`
+		UpToID          *string        `json:"upToId,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
-
-	h.syncMailboxState(ctx, accountID, h.getMailboxes(ctx, accountID))
-	result, err := h.deps.Changes.ChangesFrom(accountID, base.StateMailboxQuery, req.SinceQueryState, req.MaxChanges)
+	queryKey, err := base.QueryKey(req.Filter, req.Sort)
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(base.QueryChangesResponse(result))
+
+	ids, err := h.queryMailboxIDs(ctx, accountID, req.Filter)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.deps.Changes.QueryChangesFrom(ctx, accountID, base.StateMailboxQuery, queryKey, req.SinceQueryState, req.MaxChanges, ids)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
 }

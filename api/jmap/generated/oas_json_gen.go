@@ -2492,10 +2492,6 @@ func (s *Session) encodeFields(e *jx.Encoder) {
 		e.Str(s.UploadUrl)
 	}
 	{
-		e.FieldStart("eventSourceUrl")
-		e.Str(s.EventSourceUrl)
-	}
-	{
 		e.FieldStart("state")
 		e.Str(s.State)
 	}
@@ -2508,7 +2504,7 @@ func (s *Session) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfSession = [9]string{
+var jsonFieldsNameOfSession = [8]string{
 	0: "capabilities",
 	1: "accounts",
 	2: "primaryAccounts",
@@ -2516,8 +2512,7 @@ var jsonFieldsNameOfSession = [9]string{
 	4: "apiUrl",
 	5: "downloadUrl",
 	6: "uploadUrl",
-	7: "eventSourceUrl",
-	8: "state",
+	7: "state",
 }
 
 // Decode decodes Session from json.
@@ -2525,7 +2520,7 @@ func (s *Session) Decode(d *jx.Decoder) error {
 	if s == nil {
 		return errors.New("invalid: unable to decode Session to nil")
 	}
-	var requiredBitSet [2]uint8
+	var requiredBitSet [1]uint8
 	s.AdditionalProps = map[string]jx.Raw{}
 
 	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
@@ -2608,20 +2603,8 @@ func (s *Session) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"uploadUrl\"")
 			}
-		case "eventSourceUrl":
-			requiredBitSet[0] |= 1 << 7
-			if err := func() error {
-				v, err := d.Str()
-				s.EventSourceUrl = string(v)
-				if err != nil {
-					return err
-				}
-				return nil
-			}(); err != nil {
-				return errors.Wrap(err, "decode field \"eventSourceUrl\"")
-			}
 		case "state":
-			requiredBitSet[1] |= 1 << 0
+			requiredBitSet[0] |= 1 << 7
 			if err := func() error {
 				v, err := d.Str()
 				s.State = string(v)
@@ -2652,9 +2635,8 @@ func (s *Session) Decode(d *jx.Decoder) error {
 	}
 	// Validate required fields.
 	var failures []validate.FieldError
-	for i, mask := range [2]uint8{
+	for i, mask := range [1]uint8{
 		0b11111111,
-		0b00000001,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.

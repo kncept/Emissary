@@ -92,13 +92,32 @@ func (h *Handler) IdentityGet(ctx context.Context, accountID string, args json.R
 	if err != nil {
 		return nil, err
 	}
+	state, err := h.syncIdentityState(ctx, accountID, identity)
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]interface{}{
 		"accountId": accountID,
-		"state":     h.deps.Changes.State(accountID, base.StateIdentity),
+		"state":     state,
 		"list":      selected,
 		"notFound":  notFound,
 	}
 	return json.Marshal(resp)
+}
+
+// syncIdentityState fingerprints the derived identity so Identity/changes
+// reports an update when the underlying user record changes.
+func (h *Handler) syncIdentityState(ctx context.Context, accountID string, identity Identity) (string, error) {
+	fingerprint, err := json.Marshal(identity)
+	if err != nil {
+		return "", err
+	}
+	if err := h.deps.Changes.Sync(ctx, accountID, map[base.StateKind]map[string]string{
+		base.StateIdentity: {identity.ID: string(fingerprint)},
+	}); err != nil {
+		return "", err
+	}
+	return h.deps.Changes.State(ctx, accountID, base.StateIdentity)
 }
 
 func (h *Handler) IdentitySet(_ context.Context, _ string, _ json.RawMessage) (json.RawMessage, error) {
@@ -115,7 +134,21 @@ func (h *Handler) IdentityChanges(ctx context.Context, accountID string, args js
 		return nil, err
 	}
 
-	result, err := h.deps.Changes.ChangesFrom(accountID, base.StateIdentity, req.SinceState, req.MaxChanges)
+	user, err := h.deps.UserMgr.Lookup(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := h.syncIdentityState(ctx, accountID, Identity{
+		ID:            "primary",
+		Name:          user.Email,
+		Email:         user.Email,
+		TextSignature: "",
+		HTMLSignature: "",
+		MayDelete:     false,
+	}); err != nil {
+		return nil, err
+	}
+	result, err := h.deps.Changes.ChangesFrom(ctx, accountID, base.StateIdentity, req.SinceState, req.MaxChanges)
 	if err != nil {
 		return nil, err
 	}

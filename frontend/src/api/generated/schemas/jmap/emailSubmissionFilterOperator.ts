@@ -12,9 +12,14 @@
  * - the Session resource (`/.well-known/jmap`);
  * - the batched API request/response envelope (`/api/jmap/`);
  * - binary upload/download (`uploadUrl`, `downloadUrl`);
- * - the EventSource push endpoint (`eventSourceUrl`);
  * - the request and response arguments for every method required by a
  *   minimal RFC 8621 mail implementation.
+ *
+ * State changes are observed by polling `Foo/changes` and
+ * `Foo/queryChanges`. As Lambda is a primary target, this document defines
+ * polling-only behaviour; working out state change events is a future
+ * requirement. EventSource `StateChange` events, including `EmailDelivery`,
+ * are not advertised by the Session object.
  *
  * This document defines no authentication operations. All auth
  * operations (login, refresh, and any future auth endpoints) are
@@ -40,8 +45,6 @@
  * - VacationResponse: `get`, `set`
  * - PushSubscription: `get`, `set`
  * - Blob: `copy`
- *
- * `EmailDelivery` is a push-only type; it has no methods.
  * OpenAPI spec version: 1.0.0
  */
 import type { EmailSubmissionFilter } from './emailSubmissionFilter';

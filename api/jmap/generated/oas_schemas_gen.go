@@ -702,52 +702,6 @@ func (o OptCoreCapability) Or(d CoreCapability) CoreCapability {
 	return d
 }
 
-// NewOptInt returns new OptInt with value set to v.
-func NewOptInt(v int) OptInt {
-	return OptInt{
-		Value: v,
-		Set:   true,
-	}
-}
-
-// OptInt is optional int.
-type OptInt struct {
-	Value int
-	Set   bool
-}
-
-// IsSet returns true if OptInt was set.
-func (o OptInt) IsSet() bool { return o.Set }
-
-// Reset unsets value.
-func (o *OptInt) Reset() {
-	var v int
-	o.Value = v
-	o.Set = false
-}
-
-// SetTo sets value to v.
-func (o *OptInt) SetTo(v int) {
-	o.Set = true
-	o.Value = v
-}
-
-// Get returns value and boolean that denotes whether value was set.
-func (o OptInt) Get() (v int, ok bool) {
-	if !o.Set {
-		return v, false
-	}
-	return o.Value, true
-}
-
-// Or returns value if set, or given parameter if does not.
-func (o OptInt) Or(d int) int {
-	if v, ok := o.Get(); ok {
-		return v
-	}
-	return d
-}
-
 // NewOptJmapRequestCreatedIds returns new OptJmapRequestCreatedIds with value set to v.
 func NewOptJmapRequestCreatedIds(v JmapRequestCreatedIds) OptJmapRequestCreatedIds {
 	return OptJmapRequestCreatedIds{
@@ -932,52 +886,6 @@ func (o OptProblemDetailsLimit) Or(d ProblemDetailsLimit) ProblemDetailsLimit {
 	return d
 }
 
-// NewOptPushConnectionCloseafter returns new OptPushConnectionCloseafter with value set to v.
-func NewOptPushConnectionCloseafter(v PushConnectionCloseafter) OptPushConnectionCloseafter {
-	return OptPushConnectionCloseafter{
-		Value: v,
-		Set:   true,
-	}
-}
-
-// OptPushConnectionCloseafter is optional PushConnectionCloseafter.
-type OptPushConnectionCloseafter struct {
-	Value PushConnectionCloseafter
-	Set   bool
-}
-
-// IsSet returns true if OptPushConnectionCloseafter was set.
-func (o OptPushConnectionCloseafter) IsSet() bool { return o.Set }
-
-// Reset unsets value.
-func (o *OptPushConnectionCloseafter) Reset() {
-	var v PushConnectionCloseafter
-	o.Value = v
-	o.Set = false
-}
-
-// SetTo sets value to v.
-func (o *OptPushConnectionCloseafter) SetTo(v PushConnectionCloseafter) {
-	o.Set = true
-	o.Value = v
-}
-
-// Get returns value and boolean that denotes whether value was set.
-func (o OptPushConnectionCloseafter) Get() (v PushConnectionCloseafter, ok bool) {
-	if !o.Set {
-		return v, false
-	}
-	return o.Value, true
-}
-
-// Or returns value if set, or given parameter if does not.
-func (o OptPushConnectionCloseafter) Or(d PushConnectionCloseafter) PushConnectionCloseafter {
-	if v, ok := o.Get(); ok {
-		return v
-	}
-	return d
-}
-
 // NewOptString returns new OptString with value set to v.
 func NewOptString(v string) OptString {
 	return OptString{
@@ -1156,8 +1064,7 @@ func (s *ProblemDetails) SetAdditionalProps(val ProblemDetailsAdditional) {
 	s.AdditionalProps = val
 }
 
-func (*ProblemDetails) getSessionRes()     {}
-func (*ProblemDetails) pushConnectionRes() {}
+func (*ProblemDetails) getSessionRes() {}
 
 type ProblemDetailsAdditional map[string]jx.Raw
 
@@ -1247,63 +1154,6 @@ func (s *ProblemDetailsLimit) UnmarshalText(data []byte) error {
 	}
 }
 
-type PushConnectionCloseafter string
-
-const (
-	PushConnectionCloseafterState PushConnectionCloseafter = "state"
-	PushConnectionCloseafterNo    PushConnectionCloseafter = "no"
-)
-
-// AllValues returns all PushConnectionCloseafter values.
-func (PushConnectionCloseafter) AllValues() []PushConnectionCloseafter {
-	return []PushConnectionCloseafter{
-		PushConnectionCloseafterState,
-		PushConnectionCloseafterNo,
-	}
-}
-
-// MarshalText implements encoding.TextMarshaler.
-func (s PushConnectionCloseafter) MarshalText() ([]byte, error) {
-	switch s {
-	case PushConnectionCloseafterState:
-		return []byte(s), nil
-	case PushConnectionCloseafterNo:
-		return []byte(s), nil
-	default:
-		return nil, errors.Errorf("invalid value: %q", s)
-	}
-}
-
-// UnmarshalText implements encoding.TextUnmarshaler.
-func (s *PushConnectionCloseafter) UnmarshalText(data []byte) error {
-	switch PushConnectionCloseafter(data) {
-	case PushConnectionCloseafterState:
-		*s = PushConnectionCloseafterState
-		return nil
-	case PushConnectionCloseafterNo:
-		*s = PushConnectionCloseafterNo
-		return nil
-	default:
-		return errors.Errorf("invalid value: %q", data)
-	}
-}
-
-type PushConnectionOK struct {
-	Data io.Reader
-}
-
-// Read reads data from the Data reader.
-//
-// Kept to satisfy the io.Reader interface.
-func (s PushConnectionOK) Read(p []byte) (n int, err error) {
-	if s.Data == nil {
-		return 0, io.EOF
-	}
-	return s.Data.Read(p)
-}
-
-func (*PushConnectionOK) pushConnectionRes() {}
-
 // Ref: #/components/schemas/Session
 type Session struct {
 	Capabilities SessionCapabilities `json:"capabilities"`
@@ -1315,9 +1165,7 @@ type Session struct {
 	// URI Template (RFC 6570 level 1) containing the variables `accountId`, `blobId`, `type`, and `name`.
 	DownloadUrl string `json:"downloadUrl"`
 	// URI Template (RFC 6570 level 1) containing the variable `accountId`.
-	UploadUrl string `json:"uploadUrl"`
-	// URI Template (RFC 6570 level 1) containing the variables `types`, `closeafter`, and `ping`.
-	EventSourceUrl  string `json:"eventSourceUrl"`
+	UploadUrl       string `json:"uploadUrl"`
 	State           string `json:"state"`
 	AdditionalProps SessionAdditional
 }
@@ -1355,11 +1203,6 @@ func (s *Session) GetDownloadUrl() string {
 // GetUploadUrl returns the value of UploadUrl.
 func (s *Session) GetUploadUrl() string {
 	return s.UploadUrl
-}
-
-// GetEventSourceUrl returns the value of EventSourceUrl.
-func (s *Session) GetEventSourceUrl() string {
-	return s.EventSourceUrl
 }
 
 // GetState returns the value of State.
@@ -1405,11 +1248,6 @@ func (s *Session) SetDownloadUrl(val string) {
 // SetUploadUrl sets the value of UploadUrl.
 func (s *Session) SetUploadUrl(val string) {
 	s.UploadUrl = val
-}
-
-// SetEventSourceUrl sets the value of EventSourceUrl.
-func (s *Session) SetEventSourceUrl(val string) {
-	s.EventSourceUrl = val
 }
 
 // SetState sets the value of State.

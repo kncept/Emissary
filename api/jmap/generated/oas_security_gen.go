@@ -39,7 +39,6 @@ var operationRolesBasicAuth = map[string][]string{
 	ApiRequestOperation:     []string{},
 	DownloadBinaryOperation: []string{},
 	GetSessionOperation:     []string{},
-	PushConnectionOperation: []string{},
 	UploadBinaryOperation:   []string{},
 }
 
@@ -69,7 +68,6 @@ var operationRolesBearerAuth = map[string][]string{
 	ApiRequestOperation:     []string{},
 	DownloadBinaryOperation: []string{},
 	GetSessionOperation:     []string{},
-	PushConnectionOperation: []string{},
 	UploadBinaryOperation:   []string{},
 }
 

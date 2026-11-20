@@ -188,9 +188,8 @@ func (h *Handler) countThreadsInMailbox(ctx context.Context, accountID, mailboxI
 	return h.countEmailsInMailbox(ctx, accountID, mailboxID)
 }
 
-// syncMailboxState builds a fingerprint snapshot from the current mailboxes and
-// updates both the object and query state versions.
-func (h *Handler) syncMailboxState(_ context.Context, accountID string, mailboxes []Mailbox) string {
+// syncMailboxState builds a fingerprint snapshot from the current mailboxes.
+func (h *Handler) syncMailboxState(ctx context.Context, accountID string, mailboxes []Mailbox) (string, error) {
 	snapshot := make(map[string]string, len(mailboxes))
 	for _, item := range mailboxes {
 		fingerprint, err := json.Marshal(item)
@@ -199,11 +198,12 @@ func (h *Handler) syncMailboxState(_ context.Context, accountID string, mailboxe
 		}
 		snapshot[item.ID] = string(fingerprint)
 	}
-	h.deps.Changes.Sync(accountID, map[base.StateKind]map[string]string{
-		base.StateMailbox:      snapshot,
-		base.StateMailboxQuery: snapshot,
-	})
-	return h.deps.Changes.State(accountID, base.StateMailbox)
+	if err := h.deps.Changes.Sync(ctx, accountID, map[base.StateKind]map[string]string{
+		base.StateMailbox: snapshot,
+	}); err != nil {
+		return "", err
+	}
+	return h.deps.Changes.State(ctx, accountID, base.StateMailbox)
 }
 
 func stringPtr(s string) *string { return &s }

@@ -22,18 +22,3 @@ func TestPageBoundsClampsUntrustedArguments(t *testing.T) {
 	}
 }
 
-func TestQueryChangesResponseRenamesStateFields(t *testing.T) {
-	result := QueryChangesResponse(map[string]any{
-		"oldState": "email-1",
-		"newState": "email-2",
-	})
-	if result["oldQueryState"] != "email-1" || result["newQueryState"] != "email-2" {
-		t.Fatalf("renamed states = %v", result)
-	}
-	if _, ok := result["oldState"]; ok {
-		t.Fatal("oldState should be removed")
-	}
-	if _, ok := result["newState"]; ok {
-		t.Fatal("newState should be removed")
-	}
-}

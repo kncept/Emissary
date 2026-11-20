@@ -31,13 +31,6 @@ type Handler interface {
 	//
 	// GET /.well-known/jmap
 	GetSession(ctx context.Context) (GetSessionRes, error)
-	// PushConnection implements pushConnection operation.
-	//
-	// Long-running `text/event-stream` connection. The server emits `state` events whose data is a
-	// `StateChange` object, and `ping` events whose data is `{"interval": <seconds>}`.
-	//
-	// GET /eventsource
-	PushConnection(ctx context.Context, params PushConnectionParams) (PushConnectionRes, error)
 	// UploadBinary implements uploadBinary operation.
 	//
 	// Uploads raw binary data. The request `Content-Type` is the media type of the uploaded file and is

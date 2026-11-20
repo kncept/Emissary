@@ -50,8 +50,14 @@ func (h *Handler) ThreadGet(ctx context.Context, accountID string, args json.Raw
 		return nil, err
 	}
 
-	threads := h.getThreads(ctx, accountID)
-	state := h.syncThreadState(ctx, accountID, threads)
+	threads, err := h.getThreads(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	state, err := h.syncThreadState(ctx, accountID, threads)
+	if err != nil {
+		return nil, err
+	}
 	var list []Thread
 	var notFound []string
 
@@ -94,8 +100,14 @@ func (h *Handler) ThreadChanges(ctx context.Context, accountID string, args json
 		return nil, err
 	}
 
-	h.syncThreadState(ctx, accountID, h.getThreads(ctx, accountID))
-	result, err := h.deps.Changes.ChangesFrom(accountID, base.StateThread, req.SinceState, req.MaxChanges)
+	threads, err := h.getThreads(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := h.syncThreadState(ctx, accountID, threads); err != nil {
+		return nil, err
+	}
+	result, err := h.deps.Changes.ChangesFrom(ctx, accountID, base.StateThread, req.SinceState, req.MaxChanges)
 	if err != nil {
 		return nil, err
 	}
@@ -104,10 +116,12 @@ func (h *Handler) ThreadChanges(ctx context.Context, accountID string, args json
 
 // getThreads derives threads from the stored messages. A real implementation
 // would group by the References/In-Reply-To headers.
-func (h *Handler) getThreads(ctx context.Context, accountID string) []Thread {
+func (h *Handler) getThreads(ctx context.Context, accountID string) ([]Thread, error) {
 	emails, err := h.deps.Storage.ListEmails(ctx, accountID, "")
 	if err != nil {
-		return []Thread{}
+		// Never sync an empty snapshot caused by a storage failure: that
+		// would look like every thread was destroyed.
+		return nil, err
 	}
 
 	threads := make([]Thread, 0, len(emails))
@@ -117,16 +131,18 @@ func (h *Handler) getThreads(ctx context.Context, accountID string) []Thread {
 			EmailIDs: []string{e.Ref.ID},
 		})
 	}
-	return threads
+	return threads, nil
 }
 
-func (h *Handler) syncThreadState(_ context.Context, accountID string, threads []Thread) string {
+func (h *Handler) syncThreadState(ctx context.Context, accountID string, threads []Thread) (string, error) {
 	snapshot := make(map[string]string, len(threads))
 	for _, t := range threads {
 		snapshot[t.ID] = strings.Join(t.EmailIDs, ",")
 	}
-	h.deps.Changes.Sync(accountID, map[base.StateKind]map[string]string{
+	if err := h.deps.Changes.Sync(ctx, accountID, map[base.StateKind]map[string]string{
 		base.StateThread: snapshot,
-	})
-	return h.deps.Changes.State(accountID, base.StateThread)
+	}); err != nil {
+		return "", err
+	}
+	return h.deps.Changes.State(ctx, accountID, base.StateThread)
 }

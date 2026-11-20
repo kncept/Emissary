@@ -18,11 +18,19 @@ var _ Storage = (*MemoryStorage)(nil)
 // MemoryStorage is a small in-memory store. It is useful for local
 // development and tests; messages are lost when the process exits.
 type MemoryStorage struct {
-	mu         sync.RWMutex
-	emails     map[string]*email.ListedEmail
-	raw        map[string][]byte
-	drafts     map[string]map[string][]byte
-	sessionIDs map[string]map[string]string
+	mu                sync.RWMutex
+	emails            map[string]*email.ListedEmail
+	raw               map[string][]byte
+	drafts            map[string]map[string][]byte
+	sessionIDs        map[string]map[string]string
+	jmapStates        map[string]jmapStateRecord
+	jmapStateRevision uint64
+}
+
+// jmapStateRecord models the revisioned blob held by the in-memory store.
+type jmapStateRecord struct {
+	data     []byte
+	revision string
 }
 
 func NewMemoryStorage() *MemoryStorage {
@@ -31,6 +39,7 @@ func NewMemoryStorage() *MemoryStorage {
 		raw:        make(map[string][]byte),
 		drafts:     make(map[string]map[string][]byte),
 		sessionIDs: make(map[string]map[string]string),
+		jmapStates: make(map[string]jmapStateRecord),
 	}
 }
 
@@ -228,6 +237,38 @@ func (s *MemoryStorage) SaveCreatedIDs(_ context.Context, sessionID string, ids 
 	}
 	s.sessionIDs[sessionID] = copy
 	return nil
+}
+
+// LoadJMAPState implements JMAPStateStore.
+func (s *MemoryStorage) LoadJMAPState(_ context.Context, accountID string) ([]byte, string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	record, ok := s.jmapStates[accountID]
+	if !ok {
+		return nil, "", nil
+	}
+	return append([]byte(nil), record.data...), record.revision, nil
+}
+
+// SaveJMAPState implements JMAPStateStore with a compare-and-swap on revision.
+func (s *MemoryStorage) SaveJMAPState(_ context.Context, accountID string, data []byte, revision string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, exists := s.jmapStates[accountID]
+	currentRevision := ""
+	if exists {
+		currentRevision = current.revision
+	}
+	if currentRevision != revision {
+		return "", ErrJMAPStateConflict
+	}
+	s.jmapStateRevision++
+	newRevision := fmt.Sprintf("r%d", s.jmapStateRevision)
+	s.jmapStates[accountID] = jmapStateRecord{
+		data:     append([]byte(nil), data...),
+		revision: newRevision,
+	}
+	return newRevision, nil
 }
 
 func clone(listed *email.ListedEmail) *email.ListedEmail {

@@ -591,17 +591,6 @@ func (s ProblemDetailsLimit) Validate() error {
 	}
 }
 
-func (s PushConnectionCloseafter) Validate() error {
-	switch s {
-	case "state":
-		return nil
-	case "no":
-		return nil
-	default:
-		return errors.Errorf("invalid value: %v", s)
-	}
-}
-
 func (s *Session) Validate() error {
 	if s == nil {
 		return validate.ErrNilPointer

@@ -64,4 +64,5 @@ type Storage interface {
 
 	DraftStorage
 	SessionStateStore
+	JMAPStateStore
 }

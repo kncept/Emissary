@@ -151,6 +151,15 @@ is `_storage/<sid>/created-ids.json`. `<sid>` is the server-generated JWT
 `sid`, so drafts and creation references survive across Lambda invocations and
 never appear in mailbox listings.
 
+Durable JMAP change-tracker state uses a separate `_jmap-state/` prefix:
+`_jmap-state/<base64url(accountId)>/state.json` holds the per-type counters,
+fingerprints, bounded change logs and recent query result sets used by
+`Foo/changes` and `Foo/queryChanges`. Writes use optimistic concurrency (an S3
+ETag condition or a filesystem content hash) so a stale Lambda invocation
+cannot roll a state counter backwards. This deployment is polling-only; there
+is no EventSource route, and `StateChange` events (including `EmailDelivery`)
+are future work.
+
 ### Recipient validation and delivery
 
 When an inbound message is processed for delivery (by a consumer

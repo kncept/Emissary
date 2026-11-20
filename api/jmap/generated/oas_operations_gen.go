@@ -9,6 +9,5 @@ const (
 	ApiRequestOperation     OperationName = "ApiRequest"
 	DownloadBinaryOperation OperationName = "DownloadBinary"
 	GetSessionOperation     OperationName = "GetSession"
-	PushConnectionOperation OperationName = "PushConnection"
 	UploadBinaryOperation   OperationName = "UploadBinary"
 )

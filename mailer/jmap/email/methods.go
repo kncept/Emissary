@@ -90,9 +90,13 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 		}
 	}
 
+	state, err := h.syncEmailStateFromListed(ctx, accountID, emails)
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]interface{}{
 		"accountId": accountID,
-		"state":     h.syncEmailStateFromListed(ctx, accountID, emails),
+		"state":     state,
 		"list":      list,
 		"notFound":  notFound,
 	}
@@ -111,7 +115,10 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 	}
 
 	// Sync first so external changes are already reflected in oldState.
-	oldState := h.syncEmailState(ctx, accountID)
+	oldState, err := h.syncEmailState(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
 
 	created := make(map[string]interface{})
 	updated := make(map[string]interface{})
@@ -342,10 +349,14 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 		updated[id] = nil
 	}
 
+	newState, err := h.syncEmailState(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]interface{}{
 		"accountId":    accountID,
 		"oldState":     oldState,
-		"newState":     h.syncEmailState(ctx, accountID),
+		"newState":     newState,
 		"created":      created,
 		"updated":      updated,
 		"destroyed":    destroyed,
@@ -366,8 +377,10 @@ func (h *Handler) EmailChanges(ctx context.Context, accountID string, args json.
 		return nil, err
 	}
 
-	h.syncEmailState(ctx, accountID)
-	result, err := h.deps.Changes.ChangesFrom(accountID, base.StateEmail, req.SinceState, req.MaxChanges)
+	if _, err := h.syncEmailState(ctx, accountID); err != nil {
+		return nil, err
+	}
+	result, err := h.deps.Changes.ChangesFrom(ctx, accountID, base.StateEmail, req.SinceState, req.MaxChanges)
 	if err != nil {
 		return nil, err
 	}
@@ -389,24 +402,54 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
+	queryKey, err := base.QueryKey(req.Filter, req.Sort)
+	if err != nil {
+		return nil, err
+	}
 
-	// Read only from the requested account's mailbox. The accountId is the
-	// authenticated user's id, or the target account when a user with
-	// EmissaryUserManagement is masquerading. An inMailbox filter is pushed into
-	// storage so only that JMAP mailbox is listed.
+	allIDs, err := h.queryEmailIDs(ctx, accountID, req.Filter, req.Sort)
+	if err != nil {
+		return nil, err
+	}
+
+	start, end := base.PageBounds(len(allIDs), req.Position, req.Limit)
+	ids := append([]string{}, allIDs[start:end]...)
+	total := len(allIDs)
+	if req.CalculateTotal != nil && !*req.CalculateTotal {
+		total = -1 // Indicate total not calculated
+	}
+
+	queryState, err := h.deps.Changes.SyncQuery(ctx, accountID, base.StateEmailQuery, queryKey, allIDs)
+	if err != nil {
+		return nil, err
+	}
+	resp := map[string]interface{}{
+		"accountId":  accountID,
+		"queryState": queryState,
+		"ids":        ids,
+		"total":      total,
+	}
+	return json.Marshal(resp)
+}
+
+// queryEmailIDs returns the full ordered result set for a query, before
+// pagination. Both Email/query and Email/queryChanges use it so a queryState
+// token always describes the same result set.
+func (h *Handler) queryEmailIDs(ctx context.Context, accountID string, filter *EmailFilter, sortSpecs []interface{}) ([]string, error) {
+	// Read only from the requested account's mailbox. An inMailbox filter is
+	// pushed into storage so only that JMAP mailbox is listed.
 	mailboxID := ""
-	if req.Filter != nil && req.Filter.InMailbox != nil {
-		mailboxID = *req.Filter.InMailbox
+	if filter != nil && filter.InMailbox != nil {
+		mailboxID = *filter.InMailbox
 	}
 	emails, err := h.deps.Storage.ListEmails(ctx, accountID, mailboxID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Apply filter
-	filtered := make([]*mailemail.ListedEmail, 0)
+	filtered := make([]*mailemail.ListedEmail, 0, len(emails))
 	for _, e := range emails {
-		if h.matchesFilter(e, req.Filter) {
+		if h.matchesFilter(e, filter) {
 			filtered = append(filtered, e)
 		}
 	}
@@ -416,7 +459,7 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 	// time (falling back to the message Date for legacy records) so it matches
 	// the receivedAt value returned by Email/get.
 	ascending := false
-	for _, s := range req.Sort {
+	for _, s := range sortSpecs {
 		sortSpec, ok := s.(map[string]interface{})
 		if !ok {
 			continue
@@ -444,32 +487,18 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 		return left.After(right)
 	})
 
-	start, end := base.PageBounds(len(filtered), req.Position, req.Limit)
-	result := filtered[start:end]
-	ids := make([]string, len(result))
-	for i, e := range result {
+	ids := make([]string, len(filtered))
+	for i, e := range filtered {
 		ids[i] = e.Ref.ID
 	}
-
-	total := len(filtered)
-	if req.CalculateTotal != nil && !*req.CalculateTotal {
-		total = -1 // Indicate total not calculated
-	}
-
-	resp := map[string]interface{}{
-		"accountId":  accountID,
-		"queryState": h.syncEmailState(ctx, accountID),
-		"ids":        ids,
-		"total":      total,
-	}
-	return json.Marshal(resp)
+	return ids, nil
 }
 
 func (h *Handler) EmailQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
 		AccountID       string        `json:"accountId"`
 		SinceQueryState string        `json:"sinceQueryState"`
-		Filter          interface{}   `json:"filter,omitempty"`
+		Filter          *EmailFilter  `json:"filter,omitempty"`
 		Sort            []interface{} `json:"sort,omitempty"`
 		MaxChanges      *int          `json:"maxChanges,omitempty"`
 		UpToID          *string       `json:"upToId,omitempty"`
@@ -479,13 +508,20 @@ func (h *Handler) EmailQueryChanges(ctx context.Context, accountID string, args 
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
-
-	h.syncEmailState(ctx, accountID)
-	result, err := h.deps.Changes.ChangesFrom(accountID, base.StateEmailQuery, req.SinceQueryState, req.MaxChanges)
+	queryKey, err := base.QueryKey(req.Filter, req.Sort)
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(base.QueryChangesResponse(result))
+
+	ids, err := h.queryEmailIDs(ctx, accountID, req.Filter, req.Sort)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.deps.Changes.QueryChangesFrom(ctx, accountID, base.StateEmailQuery, queryKey, req.SinceQueryState, req.MaxChanges, ids)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
 }
 
 func (h *Handler) EmailCopy(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {

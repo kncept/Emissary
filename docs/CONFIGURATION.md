@@ -182,7 +182,7 @@ share one root:
 
 | Store | Directory | Contents |
 | --- | --- | --- |
-| `STORAGE=filesystem` | `~/.emissary/mail` | `users/<account>/<mailbox>/<timestamp>_<id>.eml` and `_storage/<session>/` drafts/state. |
+| `STORAGE=filesystem` | `~/.emissary/mail` | `users/<account>/<mailbox>/<timestamp>_<id>.eml`, `_storage/<session>/` drafts/creation ids, and `_jmap-state/<base64url(account)>/state.json` JMAP counters/change logs/query snapshots. |
 | `USER_MANAGER=filesystem` | `~/.emissary/users` | `<email>/user.json` records, the same JSON shape as the S3 user manager. |
 | `METADATA=file` | `~/.emissary/metadata` | One `<email id>.json` record per message. |
 | `RECEIVER=filesystem` | `~/.emissary/receiver` | One `<identity>.json` routing config per mail identity, including `_` for the base fallback. `RECEIVER_FILESYSTEM_DIR` overrides the root independently. |

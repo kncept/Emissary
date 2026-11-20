@@ -2,6 +2,8 @@ package base
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -36,6 +38,27 @@ func ReceivedAtFromMetadata(meta metadata.EmailMetadata, fallback time.Time) tim
 	return fallback
 }
 
+// QueryKey derives a short, stable signature from a query's filter and sort
+// arguments. Query state tokens are scoped to this key so two queries with
+// different result sets can maintain independent counters.
+func QueryKey(filter, sort any) (string, error) {
+	if filter == nil {
+		filter = map[string]any{}
+	}
+	if sort == nil {
+		sort = []any{}
+	}
+	data, err := json.Marshal(struct {
+		Filter any `json:"filter"`
+		Sort   any `json:"sort"`
+	}{Filter: filter, Sort: sort})
+	if err != nil {
+		return "", fmt.Errorf("encode query key: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return base64.RawURLEncoding.EncodeToString(sum[:12]), nil
+}
+
 // PageBounds clamps untrusted JMAP pagination arguments and returns the
 // half-open slice bounds for a result set of the given size.
 func PageBounds(total int, position, limit *int) (int, int) {
@@ -58,16 +81,6 @@ func PageBounds(total int, position, limit *int) (int, int) {
 		end = start
 	}
 	return start, end
-}
-
-// QueryChangesResponse renames the generic /changes state fields to the
-// *QueryState names required by RFC 8620 section 5.5.
-func QueryChangesResponse(result map[string]any) map[string]any {
-	result["oldQueryState"] = result["oldState"]
-	result["newQueryState"] = result["newState"]
-	delete(result, "oldState")
-	delete(result, "newState")
-	return result
 }
 
 // NotImplemented produces the standard error for methods that are advertised

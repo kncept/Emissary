@@ -64,10 +64,9 @@ const (
 	// newHandler and include the variables required by RFC 8620 section 2.
 	// The type variable is placed in the query because media types contain
 	// slashes, which the RFC recommends avoiding in a path segment.
-	jmapAPIPath                = "/api/jmap/"
-	jmapDownloadURLTemplate    = "/download/{accountId}/{blobId}/{name}?type={type}"
-	jmapUploadURLTemplate      = "/upload/{accountId}"
-	jmapEventSourceURLTemplate = "/eventsource?types={types}&closeafter={closeafter}&ping={ping}"
+	jmapAPIPath             = "/api/jmap/"
+	jmapDownloadURLTemplate = "/download/{accountId}/{blobId}/{name}?type={type}"
+	jmapUploadURLTemplate   = "/upload/{accountId}"
 )
 
 type HandlerConfig struct {
@@ -431,7 +430,6 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 	})))
 	mux.Handle("POST /upload/{accountId}", requireAuth(authenticator, http.HandlerFunc(handleJMAPUpload)))
 	mux.Handle("GET /download/{accountId}/{blobId}/{name}", requireAuth(authenticator, http.HandlerFunc(handleJMAPDownload)))
-	mux.Handle("GET /eventsource", requireAuth(authenticator, http.HandlerFunc(handleJMAPPush)))
 
 	mux.Handle("GET /api/email/raw", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleRawEmail(w, r, emailStore)
@@ -743,12 +741,11 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 			jmap.CapabilityMail:       username,
 			jmap.CapabilitySubmission: username,
 		},
-		"username":       username,
-		"apiUrl":         jmapAPIPath,
-		"downloadUrl":    jmapDownloadURLTemplate,
-		"uploadUrl":      jmapUploadURLTemplate,
-		"eventSourceUrl": jmapEventSourceURLTemplate,
-		"state":          jmapSessionState,
+		"username":    username,
+		"apiUrl":      jmapAPIPath,
+		"downloadUrl": jmapDownloadURLTemplate,
+		"uploadUrl":   jmapUploadURLTemplate,
+		"state":       jmapSessionState,
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -920,11 +917,6 @@ func rawEmailAccount(ctx context.Context, store storage.Storage, id string) (str
 		return "", storage.ErrNotFound
 	}
 	return listed.Ref.AccountID, nil
-}
-
-func handleJMAPPush(w http.ResponseWriter, r *http.Request) {
-	writeJMAPProblem(w, http.StatusNotImplemented, "about:blank", "Not Implemented",
-		"Push not implemented", "")
 }
 
 func handleLogout(authenticator *auth.Authenticator) http.HandlerFunc {

@@ -45,16 +45,6 @@ func (UnimplementedHandler) GetSession(ctx context.Context) (r GetSessionRes, _ 
 	return r, ht.ErrNotImplemented
 }
 
-// PushConnection implements pushConnection operation.
-//
-// Long-running `text/event-stream` connection. The server emits `state` events whose data is a
-// `StateChange` object, and `ping` events whose data is `{"interval": <seconds>}`.
-//
-// GET /eventsource
-func (UnimplementedHandler) PushConnection(ctx context.Context, params PushConnectionParams) (r PushConnectionRes, _ error) {
-	return r, ht.ErrNotImplemented
-}
-
 // UploadBinary implements uploadBinary operation.
 //
 // Uploads raw binary data. The request `Content-Type` is the media type of the uploaded file and is
