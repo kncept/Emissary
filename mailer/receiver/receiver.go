@@ -4,6 +4,7 @@
 package receiver
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -147,8 +148,10 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 
 	// The staged object is the raw RFC 5322 message accepted by SES. Parse it
 	// with the wire-format type so the Received headers survive: UserEmail is
-	// the simplified type used for delivered .eml files and drops them.
-	wireEmail := email.ParseWireFormat(key, strings.NewReader(string(rawMessage)))
+	// the simplified type used for delivered .eml files and drops them. Keep
+	// the original bytes alongside the parsed copy so delivery can store them
+	// verbatim; rendering from UserEmail would lose MIME parts and attachments.
+	wireEmail := email.ParseWireFormat(key, bytes.NewReader(rawMessage))
 	parsedEmail := wireEmail.ToUserEmail()
 
 	// Route on the SMTP envelope recipient (RCPT TO) recorded in the Received
@@ -186,7 +189,7 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 			continue
 		}
 
-		if err := r.handleRecipient(ctx, key, recipient, parsedEmail, bounceSender); err != nil {
+		if err := r.handleRecipient(ctx, key, recipient, parsedEmail, rawMessage, bounceSender); err != nil {
 			slog.Error("Receiver: failed to handle recipient", "recipient", recipient, "err", err)
 			processingErrors = append(processingErrors, err)
 			continue
@@ -223,9 +226,11 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 }
 
 // handleRecipient applies the first applicable routing rule to one envelope
-// recipient. A returned error means the recipient still needs processing on a
-// retry; callers record a dedup marker only when this returns nil.
-func (r *Receiver) handleRecipient(ctx context.Context, key, recipient string, parsedEmail *email.UserEmail, bounceSender string) error {
+// recipient. rawMessage is the original wire bytes that accompany parsedEmail;
+// it is passed to delivery so the stored message is byte-exact. A returned
+// error means the recipient still needs processing on a retry; callers record
+// a dedup marker only when this returns nil.
+func (r *Receiver) handleRecipient(ctx context.Context, key, recipient string, parsedEmail *email.UserEmail, rawMessage []byte, bounceSender string) error {
 	identity := MailIdentityForRecipient(recipient)
 	rules, err := r.cfg.IdentityConfig.GetByIdentity(identity)
 	if err != nil {
@@ -249,7 +254,7 @@ func (r *Receiver) handleRecipient(ctx context.Context, key, recipient string, p
 				slog.Debug("Receiver: recipient is not a user", "recipient", recipient, "rule", rule)
 				continue
 			}
-			if err := r.deliverToRecipient(ctx, recipient, parsedEmail); err != nil {
+			if err := r.deliverToRecipient(ctx, recipient, parsedEmail, rawMessage); err != nil {
 				slog.Error("Receiver: failed to deliver", "recipient", recipient, "err", err)
 				return fmt.Errorf("delivery to %s failed: %w", recipient, err)
 			}
@@ -257,7 +262,7 @@ func (r *Receiver) handleRecipient(ctx context.Context, key, recipient string, p
 		case DeliverToMailIdentity:
 			mailbox := rules.deliveryIdentity(recipient)
 			slog.Debug("Receiver: routed to mail identity", "recipient", recipient, "mailbox", mailbox)
-			if err := r.deliverToRecipient(ctx, mailbox, parsedEmail); err != nil {
+			if err := r.deliverToRecipient(ctx, mailbox, parsedEmail, rawMessage); err != nil {
 				slog.Error("Receiver: failed to deliver", "recipient", mailbox, "err", err)
 				return fmt.Errorf("delivery to %s failed: %w", mailbox, err)
 			}
@@ -297,11 +302,13 @@ func (r *Receiver) handleRecipient(ctx context.Context, key, recipient string, p
 	return nil
 }
 
-// deliverToRecipient stores the parsed message using the configured storage.
-// Storage owns the generated id and mailbox placement; the receiver only uses
-// the returned id to initialize the message's JMAP metadata.
-func (r *Receiver) deliverToRecipient(ctx context.Context, recipient string, message *email.UserEmail) error {
-	id, err := r.cfg.Storage.AddEmail(ctx, recipient, message)
+// deliverToRecipient stores the message using the configured storage. Storage
+// owns the generated id and mailbox placement; the receiver only uses the
+// returned id to initialize the message's JMAP metadata. The original wire
+// bytes are passed through so the store keeps headers, MIME parts and
+// attachments intact instead of re-rendering the parsed copy.
+func (r *Receiver) deliverToRecipient(ctx context.Context, recipient string, message *email.UserEmail, raw []byte) error {
+	id, err := r.cfg.Storage.AddEmail(ctx, recipient, message, raw)
 	if err != nil {
 		return fmt.Errorf("failed to add email for %s: %w", recipient, err)
 	}

@@ -20,6 +20,7 @@ var _ Storage = (*MemoryStorage)(nil)
 type MemoryStorage struct {
 	mu         sync.RWMutex
 	emails     map[string]*email.ListedEmail
+	raw        map[string][]byte
 	drafts     map[string]map[string][]byte
 	sessionIDs map[string]map[string]string
 }
@@ -27,6 +28,7 @@ type MemoryStorage struct {
 func NewMemoryStorage() *MemoryStorage {
 	return &MemoryStorage{
 		emails:     make(map[string]*email.ListedEmail),
+		raw:        make(map[string][]byte),
 		drafts:     make(map[string]map[string][]byte),
 		sessionIDs: make(map[string]map[string]string),
 	}
@@ -38,8 +40,9 @@ func (s *MemoryStorage) Name() string {
 
 // AddEmail implements the Storage interface. The id is generated here so the
 // caller can use it to create the message's metadata. New messages go to the
-// account's inbox; there is no mailbox argument.
-func (s *MemoryStorage) AddEmail(_ context.Context, accountID string, message *email.UserEmail) (string, error) {
+// account's inbox; there is no mailbox argument. When raw is non-nil it is
+// retained so GetEmailRaw can return the original bytes.
+func (s *MemoryStorage) AddEmail(_ context.Context, accountID string, message *email.UserEmail, raw []byte) (string, error) {
 	if strings.TrimSpace(accountID) == "" {
 		return "", errors.New("accountID is required")
 	}
@@ -61,6 +64,9 @@ func (s *MemoryStorage) AddEmail(_ context.Context, accountID string, message *e
 		return "", errors.New("email already exists")
 	}
 	s.emails[id] = listed
+	if raw != nil {
+		s.raw[id] = append([]byte(nil), raw...)
+	}
 	return id, nil
 }
 
@@ -116,10 +122,9 @@ func (s *MemoryStorage) GetEmail(_ context.Context, id string) (*email.ListedEma
 	return clone(e), nil
 }
 
-// GetEmailRaw implements the Storage interface. The in-memory store holds only
-// parsed messages, so it renders a minimal RFC 5322 message from the stored
-// fields. This is useful for local development; production stores such as S3
-// return the original delivered bytes instead.
+// GetEmailRaw implements the Storage interface. Messages added with raw bytes
+// return those bytes verbatim; messages added only as parsed content are
+// rendered as a minimal RFC 5322 message from their stored fields.
 func (s *MemoryStorage) GetEmailRaw(_ context.Context, id string) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -127,6 +132,9 @@ func (s *MemoryStorage) GetEmailRaw(_ context.Context, id string) ([]byte, error
 	e, ok := s.emails[id]
 	if !ok {
 		return nil, ErrNotFound
+	}
+	if raw, ok := s.raw[id]; ok {
+		return append([]byte(nil), raw...), nil
 	}
 	return email.RawFromUserEmail(e.Email), nil
 }
@@ -140,6 +148,7 @@ func (s *MemoryStorage) DeleteEmail(_ context.Context, id string) error {
 		return ErrNotFound
 	}
 	delete(s.emails, id)
+	delete(s.raw, id)
 	return nil
 }
 

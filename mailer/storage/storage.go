@@ -52,7 +52,12 @@ type Storage interface {
 	GetEmailRaw(ctx context.Context, id string) ([]byte, error)
 	// AddEmail stores a new message in the account's inbox and returns the
 	// generated id. The caller uses the returned id to create its metadata.
-	AddEmail(ctx context.Context, accountID string, message *email.UserEmail) (string, error)
+	// raw is the original RFC 5322 bytes read from the wire (for example the
+	// SES staging object). When non-nil it must be stored verbatim so that
+	// GetEmailRaw returns every header, MIME part and transfer encoding
+	// unchanged. A nil raw asks the store to render a message from the parsed
+	// fields, which is the case for messages created through JMAP.
+	AddEmail(ctx context.Context, accountID string, message *email.UserEmail, raw []byte) (string, error)
 	// DeleteEmail removes the message with the given id. It returns
 	// ErrNotFound when no such message exists.
 	DeleteEmail(ctx context.Context, id string) error

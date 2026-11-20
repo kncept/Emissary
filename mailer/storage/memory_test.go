@@ -45,7 +45,7 @@ func TestMemoryStorage_AddEmailGeneratesIDAndUsesInbox(t *testing.T) {
 	s := NewMemoryStorage()
 	message := &email.UserEmail{Subject: "New", Text: "Body"}
 
-	id, err := s.AddEmail(context.Background(), "alice@example.com", message)
+	id, err := s.AddEmail(context.Background(), "alice@example.com", message, nil)
 	if err != nil {
 		t.Fatalf("AddEmail() error = %v", err)
 	}

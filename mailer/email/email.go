@@ -169,9 +169,10 @@ func DecodeID(id string) (string, error) {
 }
 
 // RawFromUserEmail builds a minimal RFC 5322 message from a parsed email. It
-// is intended for stores that do not retain the original delivered bytes (for
-// example the in-memory development store). It is a best-effort rendering, not
-// a byte-exact copy of the original wire format.
+// is intended for messages that have no original wire bytes to retain (for
+// example messages created through JMAP). It is a best-effort rendering, not
+// a byte-exact copy of the original wire format; inbound delivery passes the
+// staging bytes to Storage.AddEmail instead so they can be stored verbatim.
 func RawFromUserEmail(e *UserEmail) []byte {
 	if e == nil {
 		return nil

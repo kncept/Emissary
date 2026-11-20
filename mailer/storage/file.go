@@ -165,8 +165,11 @@ func (s *FileStorage) GetEmailRaw(_ context.Context, id string) ([]byte, error) 
 
 // AddEmail implements the Storage interface. Messages for the account go to
 // its inbox; the returned id is the key relative to the storage root, exactly
-// like the key returned by S3Storage.
-func (s *FileStorage) AddEmail(_ context.Context, accountID string, message *email.UserEmail) (string, error) {
+// like the key returned by S3Storage. When raw is non-nil it is written
+// verbatim, preserving the original headers, MIME parts and transfer
+// encodings; otherwise a best-effort rendering is produced from the parsed
+// message.
+func (s *FileStorage) AddEmail(_ context.Context, accountID string, message *email.UserEmail, raw []byte) (string, error) {
 	mailboxPrefix := email.MailboxKeyPrefix(accountID, "inbox")
 	if mailboxPrefix == "" {
 		return "", errors.New("accountID is required")
@@ -191,8 +194,12 @@ func (s *FileStorage) AddEmail(_ context.Context, accountID string, message *ema
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	slog.Debug("Filesystem: storing email", "key", key, "root", s.root)
-	if err := fsutil.WriteFileAtomically(objectPath, email.RawFromUserEmail(message), 0644); err != nil {
+	stored := raw
+	if stored == nil {
+		stored = email.RawFromUserEmail(message)
+	}
+	slog.Debug("Filesystem: storing email", "key", key, "root", s.root, "rawBytes", len(stored))
+	if err := fsutil.WriteFileAtomically(objectPath, stored, 0644); err != nil {
 		slog.Error("Filesystem: failed to store email", "key", key, "err", err)
 		return "", fmt.Errorf("failed to add email %q: %w", key, err)
 	}

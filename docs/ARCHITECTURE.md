@@ -103,15 +103,19 @@ instantiated in `handler.New`:
 4. A consumer process (Lambda or scheduled job) reads from the staging area,
    validates recipients, and delivers each message to the appropriate user mailboxes:
    - For each valid recipient, the receiver calls
-     `storage.Storage.AddEmail(ctx, recipient, parsedEmail)` on the **configured**
-     store (S3 in production, memory for local runs). Delivery no longer writes
-     an S3 key directly from the receiver.
+     `storage.Storage.AddEmail(ctx, recipient, parsedEmail, raw)` on the **configured**
+     store (S3 in production, memory for local runs), passing the original
+     staging bytes as `raw`. Delivery no longer writes an S3 key directly
+     from the receiver.
    - `AddEmail` assigns the mailbox and generates the email id. `S3Storage`
      writes `users/<recipient-email>/inbox/<timestamp>_<generated-id>.eml`,
      deriving the timestamp from the `Date` header (falling back to the current
      time) as ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`).
      Legacy deliveries used the SES message id in place of `<generated-id>`;
-     both remain readable.
+     both remain readable. `AddEmail` stores the supplied `raw` bytes verbatim,
+     so the delivered `.eml` keeps every header, MIME part and transfer
+     encoding (including attachments). JMAP-created mail has no wire bytes and
+     is rendered from the parsed fields instead.
    - The receiver creates a metadata record in the metadata store keyed by the
      **id returned from `AddEmail`** (the full S3 object key for `S3Storage`).
      The record starts with an empty keyword set and a server-stamped
@@ -182,9 +186,10 @@ validation and delivery process applies:
 
 3. **Deliver to selected recipients** — For each recipient whose rule
    selected delivery:
-   - Call `Storage.AddEmail(ctx, recipient, parsedEmail)` on the configured
-     store. The store assigns the id and writes to the recipient's `inbox`;
-     the receiver does not construct mailbox keys.
+   - Call `Storage.AddEmail(ctx, recipient, parsedEmail, raw)` on the
+     configured store, passing the original staging bytes. The store assigns
+     the id, writes the bytes verbatim to the recipient's `inbox`, and the
+     receiver does not construct mailbox keys.
    - For `S3Storage`, the key is `users/<recipient-email>/inbox/<timestamp>_<generated-id>.eml`,
      with the timestamp derived from the `Date` header (or the current time)
      in ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`).

@@ -39,7 +39,7 @@ func TestFileStorageAddListGetDelete(t *testing.T) {
 		t.Errorf("Name() = %q, want filesystem", store.Name())
 	}
 
-	id, err := store.AddEmail(ctx, "Alice@Example.com", fileTestMessage())
+	id, err := store.AddEmail(ctx, "Alice@Example.com", fileTestMessage(), nil)
 	if err != nil {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
@@ -106,7 +106,7 @@ func TestFileStorageAddListGetDelete(t *testing.T) {
 func TestFileStoragePersistsAcrossReopen(t *testing.T) {
 	ctx := context.Background()
 	store, root := newTestFileStorage(t)
-	id, err := store.AddEmail(ctx, "alice@example.com", fileTestMessage())
+	id, err := store.AddEmail(ctx, "alice@example.com", fileTestMessage(), nil)
 	if err != nil {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
@@ -183,7 +183,7 @@ func TestFileStorageRejectsTraversal(t *testing.T) {
 			t.Errorf("DeleteEmail(%q) succeeded", id)
 		}
 	}
-	if _, err := store.AddEmail(ctx, "../evil", fileTestMessage()); err == nil {
+	if _, err := store.AddEmail(ctx, "../evil", fileTestMessage(), nil); err == nil {
 		t.Error("AddEmail with traversal account succeeded")
 	}
 	if _, err := store.PutDraft(ctx, "../evil", "d1", fileTestMessage()); err == nil {

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -364,10 +365,11 @@ func parseEmail(key, raw string) Email {
 
 // AddEmail implements the Storage interface. New messages go to the
 // account's inbox. Storage owns the generated id and key layout, and returns
-// the full object key so callers can key metadata by that same id. The raw
-// content is a best-effort RFC 5322 rendering of the parsed message; the
-// original wire bytes are not available through this interface.
-func (s *S3Storage) AddEmail(ctx context.Context, accountID string, message *email.UserEmail) (string, error) {
+// the full object key so callers can key metadata by that same id. When raw is
+// non-nil it is stored verbatim, preserving the original headers, MIME parts
+// and transfer encodings for GetEmailRaw; otherwise a best-effort rendering
+// is produced from the parsed message.
+func (s *S3Storage) AddEmail(ctx context.Context, accountID string, message *email.UserEmail, raw []byte) (string, error) {
 	mailboxPrefix := email.MailboxKeyPrefix(accountID, "inbox")
 	if mailboxPrefix == "" {
 		return "", errors.New("accountID is required")
@@ -387,12 +389,15 @@ func (s *S3Storage) AddEmail(ctx context.Context, accountID string, message *ema
 	}
 	key := fmt.Sprintf("%s%s_%s.eml", s.listPrefix()+mailboxPrefix, email.FormatDeliveredTimestamp(timestamp), id)
 
-	raw := email.RawFromUserEmail(message)
-	slog.Debug("S3: storing email", "key", key, "account", accountID)
+	stored := raw
+	if stored == nil {
+		stored = email.RawFromUserEmail(message)
+	}
+	slog.Debug("S3: storing email", "key", key, "account", accountID, "rawBytes", len(stored))
 	if _, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
-		Body:   strings.NewReader(string(raw)),
+		Body:   bytes.NewReader(stored),
 	}); err != nil {
 		slog.Error("S3: failed to store email", "key", key, "err", err)
 		return "", fmt.Errorf("failed to add email %q: %w", key, err)

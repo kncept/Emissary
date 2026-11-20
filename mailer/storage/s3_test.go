@@ -109,7 +109,7 @@ func TestS3StorageAddEmailStoresInInboxAndReturnsFullKey(t *testing.T) {
 		Text:    "Message body",
 	}
 
-	id, err := store.AddEmail(context.Background(), "Bob@Example.com", message)
+	id, err := store.AddEmail(context.Background(), "Bob@Example.com", message, nil)
 	if err != nil {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
@@ -140,7 +140,7 @@ func TestS3StorageAddEmailHonorsConfiguredPrefix(t *testing.T) {
 	store := &S3Storage{client: fake, bucket: "mail-bucket", prefix: "emails"}
 	message := &email.UserEmail{Subject: "Hello", Text: "Message body"}
 
-	id, err := store.AddEmail(context.Background(), "bob@example.com", message)
+	id, err := store.AddEmail(context.Background(), "bob@example.com", message, nil)
 	if err != nil {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
@@ -155,10 +155,10 @@ func TestS3StorageAddEmailHonorsConfiguredPrefix(t *testing.T) {
 func TestS3StorageAddEmailValidatesInput(t *testing.T) {
 	store := &S3Storage{client: newFakeS3(map[string]string{}), bucket: "mail-bucket"}
 
-	if _, err := store.AddEmail(context.Background(), "", &email.UserEmail{Subject: "Hello"}); err == nil {
+	if _, err := store.AddEmail(context.Background(), "", &email.UserEmail{Subject: "Hello"}, nil); err == nil {
 		t.Error("AddEmail() with empty accountID should fail")
 	}
-	if _, err := store.AddEmail(context.Background(), "bob@example.com", nil); err == nil {
+	if _, err := store.AddEmail(context.Background(), "bob@example.com", nil, nil); err == nil {
 		t.Error("AddEmail() with nil message should fail")
 	}
 }

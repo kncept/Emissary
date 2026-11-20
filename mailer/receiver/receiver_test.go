@@ -110,6 +110,49 @@ func TestProcessMessageDeliversThroughConfiguredStorage(t *testing.T) {
 	}
 }
 
+func TestProcessMessagePreservesOriginalMIME(t *testing.T) {
+	const key = "mime-preservation"
+	raw := []byte(receivedHeader("alice@example.com") +
+		"From: sender@example.com\r\n" +
+		"To: alice@example.com\r\n" +
+		"Subject: with attachment\r\n" +
+		"MIME-Version: 1.0\r\n" +
+		"Content-Type: multipart/mixed; boundary=\"BOUND\"\r\n" +
+		"X-Custom-Header: keep-me\r\n" +
+		"\r\n" +
+		"--BOUND\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n" +
+		"Content-Transfer-Encoding: quoted-printable\r\n" +
+		"\r\n" +
+		"plain body\r\n" +
+		"\r\n" +
+		"--BOUND\r\n" +
+		"Content-Type: application/octet-stream; name=\"report.bin\"\r\n" +
+		"Content-Transfer-Encoding: base64\r\n" +
+		"Content-Disposition: attachment; filename=\"report.bin\"\r\n" +
+		"\r\n" +
+		"AAECAwQFBgcICQ==\r\n" +
+		"\r\n" +
+		"--BOUND--\r\n")
+	client := &fakeS3{objects: map[string][]byte{key: raw}}
+	r, emailStore, _ := newTestReceiver(client)
+
+	if err := r.ProcessMessage(context.Background(), key); err != nil {
+		t.Fatalf("ProcessMessage() error = %v", err)
+	}
+	listed, err := emailStore.ListEmails(context.Background(), "alice@example.com", "inbox")
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("emails = %v, %v; want one delivery", listed, err)
+	}
+	got, err := emailStore.GetEmailRaw(context.Background(), listed[0].Ref.ID)
+	if err != nil {
+		t.Fatalf("GetEmailRaw() error = %v", err)
+	}
+	if !bytes.Equal(got, raw) {
+		t.Errorf("GetEmailRaw() = %q, want the original staging bytes %q", got, raw)
+	}
+}
+
 func TestProcessMessageRoutesByEnvelopeRecipientNotToHeader(t *testing.T) {
 	const key = "envelope-not-to"
 	raw := receivedHeader("envelope@example.com") +

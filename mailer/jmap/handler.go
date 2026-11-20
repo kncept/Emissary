@@ -776,7 +776,9 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			}
 		} else {
 			var err error
-			newID, err = h.storage.AddEmail(ctx, accountID, newEmail)
+			// Messages created through JMAP have no original wire bytes; the
+			// store renders the .eml from the parsed fields in that case.
+			newID, err = h.storage.AddEmail(ctx, accountID, newEmail, nil)
 			if err != nil {
 				notCreated[createID] = map[string]string{"type": "serverFail", "description": "Failed to save email: " + err.Error()}
 				continue
