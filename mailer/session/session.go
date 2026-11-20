@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -33,6 +34,9 @@ type SessionStore interface {
 	Create(ctx context.Context, s *Session) error
 	UpdateIssue(ctx context.Context, id string, expectedIssue, newIssue int) error
 	Delete(ctx context.Context, id string) error
+	// DeleteByUser revokes every session belonging to the given user. It is
+	// used after a password change so old refresh tokens cannot be exchanged.
+	DeleteByUser(ctx context.Context, userEmail string) error
 	Name() string
 }
 
@@ -79,12 +83,22 @@ func (m *MemorySessionStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+func (m *MemorySessionStore) DeleteByUser(_ context.Context, userEmail string) error {
+	for id, sess := range m.sessions {
+		if strings.EqualFold(sess.UserEmail, userEmail) {
+			delete(m.sessions, id)
+		}
+	}
+	return nil
+}
+
 func (m *MemorySessionStore) Name() string { return "memory" }
 
 // ddbClient is the subset of the DynamoDB client used by DdbSessionStore. It
 // is an interface so the store can be tested without AWS.
 type ddbClient interface {
 	Query(ctx context.Context, params *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)
+	Scan(ctx context.Context, params *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
 	PutItem(ctx context.Context, params *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
 	UpdateItem(ctx context.Context, params *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
 	DeleteItem(ctx context.Context, params *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
@@ -213,6 +227,50 @@ func (d *DdbSessionStore) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	return d.deleteWithKeys(ctx, id, session.UserEmail)
+}
+
+// DeleteByUser removes every session belonging to userEmail. The sessions
+// table is keyed by session id, so a filtered scan (with pagination) is used
+// to find the sessions; there is no index on the userEmail sort key.
+func (d *DdbSessionStore) DeleteByUser(ctx context.Context, userEmail string) error {
+	email := strings.ToLower(strings.TrimSpace(userEmail))
+	if email == "" {
+		return nil
+	}
+
+	var startKey map[string]types.AttributeValue
+	for {
+		output, err := d.client.Scan(ctx, &dynamodb.ScanInput{
+			TableName:        aws.String(d.tableName),
+			FilterExpression: aws.String("#userEmail = :userEmail"),
+			ExpressionAttributeNames: map[string]string{
+				"#userEmail": "userEmail",
+			},
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":userEmail": &types.AttributeValueMemberS{Value: email},
+			},
+			ExclusiveStartKey: startKey,
+			ConsistentRead:    aws.Bool(true),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to scan sessions: %w", err)
+		}
+
+		for _, item := range output.Items {
+			var sess Session
+			if err := attributevalue.UnmarshalMap(item, &sess); err != nil {
+				return fmt.Errorf("failed to unmarshal session: %w", err)
+			}
+			if err := d.deleteWithKeys(ctx, sess.ID, sess.UserEmail); err != nil {
+				return err
+			}
+		}
+
+		if len(output.LastEvaluatedKey) == 0 {
+			return nil
+		}
+		startKey = output.LastEvaluatedKey
+	}
 }
 
 // deleteWithKeys deletes a session using both PK (id) and SK (userEmail).

@@ -279,15 +279,21 @@ paths:
       summary: Change a user's password
       description: |-
         Changes the password for the user with the given email address.
-        
+
         **Authorization rules:**
         - Any authenticated user can change their own password (the `email` path
           parameter must match the authenticated user's email). The `oldPassword`
           field is required and verified.
         - Administrators with the `EmissaryUserManagement` claim can change any
-          user's password. When an admin changes another user's password, the
-          `oldPassword` field is optional (but if provided, it is verified).
-        
+          user's password. Resetting an account with System Manager or User
+          Manager privileges additionally requires the caller to have the
+          `systemManager` claim, so a User Manager cannot escalate by resetting
+          a privileged account. When an admin changes another user's password,
+          the `oldPassword` field is optional (but if provided, it is verified).
+
+        Every successful password change revokes all sessions for that user,
+        invalidating their refresh tokens.
+
         This endpoint is only available when the configured user manager
         implements `EmissaryAuthManager` (i.e., the `ddb` backend). Otherwise,
         it returns `403 Forbidden`.
@@ -328,7 +334,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '403':
-          description: Insufficient permissions (not the account owner, not an admin with EmissaryUserManagement, or backend doesn't support password change)
+          description: Insufficient permissions (not the account owner, no EmissaryUserManagement claim, no systemManager claim for a privileged target, or backend doesn't support password change)
           content:
             application/json:
               schema:

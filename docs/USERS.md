@@ -93,6 +93,10 @@ Any authenticated user can change their own password via `POST /api/user/{email}
 
 Administrators with the `EmissaryUserManagement` claim can change any user's password. When an admin changes another user's password, the `oldPassword` field is optional (but if provided, it is verified).
 
+Resetting a privileged account (one with the System Manager or User Manager role) additionally requires the caller to have the `systemManager` claim. This prevents a User Manager from escalating to System Manager by resetting a System Manager's password. Users can always change their own password with their current password.
+
+Every successful password change revokes all sessions for that user, so refresh tokens issued before the change can no longer be exchanged.
+
 The endpoint is only available when the configured user manager implements `EmissaryAuthManager` (i.e., the `ddb` or `s3` backend). Otherwise, it returns `403 Forbidden`.
 
 Request body:
@@ -111,7 +115,7 @@ Response (`200`):
 Errors:
 - `400` — Missing or invalid fields
 - `401` — Authentication required
-- `403` — Insufficient permissions (not the account owner, no EmissaryUserManagement permission, or backend doesn't support password change)
+- `403` — Insufficient permissions (not the account owner, no EmissaryUserManagement permission, no systemManager permission for a privileged target, or backend doesn't support password change)
 - `404` — User not found
 - `409` — Old password is incorrect
 

@@ -37,9 +37,15 @@ type Invoker interface {
 	//
 	//  - Any authenticated user can change their own password (the `email` path parameter must match the
 	//    authenticated user's email). The `oldPassword` field is required and verified.
-	//  - Administrators with the `EmissaryUserManagement` claim can change any user's password. When an
-	//    admin changes another user's password, the `oldPassword` field is optional (but if provided, it
-	//    is verified).
+	//  - Administrators with the `EmissaryUserManagement` claim can change any user's password. Resetting
+	//    an account with System Manager or User Manager privileges additionally requires the caller to
+	//    have the `systemManager` claim, so a User Manager cannot escalate by resetting a privileged
+	//    account. When an admin changes another user's password, the `oldPassword` field is optional (but
+	//    if provided, it is verified).
+	//
+	//
+	// Every successful password change revokes all sessions for that user, invalidating their
+	// refresh tokens.
 	//
 	// This endpoint is only available when the configured user manager implements `EmissaryAuthManager`
 	// (i.e., the `ddb` backend). Otherwise, it returns `403 Forbidden`.
@@ -137,9 +143,14 @@ func (c *Client) requestURL(ctx context.Context) *url.URL {
 //
 //   - Any authenticated user can change their own password (the `email` path parameter must match the
 //     authenticated user's email). The `oldPassword` field is required and verified.
-//   - Administrators with the `EmissaryUserManagement` claim can change any user's password. When an
-//     admin changes another user's password, the `oldPassword` field is optional (but if provided, it
-//     is verified).
+//   - Administrators with the `EmissaryUserManagement` claim can change any user's password. Resetting
+//     an account with System Manager or User Manager privileges additionally requires the caller to
+//     have the `systemManager` claim, so a User Manager cannot escalate by resetting a privileged
+//     account. When an admin changes another user's password, the `oldPassword` field is optional (but
+//     if provided, it is verified).
+//
+// Every successful password change revokes all sessions for that user, invalidating their
+// refresh tokens.
 //
 // This endpoint is only available when the configured user manager implements `EmissaryAuthManager`
 // (i.e., the `ddb` backend). Otherwise, it returns `403 Forbidden`.

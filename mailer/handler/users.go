@@ -258,6 +258,26 @@ func (h *usersHandler) ChangePassword(ctx context.Context, req *usersapi.ChangeP
 		return &usersapi.ChangePasswordForbidden{Error: "insufficient permissions"}, nil
 	}
 
+	// Resetting a privileged account (System Manager or User Manager) hands
+	// the caller that account's permissions at the next login, so it requires
+	// System Manager privileges. Read the stored record rather than trusting
+	// any caller-supplied role information.
+	if !isOwnAccount {
+		target, err := h.manager.Get(ctx, params.Email)
+		if err != nil {
+			if errors.Is(err, usermanager.ErrUserNotFound) {
+				slog.Debug("Change password: user not found", "email", params.Email)
+				return &usersapi.ChangePasswordNotFound{Error: "user not found"}, nil
+			}
+			slog.Error("Get user for password change failed", "email", params.Email, "err", err)
+			return &usersapi.ChangePasswordBadRequest{Error: "failed to change password"}, nil
+		}
+		if isPrivilegedUser(target) && !claims.SystemManager {
+			slog.Warn("Password reset of privileged user denied", "email", params.Email, "subject", claims.Subject)
+			return &usersapi.ChangePasswordForbidden{Error: "insufficient permissions to reset a privileged user's password"}, nil
+		}
+	}
+
 	oldPassword := ""
 	if req.OldPassword.IsSet() {
 		oldPassword = req.OldPassword.Value
@@ -282,9 +302,27 @@ func (h *usersHandler) ChangePassword(ctx context.Context, req *usersapi.ChangeP
 			return &usersapi.ChangePasswordBadRequest{Error: "failed to change password"}, nil
 		}
 	}
+	// Every successful password set/reset invalidates the target's sessions,
+	// including self-service changes and resets of non-privileged accounts.
+	// Otherwise a session created before the change could still be refreshed.
+	if h.auth != nil {
+		if err := h.auth.RevokeUserSessions(ctx, params.Email); err != nil {
+			slog.Error("Failed to revoke sessions after password change", "email", params.Email, "err", err)
+			return &usersapi.ChangePasswordBadRequest{Error: "password changed but failed to revoke sessions"}, nil
+		}
+	} else {
+		slog.Warn("Password changed without session revocation: no authenticator configured", "email", params.Email)
+	}
 	slog.Info("Password changed", "email", params.Email)
 
 	return &usersapi.ChangePasswordResponse{Success: true}, nil
+}
+
+// isPrivilegedUser reports whether the account holds a management role. Both
+// roles are sensitive: System Manager unlocks /api/support/*, and User Manager
+// can administer other accounts.
+func isPrivilegedUser(user *usermanager.EmissaryUser) bool {
+	return user != nil && (user.SystemManager || user.UserManager)
 }
 
 func currentClaimsFromContext(ctx context.Context) *auth.Claims {

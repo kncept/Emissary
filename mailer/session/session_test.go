@@ -20,10 +20,12 @@ import (
 type fakeDdb struct {
 	mu sync.Mutex
 
-	items   map[string]map[string]types.AttributeValue
-	queries []*dynamodb.QueryInput
-	updates []*dynamodb.UpdateItemInput
-	deletes []map[string]types.AttributeValue
+	items        map[string]map[string]types.AttributeValue
+	queries      []*dynamodb.QueryInput
+	scans        []*dynamodb.ScanInput
+	updates      []*dynamodb.UpdateItemInput
+	deletes      []map[string]types.AttributeValue
+	scanPageSize int // when > 0, split scan results into pages of this size
 }
 
 func newFakeDdb() *fakeDdb {
@@ -80,6 +82,51 @@ func (f *fakeDdb) Query(_ context.Context, params *dynamodb.QueryInput, _ ...fun
 		matches = matches[:*params.Limit]
 	}
 	return &dynamodb.QueryOutput{Items: matches}, nil
+}
+
+func (f *fakeDdb) Scan(_ context.Context, params *dynamodb.ScanInput, _ ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.scans = append(f.scans, params)
+	if got := aws.ToString(params.FilterExpression); got != "#userEmail = :userEmail" {
+		return nil, errors.New("unsupported scan filter")
+	}
+	email := attrString(params.ExpressionAttributeValues, ":userEmail")
+
+	// Iterate in key order so pagination with ExclusiveStartKey is deterministic.
+	keys := make([]string, 0, len(f.items))
+	for key := range f.items {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	startKey := ""
+	if len(params.ExclusiveStartKey) > 0 {
+		startKey = itemKey(params.ExclusiveStartKey)
+	}
+	var matches []map[string]types.AttributeValue
+	for _, key := range keys {
+		// Items before (or at) the start key were returned on an earlier page
+		// and may already have been deleted by the caller.
+		if startKey != "" && key <= startKey {
+			continue
+		}
+		if attrString(f.items[key], "userEmail") == email {
+			matches = append(matches, f.items[key])
+		}
+	}
+
+	var lastKey map[string]types.AttributeValue
+	if f.scanPageSize > 0 && len(matches) > f.scanPageSize {
+		last := matches[f.scanPageSize-1]
+		lastKey = map[string]types.AttributeValue{
+			"id":        last["id"],
+			"userEmail": last["userEmail"],
+		}
+		matches = matches[:f.scanPageSize]
+	}
+	return &dynamodb.ScanOutput{Items: matches, LastEvaluatedKey: lastKey}, nil
 }
 
 func (f *fakeDdb) PutItem(_ context.Context, params *dynamodb.PutItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
@@ -312,5 +359,94 @@ func TestDdbSessionStore_CreateRequiresKeys(t *testing.T) {
 func TestDdbSessionStore_Name(t *testing.T) {
 	if got := newDdbTestStore(newFakeDdb()).Name(); got != "ddb" {
 		t.Errorf("Name() = %q, want ddb", got)
+	}
+}
+
+func TestMemorySessionStore_DeleteByUser(t *testing.T) {
+	store := NewMemorySessionStore()
+	ctx := context.Background()
+	expires := time.Now().Add(time.Hour)
+
+	for _, sess := range []*Session{
+		testSession("alice-1", "alice@example.com", expires),
+		testSession("alice-2", "alice@example.com", expires),
+		testSession("bob-1", "bob@example.com", expires),
+	} {
+		if err := store.Create(ctx, sess); err != nil {
+			t.Fatalf("Create(%s) error = %v", sess.ID, err)
+		}
+	}
+
+	if err := store.DeleteByUser(ctx, "ALICE@EXAMPLE.COM"); err != nil {
+		t.Fatalf("DeleteByUser() error = %v", err)
+	}
+	for _, id := range []string{"alice-1", "alice-2"} {
+		if _, err := store.Get(ctx, id); !errors.Is(err, ErrSessionNotFound) {
+			t.Errorf("Get(%s) error = %v, want ErrSessionNotFound", id, err)
+		}
+	}
+	if _, err := store.Get(ctx, "bob-1"); err != nil {
+		t.Errorf("Get(bob-1) error = %v, want nil", err)
+	}
+}
+
+func TestDdbSessionStore_DeleteByUser(t *testing.T) {
+	client := newFakeDdb()
+	client.scanPageSize = 1 // exercise pagination
+	store := newDdbTestStore(client)
+	ctx := context.Background()
+	expires := time.Now().Add(time.Hour)
+
+	for _, sess := range []*Session{
+		testSession("alice-1", "alice@example.com", expires),
+		testSession("alice-2", "alice@example.com", expires),
+		testSession("bob-1", "bob@example.com", expires),
+	} {
+		if err := store.Create(ctx, sess); err != nil {
+			t.Fatalf("Create(%s) error = %v", sess.ID, err)
+		}
+	}
+
+	if err := store.DeleteByUser(ctx, "ALICE@EXAMPLE.COM"); err != nil {
+		t.Fatalf("DeleteByUser() error = %v", err)
+	}
+	for _, id := range []string{"alice-1", "alice-2"} {
+		if _, err := store.Get(ctx, id); !errors.Is(err, ErrSessionNotFound) {
+			t.Errorf("Get(%s) error = %v, want ErrSessionNotFound", id, err)
+		}
+	}
+	if _, err := store.Get(ctx, "bob-1"); err != nil {
+		t.Errorf("Get(bob-1) error = %v, want nil", err)
+	}
+
+	if len(client.scans) < 2 {
+		t.Fatalf("Scan calls = %d, want at least 2 (pagination)", len(client.scans))
+	}
+	for _, scan := range client.scans {
+		if !aws.ToBool(scan.ConsistentRead) {
+			t.Error("DeleteByUser() must use a consistent read")
+		}
+		if got := attrString(scan.ExpressionAttributeValues, ":userEmail"); got != "alice@example.com" {
+			t.Errorf("Scan userEmail value = %q, want normalized alice@example.com", got)
+		}
+	}
+	for _, key := range client.deletes {
+		if attrString(key, "userEmail") != "alice@example.com" {
+			t.Errorf("deleted key for wrong user: %#v", key)
+		}
+	}
+	if len(client.deletes) != 2 {
+		t.Errorf("DeleteItem calls = %d, want 2", len(client.deletes))
+	}
+}
+
+func TestDdbSessionStore_DeleteByUserEmptyEmail(t *testing.T) {
+	client := newFakeDdb()
+	store := newDdbTestStore(client)
+	if err := store.DeleteByUser(context.Background(), "  "); err != nil {
+		t.Fatalf("DeleteByUser(blank) error = %v", err)
+	}
+	if len(client.scans) != 0 {
+		t.Errorf("DeleteByUser(blank) scanned %d times, want 0", len(client.scans))
 	}
 }

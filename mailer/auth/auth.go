@@ -249,6 +249,17 @@ func (a *Authenticator) Logout(ctx context.Context, sid string) error {
 	return nil
 }
 
+// RevokeUserSessions revokes every session belonging to email, preventing any
+// of its refresh tokens from being exchanged. It is called whenever a password
+// is set or reset so previously issued sessions cannot survive the change.
+func (a *Authenticator) RevokeUserSessions(ctx context.Context, email string) error {
+	if err := a.sessionStore.DeleteByUser(ctx, email); err != nil {
+		return err
+	}
+	slog.Info("Revoked all sessions for user", "username", email)
+	return nil
+}
+
 // newSession starts a session for a newly authenticated user and issues its
 // first token pair. The session id never changes afterwards; only the refresh
 // issue number advances.
