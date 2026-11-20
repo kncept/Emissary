@@ -16,6 +16,7 @@ import (
 
 	supportapi "github.com/kncept/Emissary/api/support/generated"
 	"github.com/kncept/Emissary/mailer/auth"
+	configvendor "github.com/kncept/Emissary/mailer/config-vendor"
 	"github.com/kncept/Emissary/mailer/envutil"
 	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/receiver"
@@ -75,7 +76,7 @@ func newSupportHandler(ctx context.Context, cfg HandlerConfig, emailStore storag
 	// guarantees that a reported type of s3/filesystem/ddb really is written
 	// to when OK is pressed, regardless of how HandlerConfig was assembled.
 	if h.configStore == nil && strings.TrimSpace(cfg.ReceiverConfigType) != "" {
-		store, err := receiver.NewConfigStore(receiver.ConfigStoreOptions{
+		store, err := configvendor.ReceiverConfigStore(configvendor.ReceiverConfigStoreOptions{
 			Type:          cfg.ReceiverConfigType,
 			FilesystemDir: receiverFilesystemRoot(cfg),
 			Bucket:        receiverBucket(cfg),

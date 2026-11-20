@@ -161,14 +161,18 @@ add a new implementation, three places change:
      `$draft`, `$answered`, `$forwarded`, `$junk`, `$notjunk`, `$phishing`),
      and `EmailMetadata.ReceivedAt` is a server-owned RFC 3339 UTC timestamp
      stamped by `NewEmailMetadata` at creation and never accepted from JMAP
-     clients. Register a new store in `metadata.NewStore`, which is shared by
-     `handler.New` and `cmd/s3-receiver`.
+     clients. Register a new store in `metadata.NewStore`, which is reached
+     through `configvendor.Metadata` by `handler.New` and `cmd/s3-receiver`.
    - `usermanager.UserManager` — `Name`, `Authenticate`, `Lookup`,
      `Autocomplete` (`mailer/usermanager`)
-2. Register it in the factory that builds that component
-   (`metadata.NewStore` for metadata, `handler.New` for storage/sender, plus
-   `cmd/s3-receiver` for senders and metadata; `usermanager.New` for user
-   managers).
+2. Register it in `mailer/config-vendor`, the single place that vends each
+   component from its config subtype (`configvendor.Storage`, `.Sender`,
+   `.Metadata`, `.Session`, `.UserManager`, `.ReceiverConfigStore`). Both
+   `cmd/frontend` and `cmd/s3-receiver` use `configvendor.FromConfig`, while
+   `handler.New` calls the same per-subtype functions for callers that supply
+   only a selector. `metadata.NewStore`, `usermanager.New` and
+   `receiver.NewConfigStore` remain the low-level selectors those functions
+   delegate to.
 3. Teach `mailer/config` to validate the new selector value and any
    required companion variables.
 

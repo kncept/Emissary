@@ -18,6 +18,7 @@ import (
 	supportapi "github.com/kncept/Emissary/api/support/generated"
 	usersapi "github.com/kncept/Emissary/api/users/generated"
 	"github.com/kncept/Emissary/mailer/auth"
+	configvendor "github.com/kncept/Emissary/mailer/config-vendor"
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/gui"
 	"github.com/kncept/Emissary/mailer/jmap"
@@ -51,6 +52,7 @@ type HandlerConfig struct {
 	DDBTablePrefix   string
 	Storage          storage.Storage
 	Metadata         metadata.MetadataStore
+	Session          session.SessionStore
 	JWTAudience      string
 	JWTIssuer        string
 	UserManager      usermanager.UserManager
@@ -151,10 +153,12 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 		jwtTTL = 24 * time.Hour
 	}
 
-	users := cfg.UserManager
+	// Missing components are vended from the matching selector in cfg. Tests
+	// and programmatic callers can still supply a component directly.
 	var err error
+	users := cfg.UserManager
 	if users == nil {
-		users, err = usermanager.New(usermanager.Config{
+		users, err = configvendor.UserManager(configvendor.UserManagerOptions{
 			Type:             cfg.UserManagerType,
 			AdminUsername:    cfg.AuthUser,
 			AdminPassword:    cfg.AuthPass,
@@ -175,61 +179,53 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 		}
 	}
 
-	var sessionStore session.SessionStore
-	switch cfg.SessionType {
-	case "ddb", "dynamodb":
-		sessionStore, err = session.NewDdbSessionStore(resolveDDBTable(cfg.SessionTable, cfg.DDBTablePrefix, "sessions"), cfg.SessionRegion)
+	sessionStore := cfg.Session
+	if sessionStore == nil {
+		sessionStore, err = configvendor.Session(configvendor.SessionOptions{
+			Type:      cfg.SessionType,
+			TableName: resolveDDBTable(cfg.SessionTable, cfg.DDBTablePrefix, "sessions"),
+			Region:    cfg.SessionRegion,
+		})
 		if err != nil {
 			return nil, err
 		}
-	default:
-		sessionStore = session.NewMemorySessionStore()
 	}
 
 	authenticator := auth.NewWithUserManager(users, sessionStore, jwtSecret, jwtTTL, cfg.JWTAudience, cfg.JWTIssuer, cfg.AuthUser)
 
-	var emailStore storage.Storage
-	if cfg.Storage != nil {
-		emailStore = cfg.Storage
-	} else {
-		switch strings.ToLower(strings.TrimSpace(cfg.StorageType)) {
-		case "memory":
-			emailStore = storage.NewMemoryStorage()
-		case "filesystem":
-			emailStore, err = storage.NewFileStorage(filepath.Join(filesystemRoot(cfg.FilesystemDir), "mail"))
-			if err != nil {
-				return nil, err
-			}
-		default:
-			emailStore, err = storage.NewS3Storage(cfg.S3Bucket)
-			if err != nil {
-				return nil, err
-			}
+	emailStore := cfg.Storage
+	if emailStore == nil {
+		emailStore, err = configvendor.Storage(configvendor.StorageOptions{
+			Type:          cfg.StorageType,
+			S3Bucket:      cfg.S3Bucket,
+			FilesystemDir: filepath.Join(filesystemRoot(cfg.FilesystemDir), "mail"),
+		})
+		if err != nil {
+			return nil, err
 		}
 	}
 
-	var metaStore metadata.MetadataStore
-	if cfg.Metadata != nil {
-		metaStore = cfg.Metadata
-	} else {
-		metaStore, err = metadata.NewStore(cfg.MetadataType, cfg.MetadataPath, resolveDDBTable(cfg.MetadataTable, cfg.DDBTablePrefix, "metadata"), cfg.MetadataRegion)
-	}
-	if err != nil {
-		return nil, err
+	metaStore := cfg.Metadata
+	if metaStore == nil {
+		metaStore, err = configvendor.Metadata(configvendor.MetadataOptions{
+			Type:      cfg.MetadataType,
+			FilePath:  cfg.MetadataPath,
+			TableName: resolveDDBTable(cfg.MetadataTable, cfg.DDBTablePrefix, "metadata"),
+			Region:    cfg.MetadataRegion,
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	mailSender := cfg.Sender
 	if mailSender == nil {
-		switch strings.ToLower(strings.TrimSpace(cfg.SenderType)) {
-		case "aws-ses", "ses":
-			mailSender, err = sender.NewAwsSesSender(context.Background())
-			if err != nil {
-				return nil, err
-			}
-		case "mta":
-			mailSender = sender.NewMtaSender(cfg.SenderMTAPort)
-		default:
-			mailSender = sender.NewLogSender()
+		mailSender, err = configvendor.Sender(context.Background(), configvendor.SenderOptions{
+			Type:    cfg.SenderType,
+			MTAPort: cfg.SenderMTAPort,
+		})
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -237,15 +233,18 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 	// backend. A supplied config (tests or programmatic callers) wins.
 	identityConfig := cfg.ReceiverConfig
 	if identityConfig == nil {
-		configStore, err := receiver.NewConfigStore(receiver.ConfigStoreOptions{
-			Type:          cfg.ReceiverConfigType,
-			FilesystemDir: receiverFilesystemRoot(cfg),
-			Bucket:        receiverBucket(cfg),
-			TableName:     resolveDDBTable(cfg.ReceiverTable, cfg.DDBTablePrefix, "receiver"),
-			Region:        cfg.ReceiverRegion,
-		})
-		if err != nil {
-			return nil, err
+		configStore := cfg.ReceiverConfigStore
+		if configStore == nil {
+			configStore, err = configvendor.ReceiverConfigStore(configvendor.ReceiverConfigStoreOptions{
+				Type:          cfg.ReceiverConfigType,
+				FilesystemDir: receiverFilesystemRoot(cfg),
+				Bucket:        receiverBucket(cfg),
+				TableName:     resolveDDBTable(cfg.ReceiverTable, cfg.DDBTablePrefix, "receiver"),
+				Region:        cfg.ReceiverRegion,
+			})
+			if err != nil {
+				return nil, err
+			}
 		}
 		identityConfig, err = receiver.LoadMailIdentityConfig(context.Background(), configStore)
 		if err != nil {

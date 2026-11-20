@@ -10,6 +10,7 @@ import (
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 	"github.com/kncept/Emissary/mailer/awsutil"
 	"github.com/kncept/Emissary/mailer/config"
+	configvendor "github.com/kncept/Emissary/mailer/config-vendor"
 	"github.com/kncept/Emissary/mailer/envutil"
 	"github.com/kncept/Emissary/mailer/handler"
 )
@@ -23,6 +24,13 @@ func main() {
 	cfg, err := config.Load(ctx)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	// Vend every runtime component from its config subtype. The same factory
+	// is used by cmd/s3-receiver, so backends are registered in one place.
+	components, err := configvendor.FromConfig(ctx, cfg)
+	if err != nil {
+		log.Fatalf("Failed to create components from configuration: %v", err)
 	}
 
 	// Build handler config from loaded config
@@ -46,6 +54,14 @@ func main() {
 		SessionRegion:  cfg.Session.Region,
 		JWTAudience:    cfg.Server.JWTAudience,
 		JWTIssuer:      cfg.Server.JWTIssuer,
+
+		Storage:             components.Storage,
+		Metadata:            components.Metadata,
+		Session:             components.Session,
+		UserManager:         components.UserManager,
+		Sender:              components.Sender,
+		ReceiverConfigStore: components.ReceiverConfigStore,
+		ReceiverConfig:      components.ReceiverConfig,
 
 		UserManagerType:  cfg.UserManager.Type,
 		UserDomain:       cfg.UserManager.Domain,
