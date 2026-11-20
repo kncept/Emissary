@@ -7,6 +7,7 @@ import type {
 import { htmlToText } from '../html.ts';
 import type { SendEmailRequest } from '../types.ts';
 import { authenticatedFetch } from './auth-fetch.ts';
+import { recordEmailCheck } from './email-checks.ts';
 
 const SESSION_URL = '/.well-known/jmap';
 export const MASQUERADE_AS_KEY = 'masquerade_as';
@@ -165,6 +166,8 @@ export function parseAddressList(input: string): string[] {
 }
 
 export async function getEmails(_userFilter?: string): Promise<Email[]> {
+  // Any check of the inbox, wherever it comes from, restarts the update timer.
+  recordEmailCheck();
   const methodId = 'query1';
   const responses = await jmapRequest(['urn:ietf:params:jmap:mail'], [
     {

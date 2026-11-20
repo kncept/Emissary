@@ -3,6 +3,7 @@ import { useState } from 'react';
 import MasqueradeModal from './MasqueradeModal';
 import MaskIcon from './MaskIcon';
 import { MASQUERADE_AS_KEY } from '../api/jmap-client';
+import { requestEmailRefresh } from '../api/email-checks.ts';
 import {
   clearMasquerade as stopMasquerade,
   setMasqueradeTarget as startMasquerade,
@@ -50,6 +51,14 @@ export default function Layout({
     setMasqueradeAs(null);
   };
 
+  const handleNavClick = (path: string) => {
+    setMobileMenuOpen(false);
+    // A click on Inbox is an explicit refresh, even when already on "/".
+    // From another route the inbox has not mounted yet, so there is no
+    // subscriber and its normal mount load handles the refresh instead.
+    if (path === '/') requestEmailRefresh();
+  };
+
   return (
     <div className="app-layout">
       <header className="app-header">
@@ -65,7 +74,7 @@ export default function Layout({
                   <Link
                     to={item.path}
                     className={location.pathname === item.path ? 'active' : ''}
-                    onClick={() => setMobileMenuOpen(false)}
+                    onClick={() => handleNavClick(item.path)}
                   >
                     <span className="nav-icon">{item.icon}</span>
                     <span className="nav-label">{item.label}</span>

@@ -1,7 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { getEmails, deleteEmail, markRead, markFlagged } from '../api.ts';
+import {
+  EMAIL_CHECK_INTERVAL_MS,
+  onEmailCheck,
+  onEmailRefreshRequest,
+} from '../api/email-checks.ts';
 import type { Email } from '../types.ts';
 import ConfirmDialog from './ConfirmDialog.tsx';
 
@@ -12,25 +17,51 @@ export default function EmailList() {
   const [actionError, setActionError] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const checkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    loadEmails();
-  }, []);
-
-  const loadEmails = async () => {
+  const loadEmails = useCallback(async (background = false) => {
     try {
-      setLoading(true);
-      setError('');
+      if (!background) setLoading(true);
       // The JMAP client selects the account (including admin masquerade)
       // through accountId; there is no separate user filter.
       const data = await getEmails();
       setEmails(data);
+      setError('');
     } catch {
-      setError('Failed to load emails');
+      // A failed background check keeps the current inbox visible; it will be
+      // retried on the next timer. Initial/full refreshes show the error.
+      if (!background) setError('Failed to load emails');
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // getEmails reports every check, so this also restarts the timer when a
+    // refresh comes from outside the inbox (e.g. after sending a message).
+    const scheduleNextCheck = () => {
+      if (checkTimer.current !== null) clearTimeout(checkTimer.current);
+      checkTimer.current = setTimeout(() => {
+        checkTimer.current = null;
+        void loadEmails(true);
+      }, EMAIL_CHECK_INTERVAL_MS);
+    };
+
+    const unsubscribe = onEmailCheck(scheduleNextCheck);
+    const unsubscribeRefreshRequest = onEmailRefreshRequest(() => {
+      void loadEmails();
+    });
+    void loadEmails();
+
+    return () => {
+      unsubscribe();
+      unsubscribeRefreshRequest();
+      if (checkTimer.current !== null) {
+        clearTimeout(checkTimer.current);
+        checkTimer.current = null;
+      }
+    };
+  }, [loadEmails]);
 
   const handleDelete = async () => {
     if (!deleteId) return;
