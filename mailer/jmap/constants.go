@@ -1,69 +1,84 @@
 package jmap
 
-// MethodName constants for all JMAP methods (RFC 8621)
+import (
+	"github.com/kncept/Emissary/mailer/jmap/blob"
+	"github.com/kncept/Emissary/mailer/jmap/core"
+	"github.com/kncept/Emissary/mailer/jmap/email"
+	"github.com/kncept/Emissary/mailer/jmap/emailsubmission"
+	"github.com/kncept/Emissary/mailer/jmap/identity"
+	"github.com/kncept/Emissary/mailer/jmap/internal/base"
+	"github.com/kncept/Emissary/mailer/jmap/mailbox"
+	"github.com/kncept/Emissary/mailer/jmap/pushsubscription"
+	"github.com/kncept/Emissary/mailer/jmap/searchsnippet"
+	"github.com/kncept/Emissary/mailer/jmap/thread"
+	"github.com/kncept/Emissary/mailer/jmap/vacationresponse"
+)
+
+// MethodName constants are re-exported from the subpackage that owns each
+// object type so callers do not need to know about the internal split.
 const (
-	// Core
-	MethodCoreEcho = "Core/echo"
+	MethodCoreEcho = core.MethodEcho
 
-	// Mailbox
-	MethodMailboxGet          = "Mailbox/get"
-	MethodMailboxSet          = "Mailbox/set"
-	MethodMailboxChanges      = "Mailbox/changes"
-	MethodMailboxQuery        = "Mailbox/query"
-	MethodMailboxQueryChanges = "Mailbox/queryChanges"
+	MethodMailboxGet          = mailbox.MethodGet
+	MethodMailboxSet          = mailbox.MethodSet
+	MethodMailboxChanges      = mailbox.MethodChanges
+	MethodMailboxQuery        = mailbox.MethodQuery
+	MethodMailboxQueryChanges = mailbox.MethodQueryChanges
 
-	// Thread
-	MethodThreadGet     = "Thread/get"
-	MethodThreadChanges = "Thread/changes"
+	MethodThreadGet     = thread.MethodGet
+	MethodThreadChanges = thread.MethodChanges
 
-	// Email
-	MethodEmailGet          = "Email/get"
-	MethodEmailSet          = "Email/set"
-	MethodEmailChanges      = "Email/changes"
-	MethodEmailQuery        = "Email/query"
-	MethodEmailQueryChanges = "Email/queryChanges"
-	MethodEmailCopy         = "Email/copy"
-	MethodEmailImport       = "Email/import"
-	MethodEmailParse        = "Email/parse"
+	MethodEmailGet          = email.MethodGet
+	MethodEmailSet          = email.MethodSet
+	MethodEmailChanges      = email.MethodChanges
+	MethodEmailQuery        = email.MethodQuery
+	MethodEmailQueryChanges = email.MethodQueryChanges
+	MethodEmailCopy         = email.MethodCopy
+	MethodEmailImport       = email.MethodImport
+	MethodEmailParse        = email.MethodParse
 
-	// SearchSnippet
-	MethodSearchSnippetGet = "SearchSnippet/get"
+	MethodSearchSnippetGet = searchsnippet.MethodGet
 
-	// Identity
-	MethodIdentityGet     = "Identity/get"
-	MethodIdentitySet     = "Identity/set"
-	MethodIdentityChanges = "Identity/changes"
+	MethodIdentityGet     = identity.MethodGet
+	MethodIdentitySet     = identity.MethodSet
+	MethodIdentityChanges = identity.MethodChanges
 
-	// EmailSubmission
-	MethodEmailSubmissionGet          = "EmailSubmission/get"
-	MethodEmailSubmissionSet          = "EmailSubmission/set"
-	MethodEmailSubmissionChanges      = "EmailSubmission/changes"
-	MethodEmailSubmissionQuery        = "EmailSubmission/query"
-	MethodEmailSubmissionQueryChanges = "EmailSubmission/queryChanges"
+	MethodEmailSubmissionGet          = emailsubmission.MethodGet
+	MethodEmailSubmissionSet          = emailsubmission.MethodSet
+	MethodEmailSubmissionChanges      = emailsubmission.MethodChanges
+	MethodEmailSubmissionQuery        = emailsubmission.MethodQuery
+	MethodEmailSubmissionQueryChanges = emailsubmission.MethodQueryChanges
 
-	// VacationResponse
-	MethodVacationResponseGet     = "VacationResponse/get"
-	MethodVacationResponseSet     = "VacationResponse/set"
-	MethodVacationResponseChanges = "VacationResponse/changes"
+	MethodVacationResponseGet     = vacationresponse.MethodGet
+	MethodVacationResponseSet     = vacationresponse.MethodSet
+	MethodVacationResponseChanges = vacationresponse.MethodChanges
 
-	// PushSubscription (RFC 8620 section 7.2 defines only get and set)
-	MethodPushSubscriptionGet = "PushSubscription/get"
-	MethodPushSubscriptionSet = "PushSubscription/set"
+	MethodPushSubscriptionGet = pushsubscription.MethodGet
+	MethodPushSubscriptionSet = pushsubscription.MethodSet
+
+	MethodBlobCopy = blob.MethodCopy
+
+	// stateEmail is used by the historical change-tracking tests.
+	stateEmail = base.StateEmail
 )
 
 // AllMethods returns a list of all JMAP method names.
 func AllMethods() []string {
-	return []string{
-		MethodCoreEcho,
-		MethodMailboxGet, MethodMailboxSet, MethodMailboxChanges, MethodMailboxQuery, MethodMailboxQueryChanges,
-		MethodThreadGet, MethodThreadChanges,
-		MethodEmailGet, MethodEmailSet, MethodEmailChanges, MethodEmailQuery, MethodEmailQueryChanges,
-		MethodEmailCopy, MethodEmailImport, MethodEmailParse,
-		MethodSearchSnippetGet,
-		MethodIdentityGet, MethodIdentitySet, MethodIdentityChanges,
-		MethodEmailSubmissionGet, MethodEmailSubmissionSet, MethodEmailSubmissionChanges,
-		MethodEmailSubmissionQuery, MethodEmailSubmissionQueryChanges,
-		MethodVacationResponseGet, MethodVacationResponseSet, MethodVacationResponseChanges,
-		MethodPushSubscriptionGet, MethodPushSubscriptionSet,
+	groups := [][]string{
+		core.Methods(),
+		mailbox.Methods(),
+		thread.Methods(),
+		email.Methods(),
+		searchsnippet.Methods(),
+		identity.Methods(),
+		emailsubmission.Methods(),
+		vacationresponse.Methods(),
+		pushsubscription.Methods(),
+		blob.Methods(),
 	}
+	all := make([]string, 0)
+	for _, group := range groups {
+		all = append(all, group...)
+	}
+	return all
 }

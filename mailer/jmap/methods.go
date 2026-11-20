@@ -3,204 +3,179 @@ package jmap
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/kncept/Emissary/mailer/jmap/blob"
+	"github.com/kncept/Emissary/mailer/jmap/core"
+	"github.com/kncept/Emissary/mailer/jmap/email"
+	"github.com/kncept/Emissary/mailer/jmap/emailsubmission"
+	"github.com/kncept/Emissary/mailer/jmap/identity"
+	"github.com/kncept/Emissary/mailer/jmap/mailbox"
+	"github.com/kncept/Emissary/mailer/jmap/pushsubscription"
+	"github.com/kncept/Emissary/mailer/jmap/searchsnippet"
+	"github.com/kncept/Emissary/mailer/jmap/thread"
+	"github.com/kncept/Emissary/mailer/jmap/vacationresponse"
 )
 
-// MethodHandler defines the interface for handling individual JMAP method calls.
-// Each method corresponds to a JMAP method name (e.g., "Mailbox/get", "Email/set").
+// MethodHandler is the interface for handling individual JMAP method calls.
+// It is the union of the method contracts owned by each object subpackage.
 type MethodHandler interface {
-	// Core methods
-	CoreEcho(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-
-	// Mailbox methods
-	MailboxGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	MailboxSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	MailboxChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	MailboxQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	MailboxQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-
-	// Thread methods
-	ThreadGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	ThreadChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-
-	// Email methods
-	EmailGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	EmailSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	EmailChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	EmailQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	EmailQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	EmailCopy(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	EmailImport(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	EmailParse(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-
-	// SearchSnippet methods
-	SearchSnippetGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-
-	// Identity methods
-	IdentityGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	IdentitySet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	IdentityChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-
-	// EmailSubmission methods
-	EmailSubmissionGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	EmailSubmissionSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	EmailSubmissionChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	EmailSubmissionQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	EmailSubmissionQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-
-	// VacationResponse methods
-	VacationResponseGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	VacationResponseSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	VacationResponseChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-
-	// PushSubscription methods
-	PushSubscriptionGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	PushSubscriptionSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
+	core.MethodHandler
+	mailbox.MethodHandler
+	thread.MethodHandler
+	email.MethodHandler
+	searchsnippet.MethodHandler
+	identity.MethodHandler
+	emailsubmission.MethodHandler
+	vacationresponse.MethodHandler
+	pushsubscription.MethodHandler
+	blob.MethodHandler
 }
 
-// UnimplementedHandler is a default MethodHandler that panics for all methods.
+// ImplicitSetHandler is re-exported for dispatchers and tests that need the
+// optional second response emitted by EmailSubmission/set.
+type ImplicitSetHandler = emailsubmission.ImplicitSetHandler
+
+// UnimplementedHandler is a compatibility shim that panics for every method.
+// New code should implement the smaller per-object MethodHandler interfaces
+// instead.
 type UnimplementedHandler struct{}
 
 func (h *UnimplementedHandler) panic(method string) {
 	panic("unimplemented: " + method)
 }
 
-// Core methods
-func (h *UnimplementedHandler) CoreEcho(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Core/echo")
+func (h *UnimplementedHandler) CoreEcho(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(core.MethodEcho)
 	return nil, nil
 }
 
-// Mailbox methods
-func (h *UnimplementedHandler) MailboxGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Mailbox/get")
+func (h *UnimplementedHandler) MailboxGet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(mailbox.MethodGet)
 	return nil, nil
 }
-func (h *UnimplementedHandler) MailboxSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Mailbox/set")
+func (h *UnimplementedHandler) MailboxSet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(mailbox.MethodSet)
 	return nil, nil
 }
-func (h *UnimplementedHandler) MailboxChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Mailbox/changes")
+func (h *UnimplementedHandler) MailboxChanges(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(mailbox.MethodChanges)
 	return nil, nil
 }
-func (h *UnimplementedHandler) MailboxQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Mailbox/query")
+func (h *UnimplementedHandler) MailboxQuery(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(mailbox.MethodQuery)
 	return nil, nil
 }
-func (h *UnimplementedHandler) MailboxQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Mailbox/queryChanges")
-	return nil, nil
-}
-
-// Thread methods
-func (h *UnimplementedHandler) ThreadGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Thread/get")
-	return nil, nil
-}
-func (h *UnimplementedHandler) ThreadChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Thread/changes")
+func (h *UnimplementedHandler) MailboxQueryChanges(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(mailbox.MethodQueryChanges)
 	return nil, nil
 }
 
-// Email methods
-func (h *UnimplementedHandler) EmailGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Email/get")
+func (h *UnimplementedHandler) ThreadGet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(thread.MethodGet)
 	return nil, nil
 }
-func (h *UnimplementedHandler) EmailSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Email/set")
-	return nil, nil
-}
-func (h *UnimplementedHandler) EmailChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Email/changes")
-	return nil, nil
-}
-func (h *UnimplementedHandler) EmailQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Email/query")
-	return nil, nil
-}
-func (h *UnimplementedHandler) EmailQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Email/queryChanges")
-	return nil, nil
-}
-func (h *UnimplementedHandler) EmailCopy(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Email/copy")
-	return nil, nil
-}
-func (h *UnimplementedHandler) EmailImport(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Email/import")
-	return nil, nil
-}
-func (h *UnimplementedHandler) EmailParse(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Email/parse")
+func (h *UnimplementedHandler) ThreadChanges(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(thread.MethodChanges)
 	return nil, nil
 }
 
-// SearchSnippet methods
-func (h *UnimplementedHandler) SearchSnippetGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("SearchSnippet/get")
+func (h *UnimplementedHandler) EmailGet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(email.MethodGet)
+	return nil, nil
+}
+func (h *UnimplementedHandler) EmailSet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(email.MethodSet)
+	return nil, nil
+}
+func (h *UnimplementedHandler) EmailChanges(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(email.MethodChanges)
+	return nil, nil
+}
+func (h *UnimplementedHandler) EmailQuery(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(email.MethodQuery)
+	return nil, nil
+}
+func (h *UnimplementedHandler) EmailQueryChanges(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(email.MethodQueryChanges)
+	return nil, nil
+}
+func (h *UnimplementedHandler) EmailCopy(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(email.MethodCopy)
+	return nil, nil
+}
+func (h *UnimplementedHandler) EmailImport(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(email.MethodImport)
+	return nil, nil
+}
+func (h *UnimplementedHandler) EmailParse(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(email.MethodParse)
 	return nil, nil
 }
 
-// Identity methods
-func (h *UnimplementedHandler) IdentityGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Identity/get")
-	return nil, nil
-}
-func (h *UnimplementedHandler) IdentitySet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Identity/set")
-	return nil, nil
-}
-func (h *UnimplementedHandler) IdentityChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("Identity/changes")
+func (h *UnimplementedHandler) SearchSnippetGet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(searchsnippet.MethodGet)
 	return nil, nil
 }
 
-// EmailSubmission methods
-func (h *UnimplementedHandler) EmailSubmissionGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("EmailSubmission/get")
+func (h *UnimplementedHandler) IdentityGet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(identity.MethodGet)
 	return nil, nil
 }
-func (h *UnimplementedHandler) EmailSubmissionSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("EmailSubmission/set")
+func (h *UnimplementedHandler) IdentitySet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(identity.MethodSet)
 	return nil, nil
 }
-func (h *UnimplementedHandler) EmailSubmissionChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("EmailSubmission/changes")
-	return nil, nil
-}
-func (h *UnimplementedHandler) EmailSubmissionQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("EmailSubmission/query")
-	return nil, nil
-}
-func (h *UnimplementedHandler) EmailSubmissionQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("EmailSubmission/queryChanges")
+func (h *UnimplementedHandler) IdentityChanges(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(identity.MethodChanges)
 	return nil, nil
 }
 
-// VacationResponse methods
-func (h *UnimplementedHandler) VacationResponseGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("VacationResponse/get")
+func (h *UnimplementedHandler) EmailSubmissionGet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(emailsubmission.MethodGet)
 	return nil, nil
 }
-func (h *UnimplementedHandler) VacationResponseSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("VacationResponse/set")
+func (h *UnimplementedHandler) EmailSubmissionSet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(emailsubmission.MethodSet)
 	return nil, nil
 }
-func (h *UnimplementedHandler) VacationResponseChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("VacationResponse/changes")
+func (h *UnimplementedHandler) EmailSubmissionChanges(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(emailsubmission.MethodChanges)
 	return nil, nil
 }
-
-// PushSubscription methods
-func (h *UnimplementedHandler) PushSubscriptionGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("PushSubscription/get")
+func (h *UnimplementedHandler) EmailSubmissionQuery(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(emailsubmission.MethodQuery)
 	return nil, nil
 }
-func (h *UnimplementedHandler) PushSubscriptionSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("PushSubscription/set")
+func (h *UnimplementedHandler) EmailSubmissionQueryChanges(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(emailsubmission.MethodQueryChanges)
 	return nil, nil
 }
 
-// Ensure UnimplementedHandler implements MethodHandler
+func (h *UnimplementedHandler) VacationResponseGet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(vacationresponse.MethodGet)
+	return nil, nil
+}
+func (h *UnimplementedHandler) VacationResponseSet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(vacationresponse.MethodSet)
+	return nil, nil
+}
+func (h *UnimplementedHandler) VacationResponseChanges(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(vacationresponse.MethodChanges)
+	return nil, nil
+}
+
+func (h *UnimplementedHandler) PushSubscriptionGet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(pushsubscription.MethodGet)
+	return nil, nil
+}
+func (h *UnimplementedHandler) PushSubscriptionSet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(pushsubscription.MethodSet)
+	return nil, nil
+}
+
+func (h *UnimplementedHandler) BlobCopy(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	h.panic(blob.MethodCopy)
+	return nil, nil
+}
+
 var _ MethodHandler = (*UnimplementedHandler)(nil)

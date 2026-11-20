@@ -46,21 +46,6 @@ func (inv Invocation) MarshalJSON() ([]byte, error) {
 	return json.Marshal([]interface{}{inv.Name, inv.Arguments, inv.ClientID})
 }
 
-// claimsContextKey is the context key used to pass the authenticated caller's
-// claims from the dispatcher to individual method handlers.
-type claimsContextKey struct{}
-
-// ContextWithClaims attaches the authenticated caller's claims to ctx.
-func ContextWithClaims(ctx context.Context, claims *auth.Claims) context.Context {
-	return context.WithValue(ctx, claimsContextKey{}, claims)
-}
-
-// ClaimsFromContext returns the authenticated caller's claims, if present.
-func ClaimsFromContext(ctx context.Context) *auth.Claims {
-	claims, _ := ctx.Value(claimsContextKey{}).(*auth.Claims)
-	return claims
-}
-
 // Dispatcher handles routing JMAP method calls to the appropriate handler.
 type Dispatcher struct {
 	handler      MethodHandler
@@ -321,9 +306,7 @@ func sameStringMap(a, b map[string]string) bool {
 // second response. RFC 8621 section 7.5 requires EmailSubmission/set to emit
 // a separate Email/set response for onSuccessUpdateEmail/DestroyEmail, with
 // the same method call id as the submission response.
-type implicitSetHandler interface {
-	EmailSubmissionSetWithImplicit(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, json.RawMessage, error)
-}
+type implicitSetHandler = ImplicitSetHandler
 
 func (d *Dispatcher) dispatchCall(ctx context.Context, accountID string, call Invocation) ([]Invocation, error) {
 	methodName := call.Name
@@ -341,91 +324,95 @@ func (d *Dispatcher) dispatchCall(ctx context.Context, accountID string, call In
 
 	switch methodName {
 	// Core methods
-	case "Core/echo":
+	case MethodCoreEcho:
 		result, err = d.handler.CoreEcho(ctx, accountID, argsJSON)
 
 	// Mailbox methods
-	case "Mailbox/get":
+	case MethodMailboxGet:
 		result, err = d.handler.MailboxGet(ctx, accountID, argsJSON)
-	case "Mailbox/set":
+	case MethodMailboxSet:
 		result, err = d.handler.MailboxSet(ctx, accountID, argsJSON)
-	case "Mailbox/changes":
+	case MethodMailboxChanges:
 		result, err = d.handler.MailboxChanges(ctx, accountID, argsJSON)
-	case "Mailbox/query":
+	case MethodMailboxQuery:
 		result, err = d.handler.MailboxQuery(ctx, accountID, argsJSON)
-	case "Mailbox/queryChanges":
+	case MethodMailboxQueryChanges:
 		result, err = d.handler.MailboxQueryChanges(ctx, accountID, argsJSON)
 
 	// Thread methods
-	case "Thread/get":
+	case MethodThreadGet:
 		result, err = d.handler.ThreadGet(ctx, accountID, argsJSON)
-	case "Thread/changes":
+	case MethodThreadChanges:
 		result, err = d.handler.ThreadChanges(ctx, accountID, argsJSON)
 
 	// Email methods
-	case "Email/get":
+	case MethodEmailGet:
 		result, err = d.handler.EmailGet(ctx, accountID, argsJSON)
-	case "Email/set":
+	case MethodEmailSet:
 		result, err = d.handler.EmailSet(ctx, accountID, argsJSON)
-	case "Email/changes":
+	case MethodEmailChanges:
 		result, err = d.handler.EmailChanges(ctx, accountID, argsJSON)
-	case "Email/query":
+	case MethodEmailQuery:
 		result, err = d.handler.EmailQuery(ctx, accountID, argsJSON)
-	case "Email/queryChanges":
+	case MethodEmailQueryChanges:
 		result, err = d.handler.EmailQueryChanges(ctx, accountID, argsJSON)
-	case "Email/copy":
+	case MethodEmailCopy:
 		result, err = d.handler.EmailCopy(ctx, accountID, argsJSON)
-	case "Email/import":
+	case MethodEmailImport:
 		result, err = d.handler.EmailImport(ctx, accountID, argsJSON)
-	case "Email/parse":
+	case MethodEmailParse:
 		result, err = d.handler.EmailParse(ctx, accountID, argsJSON)
 
 	// SearchSnippet methods
-	case "SearchSnippet/get":
+	case MethodSearchSnippetGet:
 		result, err = d.handler.SearchSnippetGet(ctx, accountID, argsJSON)
 
 	// Identity methods
-	case "Identity/get":
+	case MethodIdentityGet:
 		result, err = d.handler.IdentityGet(ctx, accountID, argsJSON)
-	case "Identity/set":
+	case MethodIdentitySet:
 		result, err = d.handler.IdentitySet(ctx, accountID, argsJSON)
-	case "Identity/changes":
+	case MethodIdentityChanges:
 		result, err = d.handler.IdentityChanges(ctx, accountID, argsJSON)
 
 	// EmailSubmission methods
-	case "EmailSubmission/get":
+	case MethodEmailSubmissionGet:
 		result, err = d.handler.EmailSubmissionGet(ctx, accountID, argsJSON)
-	case "EmailSubmission/set":
+	case MethodEmailSubmissionSet:
 		if multi, ok := d.handler.(implicitSetHandler); ok {
 			var implicit json.RawMessage
 			result, implicit, err = multi.EmailSubmissionSetWithImplicit(ctx, accountID, argsJSON)
 			if err == nil && len(implicit) > 0 {
-				extra = append(extra, d.resultInvocation("Email/set", clientID, implicit))
+				extra = append(extra, d.resultInvocation(MethodEmailSet, clientID, implicit))
 			}
 		} else {
 			result, err = d.handler.EmailSubmissionSet(ctx, accountID, argsJSON)
 		}
-	case "EmailSubmission/changes":
+	case MethodEmailSubmissionChanges:
 		result, err = d.handler.EmailSubmissionChanges(ctx, accountID, argsJSON)
-	case "EmailSubmission/query":
+	case MethodEmailSubmissionQuery:
 		result, err = d.handler.EmailSubmissionQuery(ctx, accountID, argsJSON)
-	case "EmailSubmission/queryChanges":
+	case MethodEmailSubmissionQueryChanges:
 		result, err = d.handler.EmailSubmissionQueryChanges(ctx, accountID, argsJSON)
 
 	// VacationResponse methods
-	case "VacationResponse/get":
+	case MethodVacationResponseGet:
 		result, err = d.handler.VacationResponseGet(ctx, accountID, argsJSON)
-	case "VacationResponse/set":
+	case MethodVacationResponseSet:
 		result, err = d.handler.VacationResponseSet(ctx, accountID, argsJSON)
-	case "VacationResponse/changes":
+	case MethodVacationResponseChanges:
 		result, err = d.handler.VacationResponseChanges(ctx, accountID, argsJSON)
 
 	// PushSubscription methods are account-less in RFC 8620 section 7.2,
 	// but still receive their full arguments object like every other method.
-	case "PushSubscription/get":
+	case MethodPushSubscriptionGet:
 		result, err = d.handler.PushSubscriptionGet(ctx, accountID, argsJSON)
-	case "PushSubscription/set":
+	case MethodPushSubscriptionSet:
 		result, err = d.handler.PushSubscriptionSet(ctx, accountID, argsJSON)
+
+	// Blob methods
+	case MethodBlobCopy:
+		result, err = d.handler.BlobCopy(ctx, accountID, argsJSON)
 
 	default:
 		err = fmt.Errorf("unknown method: %s", methodName)
