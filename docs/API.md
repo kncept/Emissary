@@ -105,7 +105,7 @@ not generated from `users.yaml`: it is served directly by the configured
 | `POST` | `/upload/{accountId}` | Bearer | Upload binary data (attachments). |
 | `GET` | `/download/{accountId}/{blobId}/{name}` | Bearer | Download binary data. |
 | `GET` | `/api/email/raw` | Bearer | Get the original RFC 5322 message for one email id. |
-| `GET` | `/eventsource/` | Bearer | EventSource push connection. |
+| `GET` | `/eventsource` | Bearer | EventSource push connection. |
 
 \* Requires `EmissaryUserManagement` JWT claim and an Emissary-mastered user manager (`ddb`, `filesystem` or `s3`). A user cannot delete their own account (`403 Forbidden`).
 
@@ -407,14 +407,17 @@ and API endpoints:
 {
   "capabilities": {
     "urn:ietf:params:jmap:core": {
+      "maxSizeUpload": 10485760,
+      "maxConcurrentUpload": 0,
       "maxSizeRequest": 10485760,
-      "maxSizeUpload": 10485760
+      "maxConcurrentRequests": 4,
+      "maxCallsInRequest": 16,
+      "maxObjectsInGet": 500,
+      "maxObjectsInSet": 500,
+      "collationAlgorithms": []
     },
-    "urn:ietf:params:jmap:mail": {
-      "maxSizeAttachmentsPerEmail": 10485760
-    },
-    "urn:ietf:params:jmap:submission": {},
-    "urn:ietf:params:jmap:vacationresponse": {}
+    "urn:ietf:params:jmap:mail": {},
+    "urn:ietf:params:jmap:submission": {}
   },
   "accounts": {
     "user@example.com": {
@@ -423,33 +426,49 @@ and API endpoints:
       "isReadOnly": false,
       "accountCapabilities": {
         "urn:ietf:params:jmap:core": {
+          "maxSizeUpload": 10485760,
+          "maxConcurrentUpload": 0,
           "maxSizeRequest": 10485760,
-          "maxSizeUpload": 10485760
+          "maxConcurrentRequests": 4,
+          "maxCallsInRequest": 16,
+          "maxObjectsInGet": 500,
+          "maxObjectsInSet": 500,
+          "collationAlgorithms": []
         },
         "urn:ietf:params:jmap:mail": {
-          "maxSizeAttachmentsPerEmail": 10485760
+          "maxMailboxesPerEmail": 1,
+          "maxMailboxDepth": 1,
+          "maxSizeMailboxName": 255,
+          "maxSizeAttachmentsPerEmail": 10485760,
+          "emailQuerySortOptions": ["receivedAt"],
+          "mayCreateTopLevelMailbox": false
         },
-        "urn:ietf:params:jmap:submission": {},
-        "urn:ietf:params:jmap:vacationresponse": {}
+        "urn:ietf:params:jmap:submission": {
+          "maxDelayedSend": 0,
+          "submissionExtensions": {}
+        }
       }
     }
   },
   "primaryAccounts": {
-    "urn:ietf:params:jmap:core": "user@example.com",
     "urn:ietf:params:jmap:mail": "user@example.com",
-    "urn:ietf:params:jmap:submission": "user@example.com",
-    "urn:ietf:params:jmap:vacationresponse": "user@example.com"
+    "urn:ietf:params:jmap:submission": "user@example.com"
   },
   "username": "user@example.com",
   "apiUrl": "/api/jmap/",
-  "downloadUrl": "/download/{accountId}/{blobId}/{name}",
-  "uploadUrl": "/upload/{accountId}/",
-  "eventSourceUrl": "/eventsource/",
+  "downloadUrl": "/download/{accountId}/{blobId}/{name}?type={type}",
+  "uploadUrl": "/upload/{accountId}",
+  "eventSourceUrl": "/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
   "state": "session-0"
 }
 ```
 
-The limit values above come from `MAX_FILESIZE` (10 MiB by default).
+The size limits above come from `MAX_FILESIZE` (10 MiB by default). The
+remaining limits describe the current server: binary upload is not
+implemented (`maxConcurrentUpload: 0`), mailboxes are fixed and flat, only
+`receivedAt` sorting is supported, delayed send is not supported,
+and no RFC 4790 collation algorithms are advertised. VacationResponse is
+omitted because its methods are not implemented.
 
 ## `POST /api/jmap/` (JMAP Batch Request)
 
@@ -563,4 +582,4 @@ them when placing an ID in a route. The `mailboxIds` returned by
 
 ## EventSource Push
 
-- `GET /eventsource/?types=*&ping=30` — Long-running Server-Sent Events connection for push notifications.
+- `GET /eventsource?types=*&ping=30` — Long-running Server-Sent Events connection for push notifications.

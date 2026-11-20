@@ -44,6 +44,30 @@ const (
 	// jmapSessionState is stable because the session object itself is static:
 	// every mutable value is reported per account by Foo/get's state token.
 	jmapSessionState = "session-0"
+
+	// RFC 8620 section 2 requires every core limit to be advertised. Binary
+	// upload is not implemented yet, so no concurrent uploads are accepted;
+	// the other values are the RFC's suggested minimums.
+	jmapMaxConcurrentUpload   = 0
+	jmapMaxConcurrentRequests = 4
+	jmapMaxCallsInRequest     = 16
+	jmapMaxObjectsInGet       = 500
+	jmapMaxObjectsInSet       = 500
+
+	// RFC 8621 account capability values for the fixed, flat mailbox
+	// hierarchy currently exposed by Mailbox/get.
+	jmapMaxMailboxesPerEmail = 1
+	jmapMaxMailboxDepth      = 1
+	jmapMaxSizeMailboxName   = 255
+
+	// Resource URL templates. These match the routes registered in
+	// newHandler and include the variables required by RFC 8620 section 2.
+	// The type variable is placed in the query because media types contain
+	// slashes, which the RFC recommends avoiding in a path segment.
+	jmapAPIPath                = "/api/jmap/"
+	jmapDownloadURLTemplate    = "/download/{accountId}/{blobId}/{name}?type={type}"
+	jmapUploadURLTemplate      = "/upload/{accountId}"
+	jmapEventSourceURLTemplate = "/eventsource?types={types}&closeafter={closeafter}&ping={ping}"
 )
 
 type HandlerConfig struct {
@@ -405,9 +429,9 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 	mux.Handle("POST /api/jmap/", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPAPIRequest(w, r, dispatcher, maxFileSize)
 	})))
-	mux.Handle("POST /upload/", requireAuth(authenticator, http.HandlerFunc(handleJMAPUpload)))
-	mux.Handle("GET /download/", requireAuth(authenticator, http.HandlerFunc(handleJMAPDownload)))
-	mux.Handle("GET /eventsource/", requireAuth(authenticator, http.HandlerFunc(handleJMAPPush)))
+	mux.Handle("POST /upload/{accountId}", requireAuth(authenticator, http.HandlerFunc(handleJMAPUpload)))
+	mux.Handle("GET /download/{accountId}/{blobId}/{name}", requireAuth(authenticator, http.HandlerFunc(handleJMAPDownload)))
+	mux.Handle("GET /eventsource", requireAuth(authenticator, http.HandlerFunc(handleJMAPPush)))
 
 	mux.Handle("GET /api/email/raw", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleRawEmail(w, r, emailStore)
@@ -670,19 +694,36 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 	// enforce. Advertising the configured value keeps clients from sending
 	// batches we would have to reject with a limit error.
 	coreCapabilities := map[string]any{
-		"maxSizeRequest": maxFileSize,
-		"maxSizeUpload":  maxFileSize,
+		"maxSizeUpload":         maxFileSize,
+		"maxConcurrentUpload":   jmapMaxConcurrentUpload,
+		"maxSizeRequest":        maxFileSize,
+		"maxConcurrentRequests": jmapMaxConcurrentRequests,
+		"maxCallsInRequest":     jmapMaxCallsInRequest,
+		"maxObjectsInGet":       jmapMaxObjectsInGet,
+		"maxObjectsInSet":       jmapMaxObjectsInSet,
+		"collationAlgorithms":   []string{},
 	}
-	mailCapabilities := map[string]any{
+	// The Mail and Submission capability values in the Session object are
+	// empty objects; their limits are reported per account (RFC 8621 1.3).
+	mailAccountCapabilities := map[string]any{
+		"maxMailboxesPerEmail":       jmapMaxMailboxesPerEmail,
+		"maxMailboxDepth":            jmapMaxMailboxDepth,
+		"maxSizeMailboxName":         jmapMaxSizeMailboxName,
 		"maxSizeAttachmentsPerEmail": maxFileSize,
+		"emailQuerySortOptions":      []string{"receivedAt"},
+		"mayCreateTopLevelMailbox":   false,
+	}
+	submissionAccountCapabilities := map[string]any{
+		"maxDelayedSend":       0,
+		"submissionExtensions": map[string]any{},
 	}
 
+	// VacationResponse is not advertised: its methods are not implemented.
 	session := map[string]any{
 		"capabilities": map[string]any{
-			"urn:ietf:params:jmap:core":             coreCapabilities,
-			"urn:ietf:params:jmap:mail":             mailCapabilities,
-			"urn:ietf:params:jmap:submission":       map[string]any{},
-			"urn:ietf:params:jmap:vacationresponse": map[string]any{},
+			"urn:ietf:params:jmap:core":       coreCapabilities,
+			"urn:ietf:params:jmap:mail":       map[string]any{},
+			"urn:ietf:params:jmap:submission": map[string]any{},
 		},
 		"accounts": map[string]any{
 			username: map[string]any{
@@ -690,24 +731,23 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 				"isPersonal": true,
 				"isReadOnly": false,
 				"accountCapabilities": map[string]any{
-					"urn:ietf:params:jmap:core":             coreCapabilities,
-					"urn:ietf:params:jmap:mail":             mailCapabilities,
-					"urn:ietf:params:jmap:submission":       map[string]any{},
-					"urn:ietf:params:jmap:vacationresponse": map[string]any{},
+					"urn:ietf:params:jmap:core":       coreCapabilities,
+					"urn:ietf:params:jmap:mail":       mailAccountCapabilities,
+					"urn:ietf:params:jmap:submission": submissionAccountCapabilities,
 				},
 			},
 		},
+		// RFC 8620: core is a server-wide capability and SHOULD NOT appear
+		// in primaryAccounts.
 		"primaryAccounts": map[string]any{
-			"urn:ietf:params:jmap:core":             username,
-			"urn:ietf:params:jmap:mail":             username,
-			"urn:ietf:params:jmap:submission":       username,
-			"urn:ietf:params:jmap:vacationresponse": username,
+			"urn:ietf:params:jmap:mail":       username,
+			"urn:ietf:params:jmap:submission": username,
 		},
 		"username":       username,
-		"apiUrl":         "/api/jmap/",
-		"downloadUrl":    "/download/{accountId}/{blobId}/{name}",
-		"uploadUrl":      "/upload/{accountId}/",
-		"eventSourceUrl": "/eventsource/",
+		"apiUrl":         jmapAPIPath,
+		"downloadUrl":    jmapDownloadURLTemplate,
+		"uploadUrl":      jmapUploadURLTemplate,
+		"eventSourceUrl": jmapEventSourceURLTemplate,
 		"state":          jmapSessionState,
 	}
 
