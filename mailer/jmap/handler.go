@@ -1227,10 +1227,12 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 		// If envelope is provided, validate that all recipients in the email are covered by the envelope's RcptTo
 		if submission.Envelope != nil && len(submission.Envelope.RcptTo) > 0 {
 			envelopeRecipients := make(map[string]bool)
+			envelopeInvalid := false
 			for _, rcpt := range submission.Envelope.RcptTo {
 				parsed, err := mail.ParseAddress(rcpt.Email)
 				if err != nil {
 					notCreated[createID] = map[string]string{"type": "invalidRecipients", "description": "Invalid recipient address in envelope"}
+					envelopeInvalid = true
 					continue
 				}
 				envelopeRecipients[parsed.Address] = true
@@ -1239,20 +1241,29 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 			for _, addr := range emailMsg.To {
 				if !envelopeRecipients[addr.Address] {
 					notCreated[createID] = map[string]string{"type": "forbidden", "description": "Recipient not in envelope: " + addr.Address}
+					envelopeInvalid = true
 					continue
 				}
 			}
 			for _, addr := range emailMsg.Cc {
 				if !envelopeRecipients[addr.Address] {
 					notCreated[createID] = map[string]string{"type": "forbidden", "description": "Recipient not in envelope: " + addr.Address}
+					envelopeInvalid = true
 					continue
 				}
 			}
 			for _, addr := range emailMsg.Bcc {
 				if !envelopeRecipients[addr.Address] {
 					notCreated[createID] = map[string]string{"type": "forbidden", "description": "Recipient not in envelope: " + addr.Address}
+					envelopeInvalid = true
 					continue
 				}
+			}
+			// A `continue` in the loops above only skips that address; the
+			// submission itself must be skipped so it is neither sent nor
+			// reported as created.
+			if envelopeInvalid {
+				continue
 			}
 		}
 

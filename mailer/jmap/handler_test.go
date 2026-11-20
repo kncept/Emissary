@@ -827,6 +827,126 @@ func TestEmailSubmissionSetLocksFrom(t *testing.T) {
 	}
 }
 
+// TestEmailSubmissionSetEnvelopeValidation checks that an envelope which is
+// invalid or does not cover every recipient rejects the whole submission. The
+// message must not be sent and no created entry may be produced; a continue in
+// a validation loop must not fall through to the send path.
+func TestEmailSubmissionSetEnvelopeValidation(t *testing.T) {
+	const accountID = "alice@example.com"
+
+	emailAddrs := func(addrs []string) []email.Address {
+		out := make([]email.Address, 0, len(addrs))
+		for _, addr := range addrs {
+			out = append(out, email.Address{Address: addr})
+		}
+		return out
+	}
+	jsonAddrs := func(addrs []string) string {
+		parts := make([]string, 0, len(addrs))
+		for _, addr := range addrs {
+			parts = append(parts, fmt.Sprintf(`{"email":%q}`, addr))
+		}
+		return "[" + strings.Join(parts, ",") + "]"
+	}
+
+	tests := []struct {
+		name      string
+		to        []string
+		cc        []string
+		bcc       []string
+		rcptTo    []string
+		wantError string // empty means the submission should be accepted
+	}{
+		{
+			name:   "valid envelope sends",
+			to:     []string{"bob@example.com"},
+			cc:     []string{"carol@example.com"},
+			bcc:    []string{"dave@example.com"},
+			rcptTo: []string{"bob@example.com", "carol@example.com", "dave@example.com"},
+		},
+		{
+			name:      "To recipient missing from envelope",
+			to:        []string{"bob@example.com"},
+			rcptTo:    []string{"carol@example.com"},
+			wantError: "forbidden",
+		},
+		{
+			name:      "Cc recipient missing from envelope",
+			to:        []string{"bob@example.com"},
+			cc:        []string{"carol@example.com"},
+			rcptTo:    []string{"bob@example.com"},
+			wantError: "forbidden",
+		},
+		{
+			name:      "Bcc recipient missing from envelope",
+			to:        []string{"bob@example.com"},
+			bcc:       []string{"carol@example.com"},
+			rcptTo:    []string{"bob@example.com"},
+			wantError: "forbidden",
+		},
+		{
+			name:      "invalid recipient address in envelope",
+			to:        []string{"bob@example.com"},
+			rcptTo:    []string{"not-an-address", "bob@example.com"},
+			wantError: "invalidRecipients",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := storage.NewMemoryStorage()
+			addTestEmail(store, "draft1", accountID, "inbox", &email.UserEmail{
+				From:    email.Address{Address: accountID},
+				To:      emailAddrs(tc.to),
+				Cc:      emailAddrs(tc.cc),
+				Bcc:     emailAddrs(tc.bcc),
+				Subject: "envelope check",
+				Text:    "body",
+			})
+			capture := sender.NewInMemoryRecording()
+			handler := NewHandler(store, metadata.NewMemoryMetadata(),
+				usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+				capture)
+
+			ctx := ContextWithClaims(context.Background(), &auth.Claims{Subject: accountID})
+			args := json.RawMessage(fmt.Sprintf(
+				`{"accountId":%q,"create":{"s1":{"identityId":"primary","emailId":"draft1","envelope":{"mailFrom":{"email":%q},"rcptTo":%s}}}}`,
+				accountID, accountID, jsonAddrs(tc.rcptTo)))
+			result, err := handler.EmailSubmissionSet(ctx, accountID, args)
+			if err != nil {
+				t.Fatalf("EmailSubmissionSet() error = %v", err)
+			}
+			var resp struct {
+				Created    map[string]json.RawMessage `json:"created"`
+				NotCreated map[string]struct {
+					Type string `json:"type"`
+				} `json:"notCreated"`
+			}
+			if err := json.Unmarshal(result, &resp); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+
+			if tc.wantError != "" {
+				problem, ok := resp.NotCreated["s1"]
+				if !ok || problem.Type != tc.wantError {
+					t.Fatalf("notCreated = %+v, want type %q", resp.NotCreated, tc.wantError)
+				}
+				if _, created := resp.Created["s1"]; created {
+					t.Error("submission was reported as created despite envelope validation failure")
+				}
+				if len(capture.Sent) != 0 {
+					t.Fatalf("sent %d messages despite envelope validation failure: %+v", len(capture.Sent), capture.Sent)
+				}
+				return
+			}
+
+			if len(resp.Created) != 1 || len(capture.Sent) != 1 {
+				t.Fatalf("created = %+v, sent = %d, want one of each on the valid path", resp.Created, len(capture.Sent))
+			}
+		})
+	}
+}
+
 // TestEmailSubmissionSetMasqueradeReplyTo checks that a submission masquerading
 // as another account always uses the From address for replies.
 func TestEmailSubmissionSetMasqueradeReplyTo(t *testing.T) {
