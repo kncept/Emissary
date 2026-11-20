@@ -474,11 +474,29 @@ omitted because its methods are not implemented.
 
 Processes an ordered batch of JMAP method calls. The request and
 response bodies are JSON `Request` and `Response` objects. Method
-failures are returned inside `methodResponses` as `error`
-invocations; only request-level failures use an HTTP error status.
-A body larger than `MAX_FILESIZE` is rejected with HTTP 413 and a
-problem details body (`urn:ietf:params:jmap:error:limit`,
-`limit: "maxSizeRequest"`).
+failures (including unknown method names) are returned inside
+`methodResponses` as `error` invocations with HTTP 200; only
+request-level failures use an HTTP error status and an
+`application/problem+json` RFC 7807 problem details body.
+
+The API endpoint requires `Content-Type: application/json` and rejects
+the whole request when it is not a single, valid I-JSON `Request`
+object. `using` is checked against the capabilities advertised by the
+Session object, `methodCalls` must contain well-formed three-element
+Invocation tuples with unique `methodCallId` values, and `createdIds`
+must be an object when present. Unknown properties are ignored for
+forward compatibility.
+
+| Problem type | Status | Cause |
+| --- | --- | --- |
+| `urn:ietf:params:jmap:error:notJSON` | 400 | Wrong `Content-Type`, malformed JSON, duplicate object members, trailing data, or invalid UTF-8. |
+| `urn:ietf:params:jmap:error:notRequest` | 400 | JSON parsed but did not match the `Request` type signature. |
+| `urn:ietf:params:jmap:error:unknownCapability` | 400 | `using` contained a capability the server does not advertise. |
+| `urn:ietf:params:jmap:error:limit` | 400 | `maxCallsInRequest`, `maxObjectsInGet`, or `maxObjectsInSet` exceeded. |
+| `urn:ietf:params:jmap:error:limit` | 413 | Body exceeded `maxSizeRequest` (`MAX_FILESIZE`); the `limit` is `maxSizeRequest`. |
+
+Every limit problem includes the `limit` property naming the advertised
+capability value that was exceeded.
 
 Example request to list emails:
 

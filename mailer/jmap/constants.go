@@ -14,6 +14,15 @@ import (
 	"github.com/kncept/Emissary/mailer/jmap/vacationresponse"
 )
 
+// Capability URNs advertised by the Session object. Keep this list in sync
+// with handleJMAPSession: a capability may only be accepted in `using` when
+// the Session advertises it.
+const (
+	CapabilityCore       = "urn:ietf:params:jmap:core"
+	CapabilityMail       = "urn:ietf:params:jmap:mail"
+	CapabilitySubmission = "urn:ietf:params:jmap:submission"
+)
+
 // MethodName constants are re-exported from the subpackage that owns each
 // object type so callers do not need to know about the internal split.
 const (

@@ -158,6 +158,10 @@ type ApiRequestBadRequest ProblemDetails
 
 func (*ApiRequestBadRequest) apiRequestRes() {}
 
+type ApiRequestRequestEntityTooLarge ProblemDetails
+
+func (*ApiRequestRequestEntityTooLarge) apiRequestRes() {}
+
 type ApiRequestUnauthorized ProblemDetails
 
 func (*ApiRequestUnauthorized) apiRequestRes() {}

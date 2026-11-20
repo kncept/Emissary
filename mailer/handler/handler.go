@@ -721,9 +721,9 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 	// VacationResponse is not advertised: its methods are not implemented.
 	session := map[string]any{
 		"capabilities": map[string]any{
-			"urn:ietf:params:jmap:core":       coreCapabilities,
-			"urn:ietf:params:jmap:mail":       map[string]any{},
-			"urn:ietf:params:jmap:submission": map[string]any{},
+			jmap.CapabilityCore:       coreCapabilities,
+			jmap.CapabilityMail:       map[string]any{},
+			jmap.CapabilitySubmission: map[string]any{},
 		},
 		"accounts": map[string]any{
 			username: map[string]any{
@@ -731,17 +731,17 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 				"isPersonal": true,
 				"isReadOnly": false,
 				"accountCapabilities": map[string]any{
-					"urn:ietf:params:jmap:core":       coreCapabilities,
-					"urn:ietf:params:jmap:mail":       mailAccountCapabilities,
-					"urn:ietf:params:jmap:submission": submissionAccountCapabilities,
+					jmap.CapabilityCore:       coreCapabilities,
+					jmap.CapabilityMail:       mailAccountCapabilities,
+					jmap.CapabilitySubmission: submissionAccountCapabilities,
 				},
 			},
 		},
 		// RFC 8620: core is a server-wide capability and SHOULD NOT appear
 		// in primaryAccounts.
 		"primaryAccounts": map[string]any{
-			"urn:ietf:params:jmap:mail":       username,
-			"urn:ietf:params:jmap:submission": username,
+			jmap.CapabilityMail:       username,
+			jmap.CapabilitySubmission: username,
 		},
 		"username":       username,
 		"apiUrl":         jmapAPIPath,
@@ -756,22 +756,40 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 }
 
 func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jmap.Dispatcher, maxFileSize int64) {
-	var req jmap.Request
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			// RFC 8620 section 3.6.1: capability limit violations are an HTTP
-			// error with a problem details body naming the limit.
 			writeJMAPLimitError(w, "maxSizeRequest", maxFileSize)
 			return
 		}
-		writeJMAPError(w, "invalidRequest", "Invalid JSON request")
+		writeJMAPRequestError(w, &jmap.RequestError{
+			Type:   "about:blank",
+			Title:  "Request body could not be read",
+			Status: http.StatusBadRequest,
+			Detail: "The request body could not be read.",
+		})
+		return
+	}
+	if int64(len(body)) > maxFileSize {
+		writeJMAPLimitError(w, "maxSizeRequest", maxFileSize)
+		return
+	}
+
+	req, requestErr := jmap.DecodeRequest(r.Header.Get("Content-Type"), body, jmap.RequestLimits{
+		MaxCallsInRequest: jmapMaxCallsInRequest,
+		MaxObjectsInGet:   jmapMaxObjectsInGet,
+		MaxObjectsInSet:   jmapMaxObjectsInSet,
+	})
+	if requestErr != nil {
+		writeJMAPRequestError(w, requestErr)
 		return
 	}
 
 	claims := currentClaims(r)
 	if claims == nil {
-		writeJMAPError(w, "unauthorized", "Authentication required")
+		writeJMAPProblem(w, http.StatusUnauthorized, "about:blank", "Unauthorized",
+			"Authentication required", "")
 		return
 	}
 
@@ -779,9 +797,11 @@ func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jm
 	// The dispatcher will validate accountId per method call using the claims
 	accountID := claims.Subject
 
-	resp, err := dispatcher.DispatchRequest(r.Context(), accountID, claims, &req)
+	resp, err := dispatcher.DispatchRequest(r.Context(), accountID, claims, req)
 	if err != nil {
-		writeJMAPError(w, "serverError", err.Error())
+		slog.Error("JMAP dispatch failed", "err", err)
+		writeJMAPProblem(w, http.StatusInternalServerError, "about:blank", "Internal Server Error",
+			"The request could not be processed.", "")
 		return
 	}
 
@@ -791,26 +811,46 @@ func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jm
 	json.NewEncoder(w).Encode(resp)
 }
 
-// writeJMAPLimitError reports a request that exceeds an advertised capability
-// limit using the problem details format required by RFC 8620 section 3.6.1.
-func writeJMAPLimitError(w http.ResponseWriter, limit string, maxBytes int64) {
+// writeJMAPRequestError renders an RFC 8620 section 3.6.1 request-level error
+// using RFC 7807 problem details.
+func writeJMAPRequestError(w http.ResponseWriter, requestErr *jmap.RequestError) {
+	writeJMAPProblem(w, requestErr.Status, requestErr.Type, requestErr.Title, requestErr.Detail, requestErr.Limit)
+}
+
+// writeJMAPProblem writes an RFC 7807 problem details body with the required
+// problem+json content type.
+func writeJMAPProblem(w http.ResponseWriter, status int, typ, title, detail, limit string) {
+	problem := map[string]any{
+		"type":   typ,
+		"title":  title,
+		"status": status,
+		"detail": detail,
+	}
+	if limit != "" {
+		problem["limit"] = limit
+	}
 	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(http.StatusRequestEntityTooLarge)
-	json.NewEncoder(w).Encode(map[string]any{
-		"type":   "urn:ietf:params:jmap:error:limit",
-		"title":  "Request exceeds server limit",
-		"status": http.StatusRequestEntityTooLarge,
-		"detail": fmt.Sprintf("Request exceeds the %s limit of %d bytes", limit, maxBytes),
-		"limit":  limit,
-	})
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(problem)
+}
+
+// writeJMAPLimitError reports a request that exceeds the advertised
+// maxSizeRequest limit. Unlike other limit violations, an oversized body uses
+// HTTP 413 because the server refuses to read it at all.
+func writeJMAPLimitError(w http.ResponseWriter, limit string, maxBytes int64) {
+	writeJMAPProblem(w, http.StatusRequestEntityTooLarge, "urn:ietf:params:jmap:error:limit",
+		"Request exceeds server limit",
+		fmt.Sprintf("Request exceeds the %s limit of %d bytes", limit, maxBytes), limit)
 }
 
 func handleJMAPUpload(w http.ResponseWriter, r *http.Request) {
-	writeJMAPError(w, "unimplemented", "Binary upload not implemented")
+	writeJMAPProblem(w, http.StatusNotImplemented, "about:blank", "Not Implemented",
+		"Binary upload not implemented", "")
 }
 
 func handleJMAPDownload(w http.ResponseWriter, r *http.Request) {
-	writeJMAPError(w, "unimplemented", "Binary download not implemented")
+	writeJMAPProblem(w, http.StatusNotImplemented, "about:blank", "Not Implemented",
+		"Binary download not implemented", "")
 }
 
 // handleRawEmail serves the original RFC 5322 message for a single email. The
@@ -883,17 +923,8 @@ func rawEmailAccount(ctx context.Context, store storage.Storage, id string) (str
 }
 
 func handleJMAPPush(w http.ResponseWriter, r *http.Request) {
-	writeJMAPError(w, "unimplemented", "Push not implemented")
-}
-
-func writeJMAPError(w http.ResponseWriter, typ, detail string) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]any{
-		"@type":  "error",
-		"type":   typ,
-		"detail": detail,
-	})
+	writeJMAPProblem(w, http.StatusNotImplemented, "about:blank", "Not Implemented",
+		"Push not implemented", "")
 }
 
 func handleLogout(authenticator *auth.Authenticator) http.HandlerFunc {

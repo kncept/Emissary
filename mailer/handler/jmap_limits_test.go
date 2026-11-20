@@ -2,7 +2,9 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -225,7 +227,7 @@ func TestJMAPSessionURLTemplatesMatchRoutes(t *testing.T) {
 	}
 
 	// Expanding each advertised template must reach a registered route. The
-	// handlers are stubs today, but they must return the JMAP stub error
+	// handlers are stubs today, but they must return a problem details 501
 	// rather than the SPA catch-all or a 404.
 	cases := []struct {
 		method   string
@@ -254,11 +256,14 @@ func TestJMAPSessionURLTemplatesMatchRoutes(t *testing.T) {
 			t.Fatalf("unexpanded variable in %s: %q", tc.template, target)
 		}
 		w := request(t, h, tc.method, target, "", token)
-		if w.Code != http.StatusOK {
-			t.Errorf("%s %s status = %d, want 200 (body %s)", tc.method, target, w.Code, w.Body.String())
+		if w.Code != http.StatusNotImplemented {
+			t.Errorf("%s %s status = %d, want 501 (body %s)", tc.method, target, w.Code, w.Body.String())
 		}
-		if !strings.Contains(w.Body.String(), `"type":"unimplemented"`) {
-			t.Errorf("%s %s body = %s, want the JMAP unimplemented error", tc.method, target, w.Body.String())
+		if got := w.Header().Get("Content-Type"); got != "application/problem+json" {
+			t.Errorf("%s %s Content-Type = %q, want application/problem+json", tc.method, target, got)
+		}
+		if !strings.Contains(w.Body.String(), `"status":501`) {
+			t.Errorf("%s %s body = %s, want problem details", tc.method, target, w.Body.String())
 		}
 	}
 }
@@ -268,7 +273,7 @@ func TestJMAPRejectsOversizedRequestBody(t *testing.T) {
 	h := newJMAPLimitHandler(t, limit)
 	token := jmapToken(t, h)
 
-	within := `{"using":["urn:ietf:params:jmap:core"],"calls":[],"id":"small"}`
+	within := `{"using":["urn:ietf:params:jmap:core"],"methodCalls":[]}`
 	if len(within) > limit {
 		t.Fatalf("test fixture is %d bytes, larger than the %d byte cap", len(within), limit)
 	}
@@ -301,5 +306,258 @@ func TestJMAPRejectsOversizedRequestBody(t *testing.T) {
 	}
 	if problem.Limit != "maxSizeRequest" {
 		t.Errorf("limit = %q, want maxSizeRequest", problem.Limit)
+	}
+}
+
+func jmapRequestWithContentType(t *testing.T, h http.Handler, token, contentType, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/jmap/", strings.NewReader(body))
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+func jmapJSONArray(prefix string, count int) string {
+	items := make([]string, count)
+	for i := range items {
+		items[i] = fmt.Sprintf("%q", fmt.Sprintf("%s%d", prefix, i))
+	}
+	return "[" + strings.Join(items, ",") + "]"
+}
+
+func jmapJSONObject(prefix string, count int) string {
+	items := make([]string, count)
+	for i := range items {
+		items[i] = fmt.Sprintf("%q:{}", fmt.Sprintf("%s%d", prefix, i))
+	}
+	return "{" + strings.Join(items, ",") + "}"
+}
+
+func assertJMAPProblem(t *testing.T, w *httptest.ResponseRecorder, wantStatus int, wantType, wantLimit string) {
+	t.Helper()
+	if w.Code != wantStatus {
+		t.Fatalf("status = %d, want %d (body %s)", w.Code, wantStatus, w.Body.String())
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("Content-Type = %q, want application/problem+json", got)
+	}
+
+	var problem map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("decode problem details: %v (body %s)", err, w.Body.String())
+	}
+	if _, legacy := problem["@type"]; legacy {
+		t.Errorf("problem details must not contain legacy @type: %v", problem)
+	}
+	if problem["type"] != wantType {
+		t.Errorf("type = %v, want %s", problem["type"], wantType)
+	}
+	if problem["status"] != float64(wantStatus) {
+		t.Errorf("status body = %v, want %d", problem["status"], wantStatus)
+	}
+	if detail, ok := problem["detail"].(string); !ok || detail == "" {
+		t.Errorf("detail = %v, want a non-empty string", problem["detail"])
+	}
+	if wantLimit == "" {
+		if _, present := problem["limit"]; present {
+			t.Errorf("limit should not be present: %v", problem)
+		}
+	} else if problem["limit"] != wantLimit {
+		t.Errorf("limit = %v, want %s", problem["limit"], wantLimit)
+	}
+}
+
+func TestJMAPRequestLevelErrors(t *testing.T) {
+	h := newJMAPLimitHandler(t, 1<<20)
+	token := jmapToken(t, h)
+
+	validBody := `{"using":["urn:ietf:params:jmap:core"],"methodCalls":[]}`
+	manyCalls := make([]string, jmapMaxCallsInRequest+1)
+	for i := range manyCalls {
+		manyCalls[i] = fmt.Sprintf(`["Core/echo",{},"c%d"]`, i)
+	}
+
+	cases := []struct {
+		name        string
+		contentType string
+		body        string
+		wantStatus  int
+		wantType    string
+		wantLimit   string
+	}{
+		{
+			name: "wrong content type", contentType: "text/plain", body: validBody,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notJSON",
+		},
+		{
+			name: "missing content type", contentType: "", body: validBody,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notJSON",
+		},
+		{
+			name: "content type with charset", contentType: "application/json; charset=utf-8", body: validBody,
+			wantStatus: 200,
+		},
+		{
+			name: "malformed json", contentType: "application/json", body: `{"using":`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notJSON",
+		},
+		{
+			name: "trailing json", contentType: "application/json", body: validBody + validBody,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notJSON",
+		},
+		{
+			name: "duplicate member", contentType: "application/json",
+			body:       `{"using":[],"using":[],"methodCalls":[]}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notJSON",
+		},
+		{
+			name: "top level array", contentType: "application/json", body: `[]`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "missing using", contentType: "application/json", body: `{"methodCalls":[]}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "missing methodCalls", contentType: "application/json", body: `{"using":[]}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "using not array", contentType: "application/json",
+			body:       `{"using":"urn:ietf:params:jmap:core","methodCalls":[]}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "using contains non-string", contentType: "application/json",
+			body:       `{"using":[1],"methodCalls":[]}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "invocation arity", contentType: "application/json",
+			body:       `{"using":[],"methodCalls":[["Core/echo",{}]]}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "arguments not object", contentType: "application/json",
+			body:       `{"using":[],"methodCalls":[["Core/echo",[],"c1"]]}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "arguments null", contentType: "application/json",
+			body:       `{"using":[],"methodCalls":[["Core/echo",null,"c1"]]}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "method name not string", contentType: "application/json",
+			body:       `{"using":[],"methodCalls":[[1,{},"c1"]]}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "malformed method name", contentType: "application/json",
+			body:       `{"using":[],"methodCalls":[["Echo",{},"c1"]]}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "methodCallId not string", contentType: "application/json",
+			body:       `{"using":[],"methodCalls":[["Core/echo",{},1]]}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "duplicate methodCallId", contentType: "application/json",
+			body:       `{"using":[],"methodCalls":[["Core/echo",{},"c1"],["Core/echo",{},"c1"]]}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "createdIds null", contentType: "application/json",
+			body:       `{"using":[],"methodCalls":[],"createdIds":null}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "createdIds wrong value type", contentType: "application/json",
+			body:       `{"using":[],"methodCalls":[],"createdIds":{"c1":1}}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "unknown capability", contentType: "application/json",
+			body:       `{"using":["https://example.com/not-supported"],"methodCalls":[]}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:unknownCapability",
+		},
+		{
+			name: "too many calls", contentType: "application/json",
+			body:       `{"using":["urn:ietf:params:jmap:core"],"methodCalls":[` + strings.Join(manyCalls, ",") + `]}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:limit", wantLimit: "maxCallsInRequest",
+		},
+		{
+			name: "too many get ids", contentType: "application/json",
+			body: fmt.Sprintf(`{"using":["urn:ietf:params:jmap:mail"],"methodCalls":[[%q,%s,"g1"]]}`,
+				"Email/get", fmt.Sprintf(`{"accountId":"admin","ids":%s}`, jmapJSONArray("e", jmapMaxObjectsInGet+1))),
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:limit", wantLimit: "maxObjectsInGet",
+		},
+		{
+			name: "too many set objects", contentType: "application/json",
+			body: fmt.Sprintf(`{"using":["urn:ietf:params:jmap:mail"],"methodCalls":[[%q,%s,"s1"]]}`,
+				"Email/set", fmt.Sprintf(`{"accountId":"admin","create":%s}`,
+					jmapJSONObject("c", jmapMaxObjectsInSet+1))),
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:limit", wantLimit: "maxObjectsInSet",
+		},
+		{
+			name: "combined set objects exceed limit", contentType: "application/json",
+			body: fmt.Sprintf(`{"using":["urn:ietf:params:jmap:mail"],"methodCalls":[[%q,%s,"s1"]]}`,
+				"Email/set", fmt.Sprintf(`{"accountId":"admin","create":%s,"update":%s,"destroy":%s}`,
+					jmapJSONObject("c", jmapMaxObjectsInSet/2),
+					jmapJSONObject("u", jmapMaxObjectsInSet/2),
+					jmapJSONArray("d", 1))),
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:limit", wantLimit: "maxObjectsInSet",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := jmapRequestWithContentType(t, h, token, tc.contentType, tc.body)
+			if tc.wantStatus == http.StatusOK {
+				if w.Code != http.StatusOK {
+					t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+				}
+				return
+			}
+			assertJMAPProblem(t, w, tc.wantStatus, tc.wantType, tc.wantLimit)
+		})
+	}
+}
+
+func TestJMAPUnknownMethodRemainsMethodLevelError(t *testing.T) {
+	h := newJMAPLimitHandler(t, 1<<20)
+	token := jmapToken(t, h)
+	body := `{"using":["urn:ietf:params:jmap:core"],"methodCalls":[["Foo/bar",{},"c1"]]}`
+	w := jmapRequestWithContentType(t, h, token, "application/json", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+
+	var response struct {
+		MethodResponses [][]json.RawMessage `json:"methodResponses"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v (body %s)", err, w.Body.String())
+	}
+	if len(response.MethodResponses) != 1 {
+		t.Fatalf("methodResponses = %d, want 1", len(response.MethodResponses))
+	}
+	var name string
+	if err := json.Unmarshal(response.MethodResponses[0][0], &name); err != nil || name != "error" {
+		t.Errorf("response name = %q, want error", name)
+	}
+	var args struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(response.MethodResponses[0][1], &args); err != nil {
+		t.Fatalf("decode error args: %v", err)
+	}
+	if args.Type != "unknownMethod" {
+		t.Errorf("error type = %q, want unknownMethod", args.Type)
 	}
 }

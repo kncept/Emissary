@@ -143,10 +143,15 @@ export type apiRequestResponse401 = {
   status: 401
 }
 
+export type apiRequestResponse413 = {
+  data: ProblemDetails
+  status: 413
+}
+
 export type apiRequestResponseSuccess = (apiRequestResponse200) & {
   headers: Headers;
 };
-export type apiRequestResponseError = (apiRequestResponse400 | apiRequestResponse401) & {
+export type apiRequestResponseError = (apiRequestResponse400 | apiRequestResponse401 | apiRequestResponse413) & {
   headers: Headers;
 };
 

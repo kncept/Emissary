@@ -107,6 +107,14 @@ func (s *ApiRequestBadRequest) Validate() error {
 	return nil
 }
 
+func (s *ApiRequestRequestEntityTooLarge) Validate() error {
+	alias := (*ProblemDetails)(s)
+	if err := alias.Validate(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *ApiRequestUnauthorized) Validate() error {
 	alias := (*ProblemDetails)(s)
 	if err := alias.Validate(); err != nil {

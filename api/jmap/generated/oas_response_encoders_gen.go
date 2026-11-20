@@ -26,7 +26,7 @@ func encodeApiRequestResponse(response ApiRequestRes, w http.ResponseWriter, spa
 		return nil
 
 	case *ApiRequestBadRequest:
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(400)
 
 		e := new(jx.Encoder)
@@ -38,8 +38,20 @@ func encodeApiRequestResponse(response ApiRequestRes, w http.ResponseWriter, spa
 		return nil
 
 	case *ApiRequestUnauthorized:
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(401)
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *ApiRequestRequestEntityTooLarge:
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(413)
 
 		e := new(jx.Encoder)
 		response.Encode(e)
