@@ -57,6 +57,7 @@ AWS, not the application directly):
 | `RECEIVER_BUCKET` | no | S3 bucket for receiver rules when `RECEIVER=s3` (default: the mail bucket). IAM access is granted on both buckets. |
 | `RECEIVER_TABLE` | no | Override the generated receiver table name (default `<TABLE_PREFIX>receiver`). |
 | `JWT_SECRET` | no | Signing secret for the app. Unset → CDK generates a 64-character secret in Secrets Manager. |
+| `LOG_LEVEL` | no | Minimum `log/slog` level for both application Lambdas (`DEBUG`, `INFO`, `WARN` or `ERROR`, or the equivalent numeric value). Always injected; `ERROR` is used when unset in the current environment. Unrecognised values fall back to `WARN`. |
 
 ## The three stacks
 
@@ -106,7 +107,8 @@ Skipped (with a warning) unless `mailer/cmd/frontend/bootstrap` exists.
   and passes the bucket, `TABLE_PREFIX`, the resolved DynamoDB table
   names (including `RECEIVER_TABLE`/`RECEIVER_REGION` when `RECEIVER=ddb`),
   domain, admin credentials (password only if provided),
-  `JWT_SECRET` as a Secrets Manager ARN, and the JWT audience/issuer.
+  `JWT_SECRET` as a Secrets Manager ARN, the JWT audience/issuer, and
+  `LOG_LEVEL` (default `ERROR`).
 - Lambda function `emissary-<domain>-s3-receiver`: custom runtime
   `provided.al2023`, x86_64, 256 MB, 30s timeout, handler `bootstrap`,
   triggered by `OBJECT_CREATED` events on the inbound bucket. It uses the

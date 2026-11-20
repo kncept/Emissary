@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/kncept/Emissary/mailer/auth"
@@ -213,6 +214,7 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 	// operations such as EmailSubmission/set, where the From address must
 	// belong to the caller (or the caller must be allowed to masquerade).
 	ctx = ContextWithClaims(ctx, claims)
+	slog.Debug("JMAP request", "calls", len(req.MethodCalls), "account", defaultAccountID)
 
 	// Seed the creation-id map from durable per-session state and from the
 	// request. The session copy lets a client continue after a Lambda cold
@@ -225,6 +227,7 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 	if sessionID != "" && d.sessionState != nil {
 		stored, err := d.sessionState.LoadCreatedIDs(ctx, sessionID)
 		if err != nil {
+			slog.Error("JMAP: failed to load session created ids", "err", err)
 			return nil, fmt.Errorf("load created ids: %w", err)
 		}
 		for creationID, id := range stored {
@@ -247,6 +250,7 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 		// supplied by the client in createdIds).
 		resolvedArgs, err := resolveCallCreationIDs(call.Arguments, createdIDs)
 		if err != nil {
+			slog.Warn("JMAP: invalid creation id reference", "method", call.Name, "err", err)
 			responses = append(responses, d.errorResponse(call, fmt.Errorf("invalidArguments: %w", err)))
 			continue
 		}
@@ -266,13 +270,16 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 		// Validate accountId: users without User Manager permission can only
 		// access their own account.
 		if claims != nil && !claims.EmissaryUserManagement && accountID != claims.Subject {
+			slog.Warn("JMAP: forbidden account access", "method", call.Name, "account", accountID)
 			resp := d.errorResponse(call, fmt.Errorf("forbidden: insufficient permissions to access account %s", accountID))
 			responses = append(responses, resp)
 			continue
 		}
 
+		slog.Debug("JMAP method call", "method", call.Name, "client_id", call.ClientID, "account", accountID)
 		resp, err := d.dispatchCall(ctx, accountID, call)
 		if err != nil {
+			slog.Error("JMAP method failed", "method", call.Name, "account", accountID, "err", err)
 			// Return an error response for this method call
 			resp = d.errorResponse(call, err)
 		}
@@ -284,6 +291,7 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 	// do not write to the session store.
 	if sessionID != "" && d.sessionState != nil && !sameStringMap(createdIDs, initial) {
 		if err := d.sessionState.SaveCreatedIDs(ctx, sessionID, createdIDs); err != nil {
+			slog.Error("JMAP: failed to save session created ids", "err", err)
 			return nil, fmt.Errorf("save created ids: %w", err)
 		}
 	}

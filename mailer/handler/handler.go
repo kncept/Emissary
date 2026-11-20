@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -145,7 +145,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 			return nil, err
 		}
 		jwtSecret = base64.RawURLEncoding.EncodeToString(secret)
-		log.Println("WARNING: JWT_SECRET not set; using an ephemeral secret. Tokens are invalidated on restart.")
+		slog.Warn("JWT_SECRET not set; using an ephemeral secret. Tokens are invalidated on restart")
 	}
 
 	jwtTTL := cfg.JWTSecretTTL
@@ -252,6 +252,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 		}
 		cfg.ReceiverConfigStore = configStore
 	}
+	slog.Debug("Receiver rules loaded", "identities", len(identityConfig))
 	cfg.ReceiverConfig = identityConfig
 
 	return newHandler(authenticator, emailStore, metaStore, sessionStore, mailSender, users, cfg), nil
@@ -270,7 +271,7 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 			Password string `json:"password"`
 		}
 		if err := decodeJSON(w, r, &req); err != nil {
-			logRequestError(r, "decode login request", err)
+			logRequestWarn(r, "decode login request", err)
 			writeError(w, http.StatusBadRequest, "invalid request")
 			return
 		}
@@ -281,7 +282,7 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 
 		result, err := authenticator.Login(r.Context(), req.Username, req.Password)
 		if err != nil {
-			logRequestError(r, "authenticate "+strconv.Quote(req.Username), err)
+			logRequestWarn(r, "authenticate "+strconv.Quote(req.Username), err)
 			if errors.Is(err, usermanager.ErrUserDisabled) {
 				writeError(w, http.StatusForbidden, "user is disabled")
 				return
@@ -303,7 +304,7 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 			RefreshToken string `json:"refreshToken"`
 		}
 		if err := decodeJSON(w, r, &req); err != nil {
-			logRequestError(r, "decode refresh request", err)
+			logRequestWarn(r, "decode refresh request", err)
 			writeError(w, http.StatusBadRequest, "invalid request")
 			return
 		}
@@ -314,7 +315,7 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 
 		result, err := authenticator.Refresh(r.Context(), req.RefreshToken)
 		if err != nil {
-			logRequestError(r, "refresh token", err)
+			logRequestWarn(r, "refresh token", err)
 			writeError(w, http.StatusUnauthorized, "invalid or expired refresh token")
 			return
 		}
@@ -373,7 +374,7 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 	supportHandler := newSupportHandler(context.Background(), cfg, emailStore, metaStore, sessionStore, mailSender, userManager)
 	supportServer, err := supportapi.NewServer(supportHandler, supportSecurityHandler{authenticator}, supportapi.WithErrorHandler(supportErrorHandler))
 	if err != nil {
-		log.Printf("failed to create support server: %v", err)
+		slog.Error("Failed to create support server", "err", err)
 	} else {
 		// Register per-method prefixes so the System Manager routes coexist
 		// with the method-specific JMAP catch-all (POST /api/jmap/).
@@ -387,7 +388,7 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 		usersHandler := NewUsersHandler(mgr, authenticator)
 		usersServer, err := usersapi.NewServer(usersHandler, usersSecurityHandler{authenticator})
 		if err != nil {
-			log.Printf("failed to create users server: %v", err)
+			slog.Error("Failed to create users server", "err", err)
 		} else {
 			mux.Handle("/api/user/", usersServer)
 		}
@@ -403,9 +404,10 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 	mux.HandleFunc("/", serveFrontend)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		slog.Debug("HTTP request", "method", r.Method, "path", r.URL.Path)
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				log.Printf("panic serving %s %s: %v", r.Method, r.URL.Path, recovered)
+				slog.Error("Panic serving request", "method", r.Method, "path", r.URL.Path, "panic", recovered)
 				writeError(w, http.StatusInternalServerError, "internal server error")
 			}
 		}()
@@ -429,7 +431,7 @@ func bearerClaims(authenticator *auth.Authenticator, r *http.Request) (*auth.Cla
 	token := strings.TrimSpace(strings.TrimPrefix(header, prefix))
 	claims, err := authenticator.ValidateClaims(token)
 	if err != nil {
-		logRequestError(r, "validate bearer token", err)
+		logRequestWarn(r, "validate bearer token", err)
 		return nil, false
 	}
 	return claims, true
@@ -494,7 +496,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(value); err != nil {
-		log.Printf("write JSON response: %v", err)
+		slog.Error("Write JSON response", "err", err)
 	}
 }
 
@@ -502,8 +504,17 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
+// logRequestError records a request that failed because of a server-side
+// problem. These are included at the default ERROR level.
 func logRequestError(r *http.Request, operation string, err error) {
-	log.Printf("%s %q: %s: %v", r.Method, r.URL.Path, operation, err)
+	slog.Error("Request failed", "method", r.Method, "path", r.URL.Path, "operation", operation, "err", err)
+}
+
+// logRequestWarn records a request that failed for a client-controlled reason
+// (bad input, invalid credentials, aborted response). These are useful when
+// diagnosing issues but stay out of the quiet default configuration.
+func logRequestWarn(r *http.Request, operation string, err error) {
+	slog.Warn("Request rejected", "method", r.Method, "path", r.URL.Path, "operation", operation, "err", err)
 }
 
 func serveFrontend(w http.ResponseWriter, r *http.Request) {
@@ -540,7 +551,7 @@ func serveFrontend(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	if r.Method != http.MethodHead {
 		if _, err := io.Copy(w, file); err != nil {
-			logRequestError(r, "write embedded frontend file "+strconv.Quote(path), err)
+			logRequestWarn(r, "write embedded frontend file "+strconv.Quote(path), err)
 		}
 	}
 }
@@ -699,7 +710,7 @@ func handleRawEmail(w http.ResponseWriter, r *http.Request, store storage.Storag
 	w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(raw); err != nil {
-		logRequestError(r, "write raw email", err)
+		logRequestWarn(r, "write raw email", err)
 	}
 }
 

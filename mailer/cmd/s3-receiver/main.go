@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -12,11 +13,13 @@ import (
 	mailerconfig "github.com/kncept/Emissary/mailer/config"
 	configvendor "github.com/kncept/Emissary/mailer/config-vendor"
 	"github.com/kncept/Emissary/mailer/envutil"
+	"github.com/kncept/Emissary/mailer/logging"
 	"github.com/kncept/Emissary/mailer/receiver"
 )
 
 func main() {
-	log.Print(envutil.StartupMessage("s3-receiver"))
+	logging.Configure()
+	slog.Info(envutil.StartupMessage("s3-receiver"))
 
 	lambda.Start(handler)
 }
@@ -33,13 +36,15 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 	// Load configuration from environment
 	cfg, err := mailerconfig.Load(ctx)
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		slog.Error("Failed to load configuration", "err", err)
+		os.Exit(1)
 	}
 
 	// Load AWS config
 	awsCfg, err := awscfg.LoadDefaultConfig(ctx)
 	if err != nil {
-		log.Fatalf("Failed to load AWS config: %v", err)
+		slog.Error("Failed to load AWS config", "err", err)
+		os.Exit(1)
 	}
 
 	s3Client := s3.NewFromConfig(awsCfg)
@@ -49,7 +54,8 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 	// vendored store so receiver and frontend see the same messages.
 	components, err := configvendor.FromConfig(ctx, cfg)
 	if err != nil {
-		log.Fatalf("Failed to create components from configuration: %v", err)
+		slog.Error("Failed to create components from configuration", "err", err)
+		os.Exit(1)
 	}
 
 	// Create receiver
@@ -65,7 +71,8 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 		IdentityConfig: components.ReceiverConfig,
 	})
 	if err != nil {
-		log.Fatalf("Failed to create receiver: %v", err)
+		slog.Error("Failed to create receiver", "err", err)
+		os.Exit(1)
 	}
 
 	// Process each record in the S3 event
@@ -74,19 +81,20 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 		key := record.S3.Object.Key
 
 		if !isInboundEmailKey(key) {
-			log.Printf("Ignoring nested S3 object: bucket=%s key=%s", bucket, key)
+			slog.Debug("Ignoring nested S3 object", "bucket", bucket, "key", key)
 			continue
 		}
 
 		if bucket != cfg.Storage.S3Bucket {
-			log.Printf("Failed to process message %s: bucket mismatch: expected %s, got %s", key, cfg.Storage.S3Bucket, bucket)
+			slog.Warn("S3 object bucket does not match configured mail bucket",
+				"key", key, "bucket", bucket, "expected_bucket", cfg.Storage.S3Bucket)
 			continue
 		}
 
-		log.Printf("Processing S3 object: bucket=%s key=%s", bucket, key)
+		slog.Debug("Processing S3 object", "bucket", bucket, "key", key)
 
 		if err := rcvr.ProcessS3Event(ctx, key); err != nil {
-			log.Printf("Failed to process message %s: %v", key, err)
+			slog.Error("Failed to process message", "key", key, "err", err)
 			// Continue processing other records
 			continue
 		}

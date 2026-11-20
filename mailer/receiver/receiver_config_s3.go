@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"sort"
@@ -45,8 +45,11 @@ func NewS3ConfigStore(bucket string) (*S3ConfigStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
-	log.Printf("receiver config s3: store initialized for bucket %q (region=%q AWS_ENDPOINT_URL=%q AWS_ENDPOINT_URL_S3=%q AWS_PROFILE=%q)",
-		bucket, cfg.Region, os.Getenv("AWS_ENDPOINT_URL"), os.Getenv("AWS_ENDPOINT_URL_S3"), os.Getenv("AWS_PROFILE"))
+	slog.Debug("Receiver config S3: store initialized",
+		"bucket", bucket, "region", cfg.Region,
+		"aws_endpoint_url", os.Getenv("AWS_ENDPOINT_URL"),
+		"aws_endpoint_url_s3", os.Getenv("AWS_ENDPOINT_URL_S3"),
+		"aws_profile", os.Getenv("AWS_PROFILE"))
 	return newS3ConfigStore(s3.NewFromConfig(cfg), bucket), nil
 }
 
@@ -100,7 +103,7 @@ func (s *S3ConfigStore) Put(ctx context.Context, identity string, rules HandlerR
 	if err != nil {
 		return fmt.Errorf("marshal receiver config %q: %w", identity, err)
 	}
-	log.Printf("receiver config s3: PutObject bucket=%q key=%q identity=%q", s.bucket, key, identity)
+	slog.Debug("Receiver config S3: writing config", "bucket", s.bucket, "key", key, "identity", identity)
 	output, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(key),
@@ -114,7 +117,7 @@ func (s *S3ConfigStore) Put(ctx context.Context, identity string, rules HandlerR
 	if output != nil && output.ETag != nil {
 		etag = *output.ETag
 	}
-	log.Printf("receiver config s3: PutObject succeeded bucket=%q key=%q etag=%q", s.bucket, key, etag)
+	slog.Debug("Receiver config S3: wrote config", "bucket", s.bucket, "key", key, "etag", etag)
 	return nil
 }
 

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/mail"
 	"sort"
 	"strings"
@@ -587,7 +587,7 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 		// that a retry can no longer reach. If metadata deletion fails, keep
 		// the message so the whole destroy can be retried.
 		if err := h.metadata.Delete(ctx, accountID, id); err != nil {
-			log.Printf("failed to delete metadata for email %q/%q: %v", accountID, id, err)
+			slog.Error("JMAP: failed to delete email metadata", "account", accountID, "id", id, "err", err)
 			notDestroyed[id] = map[string]string{"type": "serverFail", "description": "Failed to delete metadata: " + err.Error()}
 			continue
 		}
@@ -1093,6 +1093,7 @@ func (h *Handler) EmailSubmissionGet(ctx context.Context, accountID string, args
 }
 
 func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
+	slog.Debug("JMAP: submitting email", "account", accountID)
 	var req struct {
 		AccountID string `json:"accountId"`
 		Create    map[string]struct {
@@ -1280,21 +1281,23 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 
 		// Send the email
 		if err := h.sender.Send(ctx, message); err != nil {
+			slog.Error("JMAP: failed to send email", "account", accountID, "create_id", createID, "err", err)
 			notCreated[createID] = map[string]string{"type": "serverFail", "description": "Failed to send email: " + err.Error()}
 			continue
 		}
+		slog.Info("JMAP: email submitted", "account", accountID, "email_id", submission.EmailID)
 
 		// A session draft has served its purpose once the message is sent.
 		// Deletion failures must not turn a successful send into a client
 		// error, since that would encourage a duplicate submission.
 		if sessionID != "" {
 			if err := h.storage.DeleteDraft(ctx, sessionID, submission.EmailID); err != nil {
-				log.Printf("failed to delete JMAP draft %q: %v", submission.EmailID, err)
+				slog.Warn("JMAP: failed to delete sent draft", "email_id", submission.EmailID, "err", err)
 			}
 			// The draft's keyword record is tied to the draft id, so remove it
 			// too. A missing record is not an error.
 			if err := h.metadata.Delete(ctx, req.AccountID, submission.EmailID); err != nil {
-				log.Printf("failed to delete metadata for JMAP draft %q/%q: %v", req.AccountID, submission.EmailID, err)
+				slog.Warn("JMAP: failed to delete sent draft metadata", "account", req.AccountID, "email_id", submission.EmailID, "err", err)
 			}
 		}
 

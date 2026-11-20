@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -13,24 +14,28 @@ import (
 	configvendor "github.com/kncept/Emissary/mailer/config-vendor"
 	"github.com/kncept/Emissary/mailer/envutil"
 	"github.com/kncept/Emissary/mailer/handler"
+	"github.com/kncept/Emissary/mailer/logging"
 )
 
 func main() {
-	log.Print(envutil.StartupMessage("frontend"))
+	logging.Configure()
+	slog.Info(envutil.StartupMessage("frontend"))
 
 	ctx := context.Background()
 
 	// Load configuration using the config package
 	cfg, err := config.Load(ctx)
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		slog.Error("Failed to load configuration", "err", err)
+		os.Exit(1)
 	}
 
 	// Vend every runtime component from its config subtype. The same factory
 	// is used by cmd/s3-receiver, so backends are registered in one place.
 	components, err := configvendor.FromConfig(ctx, cfg)
 	if err != nil {
-		log.Fatalf("Failed to create components from configuration: %v", err)
+		slog.Error("Failed to create components from configuration", "err", err)
+		os.Exit(1)
 	}
 
 	// Build handler config from loaded config
@@ -88,14 +93,15 @@ func main() {
 
 	h, err := handler.New(handlerCfg)
 	if err != nil {
-		log.Fatalf("Failed to create handler: %v", err)
+		slog.Error("Failed to create handler", "err", err)
+		os.Exit(1)
 	}
 
 	// The application http.Handler is fully built at this point. In Lambda,
 	// hand it to the runtime instead of starting a listener of our own; the
 	// adapter translates API Gateway events into requests.
 	if awsutil.IsAwsLambda() {
-		log.Printf("Lambda listener loaded")
+		slog.Info("Lambda listener loaded")
 		lambda.Start(httpadapter.New(h).ProxyWithContext)
 		return
 	}
@@ -104,8 +110,9 @@ func main() {
 	if !strings.HasPrefix(port, ":") {
 		port = ":" + port
 	}
-	log.Printf("Server starting on %s", port)
+	slog.Info("Server starting", "addr", port)
 	if err := http.ListenAndServe(port, h); err != nil {
-		log.Fatal(err)
+		slog.Error("Server stopped", "addr", port, "err", err)
+		os.Exit(1)
 	}
 }

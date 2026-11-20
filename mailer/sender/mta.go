@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"net"
 	"net/mail"
@@ -77,6 +76,7 @@ func (s *MtaSender) Send(ctx context.Context, message *email.UserEmail) error {
 	if envelopeFrom == "" {
 		return errors.New("message has no From address")
 	}
+	slog.Debug("mta: sending message", "from", envelopeFrom, "subject", message.Subject)
 	s.checkDMARC(ctx, envelopeFrom, envelopeFrom)
 	return s.deliver(ctx, envelopeFrom, helloNameFromAddress(envelopeFrom), message)
 }
@@ -98,12 +98,12 @@ func (s *MtaSender) checkDMARC(ctx context.Context, envelopeFrom, fromAddress st
 
 	from, err := moxdns.ParseDomain(fromDomain)
 	if err != nil {
-		log.Printf("mta: DMARC warning: invalid From domain %q: %v", fromDomain, err)
+		slog.Warn("mta: DMARC warning: invalid From domain", "from_domain", fromDomain, "err", err)
 		return
 	}
 	spfIdentity, err := moxdns.ParseDomain(spfDomain)
 	if err != nil {
-		log.Printf("mta: DMARC warning: invalid SPF domain %q: %v", spfDomain, err)
+		slog.Warn("mta: DMARC warning: invalid SPF domain", "spf_domain", spfDomain, "err", err)
 		return
 	}
 
@@ -117,16 +117,18 @@ func (s *MtaSender) checkDMARC(ctx context.Context, envelopeFrom, fromAddress st
 	_, result := dmarc.Verify(ctx, slog.Default(), s.resolver, from, nil, spfResult, &spfIdentity, false)
 	if result.Record == nil {
 		if result.Status == dmarc.StatusTemperror || result.Status == dmarc.StatusPermerror {
-			log.Printf("mta: DMARC warning: lookup for %s returned %s: %v", fromDomain, result.Status, result.Err)
+			slog.Warn("mta: DMARC warning: lookup failed", "from_domain", fromDomain, "status", result.Status, "err", result.Err)
 		}
 		return
 	}
 	if result.Status == dmarc.StatusPass {
-		log.Printf("mta: DMARC check passed: from=%s spfIdentity=%s policy=%s", fromDomain, spfDomain, result.Record.Policy)
+		slog.Debug("mta: DMARC check passed", "from_domain", fromDomain, "spf_identity", spfDomain, "policy", result.Record.Policy)
 		return
 	}
-	log.Printf("mta: DMARC warning: From domain %q is not DMARC-aligned with SPF identity %q (status=%s policy=%s spfRecordFound=%t spfLookupError=%v rejectRecommended=%t); receivers may reject this message",
-		fromDomain, spfDomain, result.Status, result.Record.Policy, spfFound, spfErr, result.Reject)
+	slog.Warn("mta: DMARC warning: From domain is not DMARC-aligned with SPF identity; receivers may reject this message",
+		"from_domain", fromDomain, "spf_identity", spfDomain, "status", result.Status,
+		"policy", result.Record.Policy, "spf_record_found", spfFound, "spf_lookup_err", spfErr,
+		"reject_recommended", result.Reject)
 }
 
 // spfRecordExists looks for an SPF TXT record under the standard name and the
@@ -205,8 +207,9 @@ func (s *MtaSender) deliver(ctx context.Context, envelopeFrom, helloName string,
 func (s *MtaSender) deliverToDomain(ctx context.Context, domain, envelopeFrom, helloName string, recipients []string, wire []byte) error {
 	hosts, lookupErr := s.mxHosts(ctx, domain)
 	if lookupErr != nil {
-		log.Printf("mta: MX lookup for %s failed (%v); trying domain as mail host", domain, lookupErr)
+		slog.Warn("mta: MX lookup failed; trying domain as mail host", "domain", domain, "err", lookupErr)
 	}
+	slog.Debug("mta: delivering to domain", "domain", domain, "hosts", hosts, "recipients", len(recipients))
 
 	var errs []error
 	for _, host := range hosts {
@@ -214,6 +217,7 @@ func (s *MtaSender) deliverToDomain(ctx context.Context, domain, envelopeFrom, h
 			errs = append(errs, fmt.Errorf("mx %s: %w", host, err))
 			continue
 		}
+		slog.Info("mta: delivered to domain", "domain", domain, "host", host, "recipients", len(recipients))
 		return nil
 	}
 	return errors.Join(errs...)
@@ -299,7 +303,7 @@ func (s *MtaSender) deliverToHost(ctx context.Context, host, envelopeFrom, hello
 	// The message has already been accepted at this point; a broken QUIT must
 	// not turn a successful delivery into a reported failure.
 	if err := client.Quit(); err != nil {
-		log.Printf("mta: smtp quit warning for %s: %v", host, err)
+		slog.Warn("mta: smtp quit warning", "host", host, "err", err)
 	}
 	return nil
 }

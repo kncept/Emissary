@@ -2,7 +2,7 @@ package sender
 
 import (
 	"context"
-	"log"
+	"log/slog"
 
 	"github.com/kncept/Emissary/mailer/email"
 )
@@ -22,11 +22,22 @@ func (s *LogSender) Name() string {
 }
 
 func (s *LogSender) Send(_ context.Context, message *email.UserEmail) error {
-	log.Printf("outbound email from=%s replyTo=%v to=%v subject=%q", message.From.Address, addressStrings(message.ReplyTo), addressStrings(message.To), message.Subject)
+	// This sender exists to make outbound mail visible in the log, so the
+	// message itself is the Info record rather than a diagnostic trace.
+	slog.Info("LogSender: outbound email",
+		"from", message.From.Address,
+		"reply_to", addressStrings(message.ReplyTo),
+		"to", addressStrings(message.To),
+		"subject", message.Subject)
 	return nil
 }
 
 func (s *LogSender) SendBounce(_ context.Context, originalMessageID, bounceSender, recipient, bounceType string, originalMessage *email.UserEmail) error {
-	log.Printf("bounce email: originalMessageID=%s bounceSender=%s recipient=%s bounceType=%s subject=%q", originalMessageID, bounceSender, recipient, bounceType, originalMessage.Subject)
+	slog.Info("LogSender: bounce email",
+		"original_message_id", originalMessageID,
+		"bounce_sender", bounceSender,
+		"recipient", recipient,
+		"bounce_type", bounceType,
+		"subject", originalMessage.Subject)
 	return nil
 }

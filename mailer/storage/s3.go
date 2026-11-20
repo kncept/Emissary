@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -136,6 +136,7 @@ func (s *S3Storage) ListEmails(ctx context.Context, accountID, mailboxID string)
 		return nil, fmt.Errorf("accountID is required")
 	}
 	prefix := s.listPrefix() + mailboxPrefix
+	slog.Debug("S3: listing mail", "bucket", s.bucket, "prefix", prefix)
 
 	var emails []*email.ListedEmail
 	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
@@ -158,12 +159,13 @@ func (s *S3Storage) ListEmails(ctx context.Context, accountID, mailboxID string)
 			}
 			message, err := s.getEmailByKey(ctx, *obj.Key)
 			if err != nil {
-				log.Printf("s3: skipping object %q: %v", *obj.Key, err)
+				slog.Warn("S3: skipping unreadable mail object", "key", *obj.Key, "err", err)
 				continue
 			}
 			emails = append(emails, message)
 		}
 	}
+	slog.Debug("S3: listed mail", "prefix", prefix, "count", len(emails))
 	return emails, nil
 }
 
@@ -386,11 +388,13 @@ func (s *S3Storage) AddEmail(ctx context.Context, accountID string, message *ema
 	key := fmt.Sprintf("%s%s_%s.eml", s.listPrefix()+mailboxPrefix, email.FormatDeliveredTimestamp(timestamp), id)
 
 	raw := email.RawFromUserEmail(message)
+	slog.Debug("S3: storing email", "key", key, "account", accountID)
 	if _, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 		Body:   strings.NewReader(string(raw)),
 	}); err != nil {
+		slog.Error("S3: failed to store email", "key", key, "err", err)
 		return "", fmt.Errorf("failed to add email %q: %w", key, err)
 	}
 
@@ -405,6 +409,7 @@ func (s *S3Storage) DeleteEmail(ctx context.Context, id string) error {
 	if len(candidates) == 0 {
 		return ErrNotFound
 	}
+	slog.Debug("S3: deleting email", "id", id, "candidates", len(candidates))
 
 	deleted := false
 	for _, key := range candidates {
@@ -418,6 +423,7 @@ func (s *S3Storage) DeleteEmail(ctx context.Context, id string) error {
 			if isObjectNotFound(err) {
 				continue
 			}
+			slog.Error("S3: failed to check object before delete", "key", key, "err", err)
 			return fmt.Errorf("failed to check object %q: %w", key, err)
 		}
 		_, err = s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
@@ -425,6 +431,7 @@ func (s *S3Storage) DeleteEmail(ctx context.Context, id string) error {
 			Key:    aws.String(key),
 		})
 		if err != nil {
+			slog.Error("S3: failed to delete email object", "key", key, "err", err)
 			return fmt.Errorf("failed to delete object %q: %w", key, err)
 		}
 		deleted = true

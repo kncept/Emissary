@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
@@ -505,6 +506,16 @@ func Load(ctx context.Context) (*Config, error) {
 		return nil, err
 	}
 
+	// Log only the selected backend types: the configuration also holds
+	// credentials and must never be dumped wholesale.
+	slog.Debug("Configuration loaded",
+		"storage", cfg.Storage.Type,
+		"sender", cfg.Sender.Type,
+		"receiver", cfg.Receiver.Type,
+		"metadata", cfg.Metadata.Type,
+		"session", cfg.Session.Type,
+		"user_manager", cfg.UserManager.Type,
+		"jwt_secret_generated", cfg.Server.JWTGenerated)
 	return cfg, nil
 }
 

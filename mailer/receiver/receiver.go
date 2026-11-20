@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -106,7 +106,7 @@ func NewReceiver(cfg ReceiverConfig) (*Receiver, error) {
 // The key is the SES message ID (object key at bucket root).
 // Returns an error if the message cannot be processed.
 func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
-	log.Printf("receiver: processing message %s", key)
+	slog.Info("Receiver: processing message", "key", key)
 
 	// Get the raw message from S3
 	obj, err := r.cfg.SESClient.GetObject(ctx, &s3.GetObjectInput{
@@ -117,7 +117,7 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 		// Check if object doesn't exist (already processed or deleted)
 		var noSuchKey *types.NoSuchKey
 		if errors.As(err, &noSuchKey) {
-			log.Printf("receiver: object %s not found (already processed?)", key)
+			slog.Debug("Receiver: staging object not found (already processed?)", "key", key)
 			return nil
 		}
 		return fmt.Errorf("failed to get object %s: %w", key, err)
@@ -140,7 +140,7 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 	// header, not on the sender-controlled To/Cc/Bcc headers.
 	recipients := email.EnvelopeRecipients(wireEmail)
 	if len(recipients) == 0 {
-		log.Printf("receiver: no envelope recipients found in message %s", key)
+		slog.Warn("Receiver: no envelope recipients found", "key", key)
 		// Still delete the staging object to avoid reprocessing
 		if err := r.deleteStagingObject(ctx, key); err != nil {
 			return fmt.Errorf("failed to delete staging object after no recipients: %w", err)
@@ -148,7 +148,7 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 		return nil
 	}
 
-	log.Printf("receiver: message %s has %d recipient(s): %s", key, len(recipients), strings.Join(recipients, ", "))
+	slog.Debug("Receiver: message recipients", "key", key, "recipients", recipients)
 
 	// Resolve and apply the rules for each recipient in one pass. Every lookup
 	// is keyed by the recipient's mail identity. An identity's rules are tried
@@ -161,9 +161,9 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 		identity := MailIdentityForRecipient(recipient)
 		rules, err := r.cfg.IdentityConfig.GetByIdentity(identity)
 		if err != nil {
-			log.Printf("receiver: no routing rules for %s via mail identity %s: %v (bouncing)", recipient, identity, err)
+			slog.Warn("Receiver: no routing rules; bouncing", "recipient", recipient, "identity", identity, "err", err)
 			if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
-				log.Printf("receiver: failed to send bounce to %s: %v", recipient, err)
+				slog.Error("Receiver: failed to send bounce", "recipient", recipient, "err", err)
 				bounceErrors = append(bounceErrors, fmt.Errorf("bounce to %s failed: %w", recipient, err))
 			}
 			continue
@@ -171,47 +171,47 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 
 		applied := false
 		for _, rule := range rules.Rules {
-			fmt.Printf("Evaluating rule %v from mailbox %s for user %s\n", rule, rules.MailIdentity, recipient)
+			slog.Debug("Receiver: evaluating rule", "rule", rule, "mailbox", rules.MailIdentity, "recipient", recipient)
 			switch rule {
 			case DeliverToUser:
 				user, err := r.cfg.UserManager.Lookup(ctx, recipient)
 				if err != nil || user == nil {
 					// This rule does not apply: keep trying the remaining rules
 					// in order instead of deciding the recipient's fate here.
-					log.Printf("receiver: recipient %s is not a user (rule %s)", recipient, rule)
+					slog.Debug("Receiver: recipient is not a user", "recipient", recipient, "rule", rule)
 					continue
 				}
 				if err := r.deliverToRecipient(ctx, recipient, parsedEmail); err != nil {
-					log.Printf("receiver: failed to deliver to %s: %v", recipient, err)
+					slog.Error("Receiver: failed to deliver", "recipient", recipient, "err", err)
 					deliveryErrors = append(deliveryErrors, fmt.Errorf("delivery to %s failed: %w", recipient, err))
 				}
 				applied = true
 			case DeliverToMailIdentity:
 				mailbox := rules.deliveryIdentity(recipient)
-				log.Printf("receiver: recipient %s routed to mail identity %s", recipient, mailbox)
+				slog.Debug("Receiver: routed to mail identity", "recipient", recipient, "mailbox", mailbox)
 				if err := r.deliverToRecipient(ctx, mailbox, parsedEmail); err != nil {
-					log.Printf("receiver: failed to deliver to %s: %v", mailbox, err)
+					slog.Error("Receiver: failed to deliver", "recipient", mailbox, "err", err)
 					deliveryErrors = append(deliveryErrors, fmt.Errorf("delivery to %s failed: %w", mailbox, err))
 				}
 				applied = true
 			case Bounce:
 				if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
-					log.Printf("receiver: failed to send bounce to %s: %v", recipient, err)
+					slog.Error("Receiver: failed to send bounce", "recipient", recipient, "err", err)
 					bounceErrors = append(bounceErrors, fmt.Errorf("bounce to %s failed: %w", recipient, err))
 				} else {
-					log.Printf("receiver: sent bounce for %s", recipient)
+					slog.Info("Receiver: sent bounce", "recipient", recipient)
 				}
 				applied = true
 			case Drop:
 				// Explicitly configured Drop is the only path that discards a
 				// recipient without a bounce. It is logged so operators can see
 				// where mail was intentionally dropped.
-				log.Printf("receiver: dropped message %s for %s", key, recipient)
+				slog.Warn("Receiver: dropped message for recipient", "key", key, "recipient", recipient)
 				applied = true
 			default:
 				// Validate should reject unknown rules, but never lose mail if a
 				// config was built without going through NewReceiver.
-				log.Printf("receiver: ignoring unknown handler rule %q for %s", rule, recipient)
+				slog.Warn("Receiver: ignoring unknown handler rule", "rule", rule, "recipient", recipient)
 			}
 			if applied {
 				// First applicable rule wins; do not try the remaining rules.
@@ -221,9 +221,9 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 		if !applied {
 			// No rule applied. Bounce rather than discard: dropping is only
 			// ever the result of an explicit Drop rule.
-			log.Printf("receiver: no handler rule matched %s; bouncing", recipient)
+			slog.Warn("Receiver: no handler rule matched; bouncing", "recipient", recipient)
 			if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
-				log.Printf("receiver: failed to send bounce to %s: %v", recipient, err)
+				slog.Error("Receiver: failed to send bounce", "recipient", recipient, "err", err)
 				bounceErrors = append(bounceErrors, fmt.Errorf("bounce to %s failed: %w", recipient, err))
 			}
 		}
@@ -242,7 +242,7 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 		return fmt.Errorf("processing completed with errors: %w", errors.Join(allErrors...))
 	}
 
-	log.Printf("receiver: successfully processed message %s", key)
+	slog.Info("Receiver: successfully processed message", "key", key, "recipients", len(recipients))
 	return nil
 }
 
@@ -264,7 +264,7 @@ func (r *Receiver) deliverToRecipient(ctx context.Context, recipient string, mes
 		return fmt.Errorf("failed to save metadata for %s: %w", id, err)
 	}
 
-	log.Printf("receiver: delivered message id %s  (smtp id %s) to %s", id, message.MessageID, recipient)
+	slog.Debug("Receiver: delivered message", "id", id, "smtp_id", message.MessageID, "recipient", recipient)
 	return nil
 }
 
@@ -293,7 +293,7 @@ func (r *Receiver) deleteStagingObject(ctx context.Context, key string) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete staging object %s: %w", key, err)
 	}
-	log.Printf("receiver: deleted staging object %s", key)
+	slog.Debug("Receiver: deleted staging object", "key", key)
 	return nil
 }
 

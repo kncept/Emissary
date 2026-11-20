@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/kncept/Emissary/mailer/config"
@@ -239,6 +240,14 @@ func FromConfig(ctx context.Context, cfg *config.Config) (*Bundle, error) {
 		return nil, fmt.Errorf("receiver config: %w", err)
 	}
 
+	slog.Debug("Runtime components created",
+		"storage", b.Storage.Name(),
+		"metadata", b.Metadata.Name(),
+		"session", b.Session.Name(),
+		"sender", b.Sender.Name(),
+		"user_manager", b.UserManager.Name(),
+		"receiver_config", b.ReceiverConfigStore.Name(),
+		"receiver_identities", len(b.ReceiverConfig))
 	return b, nil
 }
 

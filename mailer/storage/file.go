@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -190,7 +191,9 @@ func (s *FileStorage) AddEmail(_ context.Context, accountID string, message *ema
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	slog.Debug("Filesystem: storing email", "key", key, "root", s.root)
 	if err := fsutil.WriteFileAtomically(objectPath, email.RawFromUserEmail(message), 0644); err != nil {
+		slog.Error("Filesystem: failed to store email", "key", key, "err", err)
 		return "", fmt.Errorf("failed to add email %q: %w", key, err)
 	}
 	return key, nil
@@ -205,11 +208,13 @@ func (s *FileStorage) DeleteEmail(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	slog.Debug("Filesystem: deleting email", "id", id)
 	info, err := os.Stat(objectPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return ErrNotFound
 		}
+		slog.Error("Filesystem: failed to stat message before delete", "id", id, "err", err)
 		return fmt.Errorf("failed to stat message %q: %w", id, err)
 	}
 	if info.IsDir() {
@@ -219,6 +224,7 @@ func (s *FileStorage) DeleteEmail(_ context.Context, id string) error {
 		if os.IsNotExist(err) {
 			return ErrNotFound
 		}
+		slog.Error("Filesystem: failed to delete message", "id", id, "err", err)
 		return fmt.Errorf("failed to delete message %q: %w", id, err)
 	}
 	return nil

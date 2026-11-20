@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -53,6 +54,7 @@ func (s *AwsSesSender) Send(ctx context.Context, message *email.UserEmail) error
 		envelope = append(envelope, list...)
 	}
 
+	slog.Debug("SES: sending raw email", "from", source, "recipients", len(envelope), "subject", message.Subject)
 	_, err := s.client.SendRawEmail(ctx, &ses.SendRawEmailInput{
 		Source:       aws.String(source),
 		Destinations: addressStrings(envelope),
@@ -63,6 +65,7 @@ func (s *AwsSesSender) Send(ctx context.Context, message *email.UserEmail) error
 	if err != nil {
 		return fmt.Errorf("send raw email with SES: %w", err)
 	}
+	slog.Debug("SES: raw email sent", "from", source, "recipients", len(envelope))
 	return nil
 }
 
@@ -90,6 +93,7 @@ func (s *AwsSesSender) SendBounce(ctx context.Context, originalMessageID, bounce
 		sesBounceType = types.BounceTypeDoesNotExist
 	}
 
+	slog.Debug("SES: sending bounce", "original_message_id", originalMessageID, "recipient", recipient, "bounce_type", bounceType)
 	_, err := s.client.SendBounce(ctx, &ses.SendBounceInput{
 		OriginalMessageId: aws.String(originalMessageID),
 		BounceSender:      aws.String(bounceSender),
@@ -103,5 +107,6 @@ func (s *AwsSesSender) SendBounce(ctx context.Context, originalMessageID, bounce
 	if err != nil {
 		return fmt.Errorf("send bounce with SES: %w", err)
 	}
+	slog.Debug("SES: bounce sent", "original_message_id", originalMessageID, "recipient", recipient)
 	return nil
 }

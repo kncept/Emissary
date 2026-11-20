@@ -1,10 +1,11 @@
 # Configuration
 
-All runtime configuration is read from environment variables by
-`mailer/config` when `cmd/frontend` starts. Values are cached, and any
-value that starts with `arn:aws:` is transparently resolved from AWS
-Secrets Manager (`mailer/envutil` + `mailer/awsutil`). This is how the
-deployed Lambda receives its JWT secret as an ARN.
+Most runtime configuration is read from environment variables by
+`mailer/config` when `cmd/frontend` starts. `LOG_LEVEL` is the exception:
+`mailer/logging` reads it at process startup, before configuration is loaded.
+Values are cached, and any value that starts with `arn:aws:` is transparently
+resolved from AWS Secrets Manager (`mailer/envutil` + `mailer/awsutil`). This
+is how the deployed Lambda receives its JWT secret as an ARN.
 
 ## Server and authentication
 
@@ -18,6 +19,20 @@ deployed Lambda receives its JWT secret as an ARN.
 | `JWT_ISSUER` | unset | Expected `iss` claim. The CDK app sets it to `emissary-<domain>`. |
 | `LISTEN_ADDR` | — | Listen address, e.g. `:9090` or `127.0.0.1:8080`. Takes precedence over `PORT`. |
 | `PORT` | `8080` | Listen port when `LISTEN_ADDR` is unset. |
+
+## Logging
+
+All backend logs use Go's `log/slog` with a single threshold from `LOG_LEVEL`:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `LOG_LEVEL` | `WARN` when unset (`ERROR` in deployments, `DEBUG` for `run.sh run`) | Minimum level emitted: `DEBUG` (-4), `INFO` (0), `WARN` (4) or `ERROR` (8). Values are case-insensitive; the numeric slog values are also accepted. Unknown values fall back to `WARN`. |
+
+Records are written to stderr, which the Lambda runtime forwards to
+CloudWatch Logs. `DEBUG` carries per-request and per-message traces,
+`INFO` records lifecycle events and successful operations, `WARN` records
+recoverable or degraded conditions, and `ERROR` records failed operations
+that need operator attention.
 
 ## Storage (read side of mail)
 
@@ -185,6 +200,8 @@ behaviours on top of the table above:
   fully local, AWS-free run use `STORAGE=filesystem ./run.sh run`
   (persistent, under `~/.emissary`) or `STORAGE=memory ./run.sh run`.
 - `METADATA` defaults to `memory` and `PORT` to `8080`.
+- `LOG_LEVEL` defaults to `DEBUG`; set it explicitly (for example
+  `LOG_LEVEL=ERROR ./run.sh run`) to reduce local log volume.
 
 ## Deployed values (set by the CDK client stack)
 

@@ -3,7 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"strings"
 
 	usersapi "github.com/kncept/Emissary/api/users/generated"
@@ -47,9 +47,10 @@ func (h *usersHandler) ListUsers(ctx context.Context, params usersapi.ListUsersP
 
 	users, nextCursor, err := h.manager.List(ctx, cursor, pageSize)
 	if err != nil {
-		log.Printf("list users: %v", err)
+		slog.Error("List users failed", "err", err)
 		return &usersapi.ListUsersForbidden{Error: "failed to list users"}, nil
 	}
+	slog.Debug("Listed users", "count", len(users))
 
 	response := &usersapi.UsersListResponse{
 		Users: make([]usersapi.User, 0, len(users)),
@@ -125,12 +126,14 @@ func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserR
 	}
 
 	if err := h.manager.Create(ctx, user); err != nil {
-		log.Printf("create user: %v", err)
 		if errors.Is(err, usermanager.ErrUserExists) {
+			slog.Warn("Create user: user already exists", "email", user.Email)
 			return &usersapi.CreateUserConflict{Error: "user already exists"}, nil
 		}
+		slog.Error("Create user failed", "email", user.Email, "err", err)
 		return &usersapi.CreateUserBadRequest{Error: "failed to create user"}, nil
 	}
+	slog.Info("User created", "email", user.Email)
 
 	return &usersapi.UserResponse{
 		Email:         user.Email,
@@ -149,9 +152,14 @@ func (h *usersHandler) GetUser(ctx context.Context, params usersapi.GetUserParam
 
 	user, err := h.manager.Get(ctx, params.Email)
 	if err != nil {
-		log.Printf("get user: %v", err)
+		if errors.Is(err, usermanager.ErrUserNotFound) {
+			slog.Debug("Get user: not found", "email", params.Email)
+		} else {
+			slog.Error("Get user failed", "email", params.Email, "err", err)
+		}
 		return &usersapi.GetUserNotFound{Error: "user not found"}, nil
 	}
+	slog.Debug("Got user", "email", params.Email)
 
 	return &usersapi.UserResponse{
 		Email:         user.Email,
@@ -175,7 +183,11 @@ func (h *usersHandler) UpdateUser(ctx context.Context, req *usersapi.UpdateUserR
 
 	user, err := h.manager.Get(ctx, params.Email)
 	if err != nil {
-		log.Printf("get user for update: %v", err)
+		if errors.Is(err, usermanager.ErrUserNotFound) {
+			slog.Debug("Update user: not found", "email", params.Email)
+		} else {
+			slog.Error("Get user for update failed", "email", params.Email, "err", err)
+		}
 		return &usersapi.UpdateUserNotFound{Error: "user not found"}, nil
 	}
 
@@ -193,12 +205,14 @@ func (h *usersHandler) UpdateUser(ctx context.Context, req *usersapi.UpdateUserR
 	}
 
 	if err := h.manager.Save(ctx, user); err != nil {
-		log.Printf("save user: %v", err)
 		if errors.Is(err, usermanager.ErrUserNotFound) {
+			slog.Debug("Update user: not found", "email", user.Email)
 			return &usersapi.UpdateUserNotFound{Error: "user not found"}, nil
 		}
+		slog.Error("Update user failed", "email", user.Email, "err", err)
 		return &usersapi.UpdateUserBadRequest{Error: "failed to update user"}, nil
 	}
+	slog.Info("User updated", "email", user.Email)
 
 	return &usersapi.UserResponse{
 		Email:         user.Email,
@@ -219,12 +233,14 @@ func (h *usersHandler) DeleteUser(ctx context.Context, params usersapi.DeleteUse
 	}
 
 	if err := h.manager.Delete(ctx, params.Email); err != nil {
-		log.Printf("delete user: %v", err)
 		if errors.Is(err, usermanager.ErrUserNotFound) {
+			slog.Debug("Delete user: not found", "email", params.Email)
 			return &usersapi.DeleteUserNotFound{Error: "user not found"}, nil
 		}
+		slog.Error("Delete user failed", "email", params.Email, "err", err)
 		return &usersapi.DeleteUserNotFound{Error: "failed to delete user"}, nil
 	}
+	slog.Info("User deleted", "email", params.Email)
 
 	return &usersapi.DeleteUserResponse{Success: true}, nil
 }
@@ -254,16 +270,19 @@ func (h *usersHandler) ChangePassword(ctx context.Context, req *usersapi.ChangeP
 	}
 
 	if err := h.manager.ChangePassword(ctx, params.Email, oldPassword, req.NewPassword); err != nil {
-		log.Printf("change password: %v", err)
 		switch {
 		case errors.Is(err, usermanager.ErrUserNotFound):
+			slog.Debug("Change password: user not found", "email", params.Email)
 			return &usersapi.ChangePasswordNotFound{Error: "user not found"}, nil
 		case errors.Is(err, usermanager.ErrInvalidCredentials):
+			slog.Warn("Change password: old password incorrect", "email", params.Email)
 			return &usersapi.ChangePasswordConflict{Error: "old password is incorrect"}, nil
 		default:
+			slog.Error("Change password failed", "email", params.Email, "err", err)
 			return &usersapi.ChangePasswordBadRequest{Error: "failed to change password"}, nil
 		}
 	}
+	slog.Info("Password changed", "email", params.Email)
 
 	return &usersapi.ChangePasswordResponse{Success: true}, nil
 }

@@ -129,4 +129,3 @@ func TestAuthMiddleware_MissingToken(t *testing.T) {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 }
-

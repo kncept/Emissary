@@ -299,6 +299,8 @@ run() {
 	fi
 	export METADATA="${METADATA:-memory}"
 	export PORT="${PORT:-8080}"
+	# Local runs are verbose by default; deployment sets ERROR explicitly.
+	export LOG_LEVEL="${LOG_LEVEL:-DEBUG}"
 
 	echo "Starting Emissary frontend..."
 	echo "  Username: $USERNAME"
@@ -317,6 +319,7 @@ run() {
 	fi
 	echo "  Metadata Type: $METADATA"
 	echo "  Port: $PORT"
+	echo "  Log Level: $LOG_LEVEL"
 	echo ""
 
 	# Run the frontend binary, passing through any additional arguments

@@ -489,6 +489,8 @@ async function emailClientStack(
       // Configuration consumed by mailer/config (and the current frontend).
       USERNAME: authUsername,
       DOMAIN: emissaryDomain,
+      // Deployments are quiet by default: only real errors are logged.
+      LOG_LEVEL: env.LOG_LEVEL || 'ERROR',
       // Only set when provided: with STORAGE=s3 the app auto-selects the
       // s3 user manager when USER_MANAGER is unset.
       ...(env.USER_MANAGER ? { USER_MANAGER: env.USER_MANAGER } : {}),
@@ -582,6 +584,7 @@ async function emailClientStack(
       // Same environment variables as the frontend/api lambda
       USERNAME: authUsername,
       DOMAIN: emissaryDomain,
+      LOG_LEVEL: env.LOG_LEVEL || 'ERROR',
       // Only set when provided: with STORAGE=s3 the app auto-selects the
       // s3 user manager when USER_MANAGER is unset.
       ...(env.USER_MANAGER ? { USER_MANAGER: env.USER_MANAGER } : {}),

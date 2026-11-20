@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -165,12 +166,18 @@ func (a *Authenticator) Login(ctx context.Context, username, password string) (*
 	user, err := a.users.Authenticate(ctx, username, password)
 	if err != nil {
 		if errors.Is(err, usermanager.ErrUserDisabled) {
+			slog.Warn("Login rejected: user is disabled", "username", username)
 			return nil, err
 		}
 		return nil, ErrInvalidCredentials
 	}
 
-	return a.newSession(ctx, user)
+	result, err := a.newSession(ctx, user)
+	if err != nil {
+		return nil, err
+	}
+	slog.Debug("Login succeeded", "username", username)
+	return result, nil
 }
 
 // Refresh validates the refresh token and issues new access and refresh tokens.
@@ -219,7 +226,12 @@ func (a *Authenticator) Refresh(ctx context.Context, refreshToken string) (*Logi
 	// the issue number is what advances with every refresh.
 	sess.Issue = newIssue
 
-	return a.issueTokenPair(ctx, user, sess)
+	result, err := a.issueTokenPair(ctx, user, sess)
+	if err != nil {
+		return nil, err
+	}
+	slog.Debug("Refresh token issued", "username", user.Email)
+	return result, nil
 }
 
 // Logout revokes the session named in the access token's sid claim. Since the
@@ -230,7 +242,11 @@ func (a *Authenticator) Logout(ctx context.Context, sid string) error {
 	if sid == "" {
 		return ErrInvalidToken
 	}
-	return a.sessionStore.Delete(ctx, sid)
+	if err := a.sessionStore.Delete(ctx, sid); err != nil {
+		return err
+	}
+	slog.Debug("Logout revoked session")
+	return nil
 }
 
 // newSession starts a session for a newly authenticated user and issues its
@@ -253,6 +269,7 @@ func (a *Authenticator) newSession(ctx context.Context, user *usermanager.User) 
 		ExpiresAt: now.Add(refreshTokenTTL),
 	}
 	if err := a.sessionStore.Create(ctx, sess); err != nil {
+		slog.Error("Failed to create login session", "username", user.Email, "err", err)
 		return nil, err
 	}
 
@@ -296,6 +313,7 @@ func (a *Authenticator) issueTokenPair(ctx context.Context, user *usermanager.Us
 		Issuer:                 a.issuer,
 	})
 	if err != nil {
+		slog.Error("Failed to sign access token", "username", user.Email, "err", err)
 		return nil, err
 	}
 
@@ -310,6 +328,7 @@ func (a *Authenticator) issueTokenPair(ctx context.Context, user *usermanager.Us
 		Issuer:    a.issuer,
 	})
 	if err != nil {
+		slog.Error("Failed to sign refresh token", "username", user.Email, "err", err)
 		return nil, err
 	}
 

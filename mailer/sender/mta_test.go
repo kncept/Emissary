@@ -7,7 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"strings"
 	"testing"
@@ -423,9 +423,9 @@ func TestMtaSender_SendBounceUsesNullEnvelopeSender(t *testing.T) {
 func captureLog(t *testing.T, fn func()) string {
 	t.Helper()
 	var buf bytes.Buffer
-	original := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(original)
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(previous)
 	fn()
 	return buf.String()
 }

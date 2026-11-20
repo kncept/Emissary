@@ -3,7 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -84,7 +84,7 @@ func newSupportHandler(ctx context.Context, cfg HandlerConfig, emailStore storag
 			Region:        cfg.ReceiverRegion,
 		})
 		if err != nil {
-			log.Printf("support: create receiver config store: %v", err)
+			slog.Error("Support: failed to create receiver config store", "err", err)
 		} else {
 			h.configStore = store
 		}
@@ -99,7 +99,7 @@ func newSupportHandler(ctx context.Context, cfg HandlerConfig, emailStore storag
 	if h.configStore != nil {
 		stored, err := receiver.LoadMailIdentityConfig(ctx, h.configStore)
 		if err != nil {
-			log.Printf("support: load receiver rules on create: %v", err)
+			slog.Error("Support: failed to load receiver rules on create", "err", err)
 		} else {
 			config = stored
 		}
@@ -155,7 +155,7 @@ func supportErrorHandler(_ context.Context, w http.ResponseWriter, r *http.Reque
 	case code == http.StatusUnsupportedMediaType:
 		writeError(w, code, "unsupported media type")
 	case code >= 500:
-		log.Printf("support API %s %s: %v", r.Method, r.URL.Path, err)
+		slog.Error("Support API request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 		writeError(w, code, "internal server error")
 	default:
 		writeError(w, code, "request failed")
@@ -177,6 +177,7 @@ func (h *supportHandler) ListConfigurations(ctx context.Context) (supportapi.Lis
 	}
 
 	sections := h.configurationSummaries()
+	slog.Debug("Support: listed configuration sections", "sections", len(sections))
 	response := &supportapi.ConfigurationsResponse{
 		Configurations: make([]supportapi.ConfigurationSummary, 0, len(sections)),
 	}
@@ -200,6 +201,7 @@ func (h *supportHandler) GetConfiguration(ctx context.Context, params supportapi
 	if !ok {
 		return &supportapi.GetConfigurationNotFound{Error: "configuration section not found"}, nil
 	}
+	slog.Debug("Support: read configuration section", "section", name)
 	return section, nil
 }
 
@@ -215,9 +217,10 @@ func (h *supportHandler) ListBucketRoot(ctx context.Context) (supportapi.ListBuc
 
 	objects, prefixes, err := store.ListRoot(ctx)
 	if err != nil {
-		log.Printf("support: list bucket root: %v", err)
+		slog.Error("Support: failed to list bucket root", "bucket", store.BucketName(), "err", err)
 		return &supportapi.ListBucketRootBadGateway{Error: "failed to list bucket root"}, nil
 	}
+	slog.Debug("Support: listed bucket root", "bucket", store.BucketName(), "objects", len(objects), "prefixes", len(prefixes))
 
 	response := &supportapi.BucketRootResponse{
 		Bucket:   store.BucketName(),
@@ -255,7 +258,7 @@ func (h *supportHandler) ProcessEmail(ctx context.Context, req *supportapi.Proce
 
 	exists, err := store.ObjectExists(ctx, id)
 	if err != nil {
-		log.Printf("support: check staging object %q: %v", id, err)
+		slog.Error("Support: failed to check staging object", "key", id, "err", err)
 		return &supportapi.ProcessEmailBadGateway{Error: "failed to process email"}, nil
 	}
 	if !exists {
@@ -274,14 +277,15 @@ func (h *supportHandler) ProcessEmail(ctx context.Context, req *supportapi.Proce
 		IdentityConfig: h.receiverConfig().Clone(),
 	})
 	if err != nil {
-		log.Printf("support: create receiver: %v", err)
+		slog.Error("Support: failed to create receiver", "err", err)
 		return &supportapi.ProcessEmailBadGateway{Error: "failed to process email"}, nil
 	}
 
 	if err := rcvr.ProcessMessage(ctx, id); err != nil {
-		log.Printf("support: process staging object %q: %v", id, err)
+		slog.Error("Support: failed to process staging object", "key", id, "err", err)
 		return &supportapi.ProcessEmailBadGateway{Error: "failed to process email"}, nil
 	}
+	slog.Info("Support: processed staging object", "key", id)
 
 	return &supportapi.ProcessEmailResponse{
 		Success: true,
@@ -415,7 +419,7 @@ func (h *supportHandler) configurationSettings(name string) map[string]string {
 		for identity, rules := range config {
 			encoded, err := json.Marshal(rules.Rules)
 			if err != nil {
-				log.Printf("support: encode receiver rules for %q: %v", identity, err)
+				slog.Warn("Support: failed to encode receiver rules", "identity", identity, "err", err)
 				continue
 			}
 			settings["rules."+identity] = string(encoded)

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -46,7 +46,7 @@ func (h *supportHandler) ListReceiverIdentities(ctx context.Context) (supportapi
 
 	lister, err := h.identityLister(ctx)
 	if err != nil {
-		log.Printf("support: configure SES client: %v", err)
+		slog.Error("Support: failed to configure SES client", "err", err)
 		return &supportapi.ListReceiverIdentitiesBadGateway{Error: "failed to list SES identities"}, nil
 	}
 
@@ -55,11 +55,12 @@ func (h *supportHandler) ListReceiverIdentities(ctx context.Context) (supportapi
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			log.Printf("support: list SES identities: %v", err)
+			slog.Error("Support: failed to list SES identities", "err", err)
 			return &supportapi.ListReceiverIdentitiesBadGateway{Error: "failed to list SES identities"}, nil
 		}
 		identities = append(identities, page.Identities...)
 	}
+	slog.Debug("Support: listed SES identities", "count", len(identities))
 	sort.Strings(identities)
 
 	config := h.receiverConfig()
@@ -99,9 +100,10 @@ func (h *supportHandler) ListReceiverRules(ctx context.Context) (supportapi.List
 
 	config, err := h.loadReceiverConfig(ctx)
 	if err != nil {
-		log.Printf("support: load receiver rules: %v", err)
+		slog.Error("Support: failed to load receiver rules", "err", err)
 		return &supportapi.ListReceiverRulesInternalServerError{Error: "failed to load receiver rules"}, nil
 	}
+	slog.Debug("Support: listed receiver rules", "identities", len(config))
 	return receiverRulesResponse(config), nil
 }
 
@@ -142,7 +144,7 @@ func (h *supportHandler) SaveReceiverRules(ctx context.Context, req *supportapi.
 	// save never drops rules written by another request or another process.
 	current, err := h.loadReceiverConfig(ctx)
 	if err != nil {
-		log.Printf("support: load receiver rules for save: %v", err)
+		slog.Error("Support: failed to load receiver rules for save", "err", err)
 		return &supportapi.SaveReceiverRulesInternalServerError{Error: "failed to load receiver rules"}, nil
 	}
 	updated := current.Clone()
@@ -157,24 +159,25 @@ func (h *supportHandler) SaveReceiverRules(ctx context.Context, req *supportapi.
 	}
 
 	if h.configStore != nil {
-		log.Printf("support: persisting %d receiver rule entries via config store type %q", len(entries), h.cfg.ReceiverConfigType)
+		slog.Info("Support: persisting receiver rules", "entries", len(entries), "store", h.cfg.ReceiverConfigType)
 		for _, entry := range entries {
 			if err := h.configStore.Put(ctx, entry.domain, entry.rules); err != nil {
-				log.Printf("support: save receiver rules for %q: %v", entry.domain, err)
+				slog.Error("Support: failed to save receiver rules", "identity", entry.domain, "err", err)
 				return &supportapi.SaveReceiverRulesInternalServerError{Error: "failed to save receiver rules"}, nil
 			}
 		}
 		saved, err := receiver.LoadMailIdentityConfig(ctx, h.configStore)
 		if err != nil {
-			log.Printf("support: reload receiver rules: %v", err)
+			slog.Error("Support: failed to reload receiver rules after save", "err", err)
 			return &supportapi.SaveReceiverRulesInternalServerError{Error: "failed to save receiver rules"}, nil
 		}
 		updated = saved
 	} else {
-		log.Printf("support: receiver rules held in memory only; no config store is active")
+		slog.Warn("Support: receiver rules held in memory only; no config store is active")
 	}
 
 	h.publishReceiverConfig(updated)
+	slog.Info("Support: receiver rules saved", "identities", len(updated))
 	return receiverRulesResponse(updated), nil
 }
 
@@ -196,7 +199,7 @@ func (h *supportHandler) DeleteReceiverRules(ctx context.Context, params support
 
 	config, err := h.loadReceiverConfig(ctx)
 	if err != nil {
-		log.Printf("support: load receiver rules for delete: %v", err)
+		slog.Error("Support: failed to load receiver rules for delete", "err", err)
 		return &supportapi.DeleteReceiverRulesInternalServerError{Error: "failed to load receiver rules"}, nil
 	}
 	if !config.Has(identity) {
@@ -214,18 +217,19 @@ func (h *supportHandler) DeleteReceiverRules(ctx context.Context, params support
 			if errors.Is(err, receiver.ErrFallbackIdentity) {
 				return &supportapi.DeleteReceiverRulesBadRequest{Error: "the fallback receiving identity cannot be removed"}, nil
 			}
-			log.Printf("support: delete receiver rules for %q: %v", identity, err)
+			slog.Error("Support: failed to delete receiver rules", "identity", identity, "err", err)
 			return &supportapi.DeleteReceiverRulesInternalServerError{Error: "failed to delete receiver rules"}, nil
 		}
 		saved, err := receiver.LoadMailIdentityConfig(ctx, h.configStore)
 		if err != nil {
-			log.Printf("support: reload receiver rules after delete: %v", err)
+			slog.Error("Support: failed to reload receiver rules after delete", "err", err)
 			return &supportapi.DeleteReceiverRulesInternalServerError{Error: "failed to delete receiver rules"}, nil
 		}
 		updated = saved
 	}
 
 	h.publishReceiverConfig(updated)
+	slog.Info("Support: receiver rules deleted", "identity", identity)
 	return receiverRulesResponse(updated), nil
 }
 
