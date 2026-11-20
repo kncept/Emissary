@@ -358,6 +358,11 @@ export const getDeleteUserUrl = (email: string,) => {
 /**
  * Deletes the user with the given email address. This action is
  * irreversible.
+ *
+ * Users cannot delete their own account (the path parameter matching
+ * the authenticated user's email, case-insensitively), even with the
+ * `EmissaryUserManagement` permission. Such requests return
+ * `403 Forbidden`.
  * @summary Delete a user
  */
 export const deleteUser = async (email: string, options?: RequestInit): Promise<deleteUserResponse> => {

@@ -6,6 +6,7 @@ import type {
 } from './generated/schemas/jmap';
 import { htmlToText } from '../html.ts';
 import type { SendEmailRequest } from '../types.ts';
+import { authenticatedFetch } from './auth-fetch.ts';
 
 const SESSION_URL = '/.well-known/jmap';
 export const MASQUERADE_AS_KEY = 'masquerade_as';
@@ -49,35 +50,8 @@ function parseJmapResponse(response: JmapResponse): Map<string, JmapMethodRespon
   return result;
 }
 
-function getToken(): string | null {
-  return window.localStorage.getItem('emissary_token');
-}
-
-async function authenticatedFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  const token = getToken();
-  const headers = new Headers(options.headers);
-  if (!headers.has('Content-Type') && options.body != null) {
-    headers.set('Content-Type', 'application/json');
-  }
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`);
-  }
-
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
-
-  if (response.status === 401) {
-    window.localStorage.removeItem('emissary_token');
-    window.localStorage.removeItem('emissary_refresh_token');
-    sessionPromise = null;
-    window.location.href = '/login';
-    throw new Error('Unauthorized');
-  }
-
-  return response;
-}
+// authenticatedFetch (shared with the REST client) refreshes the access token
+// on a 401 and retries before giving up and clearing the session.
 
 async function fetchJmapSession(): Promise<Session> {
   const response = await authenticatedFetch(SESSION_URL);

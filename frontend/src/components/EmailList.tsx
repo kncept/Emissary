@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { formatDistanceToNow, parseISO } from 'date-fns';
-import { getEmails, deleteEmail } from '../api.ts';
+import { getEmails, deleteEmail, markRead, markFlagged } from '../api.ts';
 import type { Email } from '../types.ts';
 import ConfirmDialog from './ConfirmDialog.tsx';
 
@@ -9,6 +9,7 @@ export default function EmailList() {
   const [emails, setEmails] = useState<Email[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -24,7 +25,7 @@ export default function EmailList() {
       // through accountId; there is no separate user filter.
       const data = await getEmails();
       setEmails(data);
-    } catch (err) {
+    } catch {
       setError('Failed to load emails');
     } finally {
       setLoading(false);
@@ -39,10 +40,38 @@ export default function EmailList() {
       setEmails((prev) => prev.filter((email) => email.id !== deleteId));
       setDeleteId(null);
     } catch {
-      setError('Failed to delete email');
+      setActionError('Failed to delete email');
       setDeleteId(null);
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const updateEmail = (id: string, changes: Partial<Email>) => {
+    setEmails((prev) => prev.map((email) => (email.id === id ? { ...email, ...changes } : email)));
+  };
+
+  const handleToggleRead = async (email: Email) => {
+    const read = !email.read;
+    updateEmail(email.id, { read });
+    setActionError('');
+    try {
+      await markRead(email.id, read);
+    } catch {
+      updateEmail(email.id, { read: email.read });
+      setActionError('Failed to update read status');
+    }
+  };
+
+  const handleToggleFlagged = async (email: Email) => {
+    const flagged = !email.flagged;
+    updateEmail(email.id, { flagged });
+    setActionError('');
+    try {
+      await markFlagged(email.id, flagged);
+    } catch {
+      updateEmail(email.id, { flagged: email.flagged });
+      setActionError('Failed to update flag');
     }
   };
 
@@ -84,6 +113,9 @@ export default function EmailList() {
           Compose
         </Link>
       </div>
+      {actionError && (
+        <div className="error-message" role="alert">{actionError}</div>
+      )}
       {emails.length === 0 ? (
         <div className="empty-state">
           <p>No emails yet</p>
@@ -120,7 +152,7 @@ export default function EmailList() {
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    // Toggle read status via API would go here
+                    void handleToggleRead(email);
                   }}
                   aria-label={email.read ? 'Mark as unread' : 'Mark as read'}
                 >
@@ -131,6 +163,7 @@ export default function EmailList() {
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
+                    void handleToggleFlagged(email);
                   }}
                   aria-label={email.flagged ? 'Remove flag' : 'Flag'}
                 >

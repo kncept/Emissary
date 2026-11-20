@@ -214,6 +214,9 @@ func (h *usersHandler) DeleteUser(ctx context.Context, params usersapi.DeleteUse
 	if claims == nil || !claims.EmissaryUserManagement {
 		return &usersapi.DeleteUserForbidden{Error: "insufficient permissions"}, nil
 	}
+	if strings.EqualFold(claims.Subject, params.Email) {
+		return &usersapi.DeleteUserForbidden{Error: "cannot delete your own account"}, nil
+	}
 
 	if err := h.manager.Delete(ctx, params.Email); err != nil {
 		log.Printf("delete user: %v", err)

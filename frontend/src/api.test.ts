@@ -467,4 +467,150 @@ describe('auth api', () => {
       expect(parseAddressList('')).toEqual([]);
     });
   });
+
+  describe('token refresh on 401', () => {
+    const refreshedTokens = {
+      accessToken: 'new-token',
+      refreshToken: 'refresh-2',
+      tokenType: 'Bearer',
+      expiresAt: '2099-01-01T00:00:00Z',
+    };
+
+    const jmapSession = {
+      username: 'test@example.com',
+      apiUrl: '/api/',
+      primaryAccounts: { 'urn:ietf:params:jmap:mail': 'test@example.com' },
+    };
+
+    const authHeadersFor = (fetchMock: ReturnType<typeof vi.fn>, url: string) =>
+      fetchMock.mock.calls
+        .filter((call) => String(call[0]) === url)
+        .map((call) => {
+          const options = call[1];
+          return options ? (options.headers as Headers).get('Authorization') : null;
+        });
+
+    it('refreshes and retries a REST request with the new access token', async () => {
+      const { getRawEmail } = await importApi();
+      window.localStorage.setItem(TOKEN_KEY, 'old-token');
+      window.localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-1');
+      let rawAttempt = 0;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/api/auth/refresh') return createMockResponse(refreshedTokens);
+        if (url.startsWith('/api/email/raw')) {
+          rawAttempt += 1;
+          return rawAttempt === 1
+            ? createMockResponse({ error: 'unauthorized' }, { status: 401, ok: false })
+            : createMockResponse('From: alice@example.com\r\n\r\nBody');
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await getRawEmail('e1.eml');
+
+      expect(result).toContain('Body');
+      expect(fetchMock.mock.calls.filter((call) => String(call[0]) === '/api/auth/refresh')).toHaveLength(1);
+      expect(authHeadersFor(fetchMock, '/api/email/raw?id=e1.eml')).toEqual([
+        'Bearer old-token',
+        'Bearer new-token',
+      ]);
+      expect(window.localStorage.getItem(TOKEN_KEY)).toBe('new-token');
+      expect(window.localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('refresh-2');
+    });
+
+    it('refreshes and retries a JMAP session request with the new access token', async () => {
+      const { getEmails } = await importApi();
+      window.localStorage.setItem(TOKEN_KEY, 'old-token');
+      window.localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-1');
+      let sessionAttempt = 0;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/api/auth/refresh') return createMockResponse(refreshedTokens);
+        if (url === '/.well-known/jmap') {
+          sessionAttempt += 1;
+          return sessionAttempt === 1
+            ? createMockResponse({ error: 'unauthorized' }, { status: 401, ok: false })
+            : createMockResponse(jmapSession);
+        }
+        if (url === '/api/') {
+          return createMockResponse({
+            methodResponses: [['Email/get', { list: [] }, 'get1']],
+            sessionState: '1',
+          });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(getEmails()).resolves.toEqual([]);
+
+      expect(fetchMock.mock.calls.filter((call) => String(call[0]) === '/api/auth/refresh')).toHaveLength(1);
+      expect(authHeadersFor(fetchMock, '/.well-known/jmap')).toEqual([
+        'Bearer old-token',
+        'Bearer new-token',
+      ]);
+      expect(authHeadersFor(fetchMock, '/api/')).toEqual(['Bearer new-token']);
+    });
+
+    it('shares one refresh across concurrent JMAP requests', async () => {
+      const { getEmails } = await importApi();
+      window.localStorage.setItem(TOKEN_KEY, 'old-token');
+      window.localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-1');
+      let postAttempt = 0;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/api/auth/refresh') return createMockResponse(refreshedTokens);
+        if (url === '/.well-known/jmap') return createMockResponse(jmapSession);
+        if (url === '/api/') {
+          postAttempt += 1;
+          return postAttempt <= 2
+            ? createMockResponse({ error: 'unauthorized' }, { status: 401, ok: false })
+            : createMockResponse({
+              methodResponses: [['Email/get', { list: [] }, 'get1']],
+              sessionState: '1',
+            });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await Promise.all([getEmails(), getEmails()]);
+
+      expect(fetchMock.mock.calls.filter((call) => String(call[0]) === '/api/auth/refresh')).toHaveLength(1);
+      expect(authHeadersFor(fetchMock, '/api/')).toEqual([
+        'Bearer old-token',
+        'Bearer old-token',
+        'Bearer new-token',
+        'Bearer new-token',
+      ]);
+    });
+
+    it('clears the tokens when the refresh itself fails', async () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const { getEmails } = await importApi();
+        window.localStorage.setItem(TOKEN_KEY, 'old-token');
+        window.localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-1');
+        vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url === '/.well-known/jmap') {
+            return createMockResponse({ error: 'unauthorized' }, { status: 401, ok: false });
+          }
+          if (url === '/api/auth/refresh') {
+            return createMockResponse({ error: 'invalid refresh token' }, { status: 401, ok: false });
+          }
+          throw new Error(`Unexpected fetch: ${url}`);
+        }));
+
+        await expect(getEmails()).rejects.toThrow('Unauthorized');
+
+        expect(window.localStorage.getItem(TOKEN_KEY)).toBeNull();
+        expect(window.localStorage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
+      } finally {
+        consoleSpy.mockRestore();
+      }
+    });
+  });
 });

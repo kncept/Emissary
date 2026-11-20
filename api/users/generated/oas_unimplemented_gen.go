@@ -48,6 +48,10 @@ func (UnimplementedHandler) CreateUser(ctx context.Context, req *CreateUserReque
 //
 // Deletes the user with the given email address. This action is irreversible.
 //
+// Users cannot delete their own account (the path parameter matching the authenticated user's email,
+// case-insensitively), even with the `EmissaryUserManagement` permission. Such requests return
+// `403 Forbidden`.
+//
 // DELETE /api/user/{email}
 func (UnimplementedHandler) DeleteUser(ctx context.Context, params DeleteUserParams) (r DeleteUserRes, _ error) {
 	return r, ht.ErrNotImplemented

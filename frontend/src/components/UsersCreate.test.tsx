@@ -44,7 +44,7 @@ describe('create user with no password', () => {
   });
 
   const openCreateForm = async () => {
-    act(() => root!.render(<Users />));
+    act(() => root!.render(<Users currentUser="admin@example.com" />));
     await act(async () => {});
     click(Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Create User')!);
   };

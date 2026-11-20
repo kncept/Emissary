@@ -117,7 +117,7 @@ describe('delete confirmations', () => {
   });
 
   it('confirms user deletions in an in-app modal', async () => {
-    mount(<Users />);
+    mount(<Users currentUser="admin@example.com" />);
     await act(async () => {});
 
     const deleteButton = Array.from(container.querySelectorAll('button')).find(
@@ -134,5 +134,20 @@ describe('delete confirmations', () => {
     await act(async () => {});
     expect(deleteUser).toHaveBeenCalledWith('alice@example.com');
     expect(getUsers).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not offer to delete the signed-in user', async () => {
+    mount(<Users currentUser="ALICE@example.com" />);
+    await act(async () => {});
+
+    const deleteButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Delete',
+    )!;
+    expect(deleteButton.disabled).toBe(true);
+    expect(deleteButton.getAttribute('title')).toBe('You cannot delete your own account');
+
+    click(deleteButton);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(deleteUser).not.toHaveBeenCalled();
   });
 });

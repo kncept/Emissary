@@ -54,7 +54,7 @@ describe('masquerade buttons', () => {
   });
 
   it('offers a masquerade action for each listed user', async () => {
-    mount(<Users />);
+    mount(<Users currentUser="admin@example.com" />);
     await act(async () => {});
 
     const button = Array.from(container.querySelectorAll('button')).find(

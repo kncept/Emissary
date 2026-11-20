@@ -1,6 +1,12 @@
 import type { AuthState, LoginResponse } from './types.ts';
-import { login as generatedLogin, refresh as generatedRefresh } from './api/generated/auth.ts';
+import { login as generatedLogin } from './api/generated/auth.ts';
 import type { TokenResponse, Error as AuthError } from './api/generated/schemas/auth/index.ts';
+import {
+  authenticatedFetch,
+  clearTokens as clearToken,
+  getToken,
+  setTokens,
+} from './api/auth-fetch.ts';
 import type {
   BucketRootResponse,
   ConfigurationDetail,
@@ -21,87 +27,10 @@ import {
   sendEmail as jmapSendEmail,
 } from './api/jmap-client.ts';
 
+// Preserve the existing public helper for callers that clear the session.
+export { clearToken };
+
 const API_BASE = '/api';
-const TOKEN_STORAGE_KEY = 'emissary_token';
-const REFRESH_TOKEN_KEY = 'emissary_refresh_token';
-
-function getToken(): string | null {
-  return window.localStorage.getItem(TOKEN_STORAGE_KEY);
-}
-
-function getRefreshToken(): string | null {
-  return window.localStorage.getItem(REFRESH_TOKEN_KEY);
-}
-
-function setTokens(accessToken: string, refreshToken: string): void {
-  window.localStorage.setItem(TOKEN_STORAGE_KEY, accessToken);
-  window.localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
-}
-
-export function clearToken(): void {
-  window.localStorage.removeItem(TOKEN_STORAGE_KEY);
-  window.localStorage.removeItem(REFRESH_TOKEN_KEY);
-}
-
-async function refreshAccessToken(): Promise<boolean> {
-  const refreshToken = getRefreshToken();
-  if (!refreshToken) {
-    return false;
-  }
-
-  try {
-    const response = await generatedRefresh({ refreshToken });
-    if (response.status === 200 && response.data) {
-      const tokens = response.data as TokenResponse;
-      setTokens(tokens.accessToken, tokens.refreshToken);
-      return true;
-    }
-  } catch {
-    // Refresh failed
-  }
-  return false;
-}
-
-export async function authenticatedFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  const token = getToken();
-  const headers = new Headers(options.headers);
-  if (!headers.has('Content-Type') && options.body !== undefined) {
-    headers.set('Content-Type', 'application/json');
-  }
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`);
-  }
-
-  let response = await fetch(url, {
-    ...options,
-    headers,
-    cache: 'no-store',
-  });
-
-  if (response.status === 401) {
-    // Try to refresh the token
-    const refreshed = await refreshAccessToken();
-    if (refreshed) {
-      // Retry with new token
-      const newToken = getToken();
-      headers.set('Authorization', `Bearer ${newToken}`);
-      response = await fetch(url, {
-        ...options,
-        headers,
-        cache: 'no-store',
-      });
-    }
-
-    if (response.status === 401) {
-      // Still unauthorized, clear tokens and redirect
-      clearToken();
-      window.location.href = '/login';
-      throw new Error('Unauthorized');
-    }
-  }
-
-  return response;
-}
 
 export async function getUsers(cursor?: string, pageSize = 20) {
   const params = new URLSearchParams();

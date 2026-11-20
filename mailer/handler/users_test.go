@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,5 +160,107 @@ func TestNoPasswordUserOverHTTP(t *testing.T) {
 		if status != http.StatusUnauthorized {
 			t.Errorf("login with password %q status = %d, want 401", password, status)
 		}
+	}
+}
+
+func TestDeleteUserRejectsSelfDeletion(t *testing.T) {
+	manager, err := usermanager.NewFile(usermanager.Config{
+		AdminUsername: "admin",
+		AdminPassword: "admin-pass",
+		FilesystemDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewFile() error = %v", err)
+	}
+	h := NewUsersHandler(manager, nil)
+	ctx := context.WithValue(context.Background(), claimsContextKey{}, &auth.Claims{
+		Subject:                "admin@example.com",
+		EmissaryUserManagement: true,
+	})
+	for _, email := range []string{"admin@example.com", "other@example.com"} {
+		if _, err := h.CreateUser(ctx, &usersapi.CreateUserRequest{Email: email}); err != nil {
+			t.Fatalf("CreateUser(%q) error = %v", email, err)
+		}
+	}
+
+	for _, email := range []string{"admin@example.com", "ADMIN@EXAMPLE.COM"} {
+		res, err := h.DeleteUser(ctx, usersapi.DeleteUserParams{Email: email})
+		if err != nil {
+			t.Fatalf("DeleteUser(%q) error = %v", email, err)
+		}
+		if _, ok := res.(*usersapi.DeleteUserForbidden); !ok {
+			t.Errorf("DeleteUser(%q) response = %T, want DeleteUserForbidden", email, res)
+		}
+		if _, err := manager.Get(ctx, "admin@example.com"); err != nil {
+			t.Errorf("self-deletion removed the account: Get() error = %v", err)
+		}
+	}
+
+	res, err := h.DeleteUser(ctx, usersapi.DeleteUserParams{Email: "other@example.com"})
+	if err != nil {
+		t.Fatalf("DeleteUser(other) error = %v", err)
+	}
+	if _, ok := res.(*usersapi.DeleteUserResponse); !ok {
+		t.Fatalf("DeleteUser(other) response = %T, want DeleteUserResponse", res)
+	}
+	if _, err := manager.Get(ctx, "other@example.com"); !errors.Is(err, usermanager.ErrUserNotFound) {
+		t.Errorf("Get(other) error = %v, want ErrUserNotFound", err)
+	}
+}
+
+func TestDeleteSelfOverHTTP(t *testing.T) {
+	manager, err := usermanager.NewFile(usermanager.Config{
+		AdminUsername: "admin",
+		AdminPassword: "admin-pass",
+		FilesystemDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewFile() error = %v", err)
+	}
+	h, err := New(HandlerConfig{
+		AuthUser:     "admin",
+		AuthPass:     "admin-pass",
+		JWTSecret:    "secret",
+		JWTSecretTTL: time.Hour,
+		MetadataType: "memory",
+		Storage:      storage.NewMemoryStorage(),
+		UserManager:  manager,
+		UserDomain:   "example.com",
+		Sender:       &captureSender{},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	status, adminToken, _ := login(t, h, "admin", "admin-pass")
+	if status != http.StatusOK {
+		t.Fatalf("admin login status = %d, want 200", status)
+	}
+	for _, body := range []string{
+		`{"email":"manager@example.com","password":"manager-pass","userManager":true}`,
+		`{"email":"other@example.com"}`,
+	} {
+		w := request(t, h, http.MethodPost, "/api/user/", body, adminToken)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create user status = %d, body = %s, want 201", w.Code, w.Body.String())
+		}
+	}
+
+	status, token, _ := login(t, h, "manager@example.com", "manager-pass")
+	if status != http.StatusOK {
+		t.Fatalf("manager login status = %d, want 200", status)
+	}
+
+	w := request(t, h, http.MethodDelete, "/api/user/manager@example.com", "", token)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("self-delete status = %d, body = %s, want 403", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "cannot delete your own account") {
+		t.Errorf("self-delete body = %s, want self-deletion message", w.Body.String())
+	}
+
+	w = request(t, h, http.MethodDelete, "/api/user/other@example.com", "", token)
+	if w.Code != http.StatusOK {
+		t.Errorf("delete other user status = %d, body = %s, want 200", w.Code, w.Body.String())
 	}
 }

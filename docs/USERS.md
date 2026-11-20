@@ -71,6 +71,11 @@ The management operations deal with `*EmissaryUser` values:
 | `Delete` | Delete a user by email address. |
 | `ChangePassword` | Change a user's password. Requires the old password for verification. |
 
+Users cannot delete their own account: the API rejects it with
+`403 Forbidden`, even for administrators. The login name is compared
+case-insensitively with the authenticated user's email (the JWT subject),
+and the admin web UI disables **Delete** on the signed-in user's row.
+
 In the admin web UI, **Delete** opens an in-app confirmation modal: the
 account is removed only after **Delete** is clicked, and clicking the
 backdrop cancels. No browser dialog is used (see

@@ -86,7 +86,7 @@ not generated from `users.yaml`: it is served directly by the configured
 | `POST` | `/api/user/` | Bearer\* | Create a new user. |
 | `GET` | `/api/user/{email}` | Bearer\* | Get a user by email. |
 | `PATCH` | `/api/user/{email}` | Bearer\* | Update a user. |
-| `DELETE` | `/api/user/{email}` | Bearer\* | Delete a user. |
+| `DELETE` | `/api/user/{email}` | Bearer\* | Delete another user (not yourself). |
 | `POST` | `/api/user/{email}/password` | Bearer† | Change a user's password. |
 | `GET` | `/api/user/autocomplete` | Bearer | Search user IDs (email addresses) for admin masquerade. |
 | `GET` | `/api/support/configurations` | Bearer‡ | List configuration sections and implementations. |
@@ -104,7 +104,7 @@ not generated from `users.yaml`: it is served directly by the configured
 | `GET` | `/api/email/raw` | Bearer | Get the original RFC 5322 message for one email id. |
 | `GET` | `/eventsource/` | Bearer | EventSource push connection. |
 
-\* Requires `EmissaryUserManagement` JWT claim and Emissary-mastered user manager (the `ddb` backend).
+\* Requires `EmissaryUserManagement` JWT claim and Emissary-mastered user manager (the `ddb` backend). A user cannot delete their own account (`403 Forbidden`).
 
 † Any authenticated user can change their own password. Administrators with `EmissaryUserManagement` can change any user's password. Requires Emissary-mastered user manager (`ddb` backend).
 

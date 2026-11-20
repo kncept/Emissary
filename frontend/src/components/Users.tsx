@@ -12,7 +12,7 @@ interface User {
   rules: string[];
 }
 
-export default function Users() {
+export default function Users({ currentUser }: { currentUser?: string }) {
   const [users, setUsers] = useState<User[]>([]);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [loading, setLoading] = useState(true);
@@ -46,6 +46,9 @@ export default function Users() {
       .split(',')
       .map((r) => r.trim())
       .filter(Boolean);
+
+  const isOwnAccount = (email: string) =>
+    !!currentUser && currentUser.toLowerCase() === email.toLowerCase();
 
   const load = async (cursor?: string, append = false) => {
     try {
@@ -130,7 +133,7 @@ export default function Users() {
   };
 
   const onDelete = async () => {
-    if (!deleteTarget) return;
+    if (!deleteTarget || isOwnAccount(deleteTarget)) return;
     setBusy(true);
     setError('');
     setMessage('');
@@ -304,7 +307,14 @@ export default function Users() {
                         <MaskIcon />
                         Masquerade
                       </button>
-                      <button className="btn btn-danger" onClick={() => { setDeleteTarget(u.email); setMessage(''); setError(''); }} disabled={busy}>Delete</button>
+                      <button
+                        className="btn btn-danger"
+                        onClick={() => { setDeleteTarget(u.email); setMessage(''); setError(''); }}
+                        disabled={busy || isOwnAccount(u.email)}
+                        title={isOwnAccount(u.email) ? 'You cannot delete your own account' : undefined}
+                      >
+                        Delete
+                      </button>
                     </div>
                   </td>
                 </tr>

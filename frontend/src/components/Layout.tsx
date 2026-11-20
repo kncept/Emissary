@@ -55,13 +55,17 @@ export default function Layout({
       <header className="app-header">
         <div className="header-left">
           <h1 className="app-title">Emissary</h1>
-          <nav className="main-nav" aria-label="Main navigation">
+          <nav
+            className={`main-nav${mobileMenuOpen ? ' open' : ''}`}
+            aria-label="Main navigation"
+          >
             <ul>
               {navItems.map((item) => (
                 <li key={item.path}>
                   <Link
                     to={item.path}
                     className={location.pathname === item.path ? 'active' : ''}
+                    onClick={() => setMobileMenuOpen(false)}
                   >
                     <span className="nav-icon">{item.icon}</span>
                     <span className="nav-label">{item.label}</span>
@@ -97,6 +101,7 @@ export default function Layout({
             </button>
           )}
           <button
+            type="button"
             className="mobile-menu-btn"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
             aria-expanded={mobileMenuOpen}

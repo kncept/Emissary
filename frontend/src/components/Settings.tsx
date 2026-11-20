@@ -4,14 +4,16 @@ import type { AuthState } from '../types';
 
 interface SettingsProps {
   auth: AuthState;
+  onLogout: () => void | Promise<void>;
 }
 
 const MASQUERADE_AS_KEY = 'masquerade_as';
 
-export default function Settings({ auth }: SettingsProps) {
+export default function Settings({ auth, onLogout }: SettingsProps) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [masqueradeAs, setMasqueradeAs] = useState<string | null>(null);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
     // Reset messages when auth changes
@@ -26,6 +28,19 @@ export default function Settings({ auth }: SettingsProps) {
       setMasqueradeAs(null);
     }
   }, []);
+
+  const handleLogout = async () => {
+    setError(null);
+    setLoggingOut(true);
+    try {
+      await onLogout();
+    } catch {
+      // The app keeps the user signed in when the server logout fails, so
+      // keep this screen usable and let them try again.
+      setError('Failed to log out. Please try again.');
+      setLoggingOut(false);
+    }
+  };
 
   return (
     <div className="settings-page">
@@ -72,8 +87,12 @@ export default function Settings({ auth }: SettingsProps) {
             <span className="badge active">Active</span>
           </div>
         </div>
-        <button className="btn btn-danger" onClick={() => window.location.href = '/login'}>
-          Logout
+        <button
+          className="btn btn-danger"
+          onClick={handleLogout}
+          disabled={loggingOut}
+        >
+          {loggingOut ? 'Logging out...' : 'Logout'}
         </button>
       </section>
 

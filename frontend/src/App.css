@@ -1234,3 +1234,29 @@ input, textarea {
   font-size: 0.875rem;
   min-width: 14rem;
 }
+
+.error-boundary {
+  max-width: 32rem;
+  margin: 3rem auto;
+  padding: 2rem;
+  text-align: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.error-boundary h2 {
+  margin: 0 0 0.75rem;
+}
+
+.error-boundary p {
+  color: var(--color-text-muted);
+  margin: 0 0 1.5rem;
+}
+
+.error-boundary-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}

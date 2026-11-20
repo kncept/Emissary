@@ -439,6 +439,10 @@ func (s *Server) handleCreateUserRequest(args [0]string, argsEscaped bool, w htt
 //
 // Deletes the user with the given email address. This action is irreversible.
 //
+// Users cannot delete their own account (the path parameter matching the authenticated user's email,
+// case-insensitively), even with the `EmissaryUserManagement` permission. Such requests return
+// `403 Forbidden`.
+//
 // DELETE /api/user/{email}
 func (s *Server) handleDeleteUserRequest(args [1]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
 	statusWriter := &codeRecorder{ResponseWriter: w}

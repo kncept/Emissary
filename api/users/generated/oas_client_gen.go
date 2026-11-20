@@ -58,6 +58,10 @@ type Invoker interface {
 	//
 	// Deletes the user with the given email address. This action is irreversible.
 	//
+	// Users cannot delete their own account (the path parameter matching the authenticated user's email,
+	// case-insensitively), even with the `EmissaryUserManagement` permission. Such requests return
+	// `403 Forbidden`.
+	//
 	// DELETE /api/user/{email}
 	DeleteUser(ctx context.Context, params DeleteUserParams) (DeleteUserRes, error)
 	// GetUser invokes getUser operation.
@@ -392,6 +396,10 @@ func (c *Client) sendCreateUser(ctx context.Context, request *CreateUserRequest)
 // DeleteUser invokes deleteUser operation.
 //
 // Deletes the user with the given email address. This action is irreversible.
+//
+// Users cannot delete their own account (the path parameter matching the authenticated user's email,
+// case-insensitively), even with the `EmissaryUserManagement` permission. Such requests return
+// `403 Forbidden`.
 //
 // DELETE /api/user/{email}
 func (c *Client) DeleteUser(ctx context.Context, params DeleteUserParams) (DeleteUserRes, error) {
