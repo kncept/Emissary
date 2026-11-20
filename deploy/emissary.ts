@@ -326,12 +326,13 @@ async function emailClientStack(
     effect: iam.Effect.ALLOW,
   }))
 
-  // Allow sending mail from the verified domain identity.
+  // Allow sending mail and bounces from the verified domain identity.
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'SesSendEmail',
     actions: [
       'ses:SendEmail',
       'ses:SendRawEmail',
+      'ses:SendBounce',
     ],
     resources: [
       `arn:aws:ses:${awsRegion}:${accountId}:identity/*`,
