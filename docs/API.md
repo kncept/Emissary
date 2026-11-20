@@ -475,7 +475,7 @@ Example request to list emails:
     }, "query1"],
     ["Email/get", {
       "accountId": "user@example.com",
-      "ids": { "resultOf": "query1", "name": "Email/query", "path": "/ids/*" },
+      "#ids": { "resultOf": "query1", "name": "Email/query", "path": "/ids/*" },
       "properties": ["id", "from", "to", "subject", "preview", "receivedAt", "keywords", "mailboxIds"]
     }, "get1"]
   ]
@@ -506,6 +506,29 @@ Example response:
   "sessionState": "state123"
 }
 ```
+
+### Result references
+
+An argument name prefixed with `#` (for example `#ids`) is an RFC 8620 result
+reference, not a literal argument. Its value is an object with `resultOf`
+(the method call id of an earlier call in the batch), `name` (the expected
+response name of that call), and `path` (a JSON Pointer into that response's
+arguments). Before invoking the method, the dispatcher replaces the argument
+with the name without `#` and the value at that path, so the example above
+calls `Email/get` with an `ids` argument taken from the earlier `Email/query`
+response without an extra round trip.
+
+`path` follows RFC 6901, with one addition: while the current value is an
+array, the token `*` maps the remaining tokens over every element and flattens
+array results (`/ids/*` therefore expands the `ids` array into individual
+values).
+
+A reference fails if `resultOf` is not an earlier method call id in the same
+batch, the response name does not match `name`, or `path` does not resolve.
+The whole method call is then rejected with an `invalidResultReference`
+error. Supplying both `ids` and `#ids` is an `invalidArguments` error. Result
+references are resolved before creation references, so a `#create1` value
+inside a referenced result is still replaced with the server-assigned id.
 
 ### Creation-id references
 

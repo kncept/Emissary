@@ -193,6 +193,24 @@ func recordCreatedIDs(response Invocation, createdIDs map[string]string) {
 	}
 }
 
+func appendMethodResponse(responses *[]Invocation, byID map[string]Invocation, createdIDs map[string]string, resp Invocation) {
+	appendMethodResponses(responses, byID, createdIDs, []Invocation{resp})
+}
+
+// appendMethodResponses records the responses of a processed call in the
+// batch. The first response for a method call id is the one a later result
+// reference resolves against (RFC 8620 section 3.7); implicit responses share
+// the id but must not replace it.
+func appendMethodResponses(responses *[]Invocation, byID map[string]Invocation, createdIDs map[string]string, resps []Invocation) {
+	for _, resp := range resps {
+		if _, seen := byID[resp.ClientID]; !seen {
+			byID[resp.ClientID] = resp
+		}
+		recordCreatedIDs(resp, createdIDs)
+		*responses = append(*responses, resp)
+	}
+}
+
 // DispatchRequest processes a batch of method calls and returns the responses.
 func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID string, claims *auth.Claims, req *Request) (*Response, error) {
 	// Method handlers need the caller's identity and privileges to authorise
@@ -228,15 +246,30 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 	}
 
 	responses := make([]Invocation, 0, len(req.MethodCalls))
+	// RFC 8620 result references may only point at responses from earlier
+	// method calls. Keep the first response for each method call id; a method
+	// may emit more than one response, all sharing the same id.
+	responsesByID := make(map[string]Invocation)
 
 	for _, call := range req.MethodCalls {
+		// Resolve RFC 8620 result references ("#ids") before dispatch. This
+		// must happen before creation-id resolution so that a "#create1" value
+		// inside a referenced result is still resolved to the real id.
+		resolvedArgs, err := resolveResultReferences(call.Arguments, responsesByID)
+		if err != nil {
+			slog.Warn("JMAP: invalid result reference", "method", call.Name, "err", err)
+			appendMethodResponse(&responses, responsesByID, createdIDs, d.errorResponse(call, err))
+			continue
+		}
+		call.Arguments = resolvedArgs
+
 		// Resolve JMAP creation references (e.g. "#create1") in the call's
 		// arguments using the ids created by earlier calls in this batch (or
 		// supplied by the client in createdIds).
-		resolvedArgs, err := resolveCallCreationIDs(call.Arguments, createdIDs)
+		resolvedArgs, err = resolveCallCreationIDs(call.Arguments, createdIDs)
 		if err != nil {
 			slog.Warn("JMAP: invalid creation id reference", "method", call.Name, "err", err)
-			responses = append(responses, d.errorResponse(call, fmt.Errorf("invalidArguments: %w", err)))
+			appendMethodResponse(&responses, responsesByID, createdIDs, d.errorResponse(call, fmt.Errorf("invalidArguments: %w", err)))
 			continue
 		}
 		call.Arguments = resolvedArgs
@@ -257,7 +290,7 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 		if claims != nil && !claims.EmissaryUserManagement && accountID != claims.Subject {
 			slog.Warn("JMAP: forbidden account access", "method", call.Name, "account", accountID)
 			resp := d.errorResponse(call, fmt.Errorf("forbidden: insufficient permissions to access account %s", accountID))
-			responses = append(responses, resp)
+			appendMethodResponse(&responses, responsesByID, createdIDs, resp)
 			continue
 		}
 
@@ -268,10 +301,7 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 			// Return an error response for this method call
 			resps = []Invocation{d.errorResponse(call, err)}
 		}
-		for _, resp := range resps {
-			recordCreatedIDs(resp, createdIDs)
-			responses = append(responses, resp)
-		}
+		appendMethodResponses(&responses, responsesByID, createdIDs, resps)
 	}
 
 	// Persist only when the map actually changed, so read-only JMAP requests
@@ -458,6 +488,8 @@ func (d *Dispatcher) errorResponseFromError(methodName, clientID string, err err
 		errorType = "invalidArguments"
 	} else if strings.HasPrefix(errMsg, "cannotCalculateChanges:") {
 		errorType = "cannotCalculateChanges"
+	} else if strings.HasPrefix(errMsg, "invalidResultReference:") {
+		errorType = "invalidResultReference"
 	}
 
 	errorArgs := map[string]json.RawMessage{

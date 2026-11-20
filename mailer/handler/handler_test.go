@@ -1058,6 +1058,67 @@ func TestSendEmailWithCreationReference(t *testing.T) {
 	}
 }
 
+// TestJMAPResultReference exercises RFC 8620 result references end to end.
+// Core/echo returns its arguments unchanged, so the second call can reference
+// the ids array from the first response without a separate round trip.
+func TestJMAPResultReference(t *testing.T) {
+	h, _, _ := newHandlerForTest(t, "secret")
+	_, token, _ := login(t, h, "bob@example.com", "anything")
+	using := []string{"urn:ietf:params:jmap:core"}
+
+	resp := jmapRequest(t, h, token, using, []JmapMethodCall{
+		{"Core/echo", map[string]interface{}{"ids": []string{"id-a", "id-b"}}, "echo1"},
+		{"Core/echo", map[string]interface{}{
+			"#ids": map[string]interface{}{
+				"resultOf": "echo1",
+				"name":     "Core/echo",
+				"path":     "/ids/*",
+			},
+		}, "echo2"},
+	})
+	responses, _ := resp["methodResponses"].([]interface{})
+	if len(responses) != 2 {
+		t.Fatalf("methodResponses = %d, want 2: %v", len(responses), responses)
+	}
+	for i, raw := range responses {
+		call, _ := raw.([]interface{})
+		if len(call) < 2 || call[0] == "error" {
+			t.Fatalf("methodResponses[%d] = %v, want Core/echo", i, raw)
+		}
+	}
+	second, _ := responses[1].([]interface{})
+	args, _ := second[1].(map[string]interface{})
+	ids, _ := args["ids"].([]interface{})
+	if len(ids) != 2 || ids[0] != "id-a" || ids[1] != "id-b" {
+		t.Errorf("resolved ids = %v, want [id-a id-b]", ids)
+	}
+	if _, ok := args["#ids"]; ok {
+		t.Errorf("#ids argument was not replaced: %v", args)
+	}
+
+	// A reference that cannot be resolved fails the method call, not the
+	// whole batch.
+	resp = jmapRequest(t, h, token, using, []JmapMethodCall{
+		{"Core/echo", map[string]interface{}{"ids": []string{"id-a"}}, "echo1"},
+		{"Core/echo", map[string]interface{}{
+			"#ids": map[string]interface{}{
+				"resultOf": "echo1",
+				"name":     "Core/echo",
+				"path":     "/missing/*",
+			},
+		}, "echo2"},
+	})
+	responses, _ = resp["methodResponses"].([]interface{})
+	if len(responses) != 2 {
+		t.Fatalf("methodResponses = %d, want 2: %v", len(responses), responses)
+	}
+	call, _ := responses[1].([]interface{})
+	args, _ = call[1].(map[string]interface{})
+	if call[0] != "error" || args["type"] != "invalidResultReference" {
+		t.Errorf("second response = %v, want invalidResultReference error", responses[1])
+	}
+}
+
 func TestSendEmailWithCCAndBCC(t *testing.T) {
 	h, _, mailSender := newHandlerForTest(t, "secret")
 
