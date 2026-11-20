@@ -94,14 +94,14 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 				ref, fromDraft = &draftRef, true
 			} else if errors.Is(err, storage.ErrNotFound) {
 				var listed *mailemail.ListedEmail
-				listed, err = h.deps.Storage.GetEmail(ctx, submission.EmailID)
+				listed, err = h.deps.Storage.GetEmail(ctx, accountID, submission.EmailID)
 				if listed != nil {
 					emailMsg, ref = listed.Email, listed.Ref
 				}
 			}
 		} else {
 			var listed *mailemail.ListedEmail
-			listed, err = h.deps.Storage.GetEmail(ctx, submission.EmailID)
+			listed, err = h.deps.Storage.GetEmail(ctx, accountID, submission.EmailID)
 			if listed != nil {
 				emailMsg, ref = listed.Email, listed.Ref
 			}

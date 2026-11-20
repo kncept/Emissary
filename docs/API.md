@@ -439,7 +439,7 @@ and API endpoints:
           "maxSizeMailboxName": 255,
           "maxSizeAttachmentsPerEmail": 10485760,
           "emailQuerySortOptions": ["receivedAt"],
-          "mayCreateTopLevelMailbox": false
+          "mayCreateTopLevelMailbox": true
         },
         "urn:ietf:params:jmap:submission": {
           "maxDelayedSend": 0,
@@ -462,10 +462,12 @@ and API endpoints:
 
 The size limits above come from `MAX_FILESIZE` (10 MiB by default). The
 remaining limits describe the current server: binary upload is not
-implemented (`maxConcurrentUpload: 0`), mailboxes are fixed and flat, only
-`receivedAt` sorting is supported, delayed send is not supported,
-and no RFC 4790 collation algorithms are advertised. VacationResponse is
-omitted because its methods are not implemented.
+implemented (`maxConcurrentUpload: 0`), mailboxes are persisted but only
+top-level mailboxes are supported (`maxMailboxDepth: 1`), each email is in a
+single mailbox (`maxMailboxesPerEmail: 1`), only `receivedAt` sorting is
+supported, delayed send is not supported, and no RFC 4790 collation
+algorithms are advertised. VacationResponse is omitted because its methods
+are not implemented.
 
 ## `POST /api/jmap/` (JMAP Batch Request)
 
@@ -606,11 +608,13 @@ a JWT `sid`, the map is also persisted under
 `_storage/<sid>/created-ids.json`, so a later Lambda invocation can resolve
 earlier references without the client echoing the map.
 
-Email IDs are the full delivered object keys, including the received
-timestamp (ISO 8601 basic UTC, e.g. `20240308T143000`) and `.eml` suffix.
-They contain `/`, so clients must URL-encode
-them when placing an ID in a route. The `mailboxIds` returned by
-`Email/get` reflect the mailbox the message is actually stored in.
+Email IDs for delivered messages are stable tokens (the delivered message
+filename, including the received timestamp and `.eml` suffix). Moving a
+message between mailboxes changes its physical storage location but keeps the
+same JMAP id. Some legacy or non-delivered identifiers may still be returned
+as full object keys; they can contain `/`, so clients must URL-encode ids when
+placing them in a route. The `mailboxIds` returned by `Email/get` reflect the
+mailbox the message is currently stored in.
 
 ## Binary Upload/Download
 

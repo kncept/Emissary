@@ -112,7 +112,7 @@ func TestJMAPSessionAdvertisesConfiguredLimits(t *testing.T) {
 		"maxMailboxDepth":            float64(1),
 		"maxSizeMailboxName":         float64(255),
 		"maxSizeAttachmentsPerEmail": float64(limit),
-		"mayCreateTopLevelMailbox":   false,
+		"mayCreateTopLevelMailbox":   true,
 	}
 	for key, want := range wantMail {
 		if mail[key] != want {

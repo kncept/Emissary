@@ -278,9 +278,9 @@ func TestHandler_EmailQueryScopesToAccountAndMailbox(t *testing.T) {
 	ctx := context.Background()
 	memStorage := storage.NewMemoryStorage()
 	const (
-		aliceInbox = "users/alice@example.com/inbox/20261117T120000_a.eml"
-		aliceSent  = "users/alice@example.com/sent/20261117T130000_s.eml"
-		bobInbox   = "users/bob@example.com/inbox/20261117T140000_b.eml"
+		aliceInbox = "20261117T120000_a.eml"
+		aliceSent  = "20261117T130000_s.eml"
+		bobInbox   = "20261117T140000_b.eml"
 	)
 	receivedAt := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
 	addTestEmail(memStorage, aliceInbox, "alice@example.com", "inbox", &email.UserEmail{Subject: "Alice inbox", Date: receivedAt})
@@ -373,7 +373,7 @@ func TestEmailSetStoresReplyTo(t *testing.T) {
 		t.Fatalf("unmarshal response: %v", err)
 	}
 	created := resp.Created["c1"]
-	draft, err := store.GetEmail(context.Background(), created.ID)
+	draft, err := store.GetEmail(context.Background(), "alice@example.com", created.ID)
 	if err != nil {
 		t.Fatalf("GetEmail(%q) error = %v", created.ID, err)
 	}
@@ -455,7 +455,7 @@ func TestEmailSetStoresHTMLBodyAndEmailGetReturnsIt(t *testing.T) {
 	}
 	id := createdResp.Created["c1"].ID
 
-	draft, err := store.GetEmail(ctx, id)
+	draft, err := store.GetEmail(ctx, "alice@example.com", id)
 	if err != nil {
 		t.Fatalf("GetEmail(%q) error = %v", id, err)
 	}
@@ -596,7 +596,7 @@ func TestEmailSetCreateLocksFromAndGeneratesMessageID(t *testing.T) {
 		if !ok {
 			t.Fatalf("created = %+v, want c1", resp.Created)
 		}
-		listed, err := store.GetEmail(ctx, id.ID)
+		listed, err := store.GetEmail(ctx, caller, id.ID)
 		if err != nil || listed.Email == nil {
 			t.Fatalf("GetEmail() = %+v, %v", listed, err)
 		}
@@ -633,7 +633,7 @@ func TestEmailSetCreateLocksFromAndGeneratesMessageID(t *testing.T) {
 		if !ok {
 			t.Fatalf("created = %+v, want c1", resp.Created)
 		}
-		listed, err := store.GetEmail(ctx, id.ID)
+		listed, err := store.GetEmail(ctx, target, id.ID)
 		if err != nil || listed.Email == nil {
 			t.Fatalf("GetEmail() = %+v, %v", listed, err)
 		}

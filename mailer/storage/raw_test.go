@@ -33,9 +33,9 @@ const rawMIMEWithAttachment = "From: sender@example.com\r\n" +
 	"\r\n" +
 	"--BOUND--\r\n"
 
-func assertRawPreserved(t *testing.T, s Storage, id string) {
+func assertRawPreserved(t *testing.T, s Storage, accountID, id string) {
 	t.Helper()
-	got, err := s.GetEmailRaw(context.Background(), id)
+	got, err := s.GetEmailRaw(context.Background(), accountID, id)
 	if err != nil {
 		t.Fatalf("GetEmailRaw() error = %v", err)
 	}
@@ -54,11 +54,11 @@ func TestS3StorageAddEmailStoresOriginalBytesVerbatim(t *testing.T) {
 		Text:    "plain body",
 	}
 
-	id, err := store.AddEmail(context.Background(), "alice@example.com", message, []byte(rawMIMEWithAttachment))
+	id, err := store.AddEmail(context.Background(), "alice@example.com", "inbox", message, []byte(rawMIMEWithAttachment))
 	if err != nil {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
-	assertRawPreserved(t, store, id)
+	assertRawPreserved(t, store, "alice@example.com", id)
 }
 
 func TestFileStorageAddEmailStoresOriginalBytesVerbatim(t *testing.T) {
@@ -70,20 +70,20 @@ func TestFileStorageAddEmailStoresOriginalBytesVerbatim(t *testing.T) {
 		Text:    "plain body",
 	}
 
-	id, err := store.AddEmail(context.Background(), "alice@example.com", message, []byte(rawMIMEWithAttachment))
+	id, err := store.AddEmail(context.Background(), "alice@example.com", "inbox", message, []byte(rawMIMEWithAttachment))
 	if err != nil {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
-	assertRawPreserved(t, store, id)
+	assertRawPreserved(t, store, "alice@example.com", id)
 }
 
 func TestMemoryStorageAddEmailStoresOriginalBytesVerbatim(t *testing.T) {
 	store := NewMemoryStorage()
 	message := &email.UserEmail{Subject: "with attachment", Text: "plain body"}
 
-	id, err := store.AddEmail(context.Background(), "alice@example.com", message, []byte(rawMIMEWithAttachment))
+	id, err := store.AddEmail(context.Background(), "alice@example.com", "inbox", message, []byte(rawMIMEWithAttachment))
 	if err != nil {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
-	assertRawPreserved(t, store, id)
+	assertRawPreserved(t, store, "alice@example.com", id)
 }

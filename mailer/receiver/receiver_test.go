@@ -144,7 +144,7 @@ func TestProcessMessagePreservesOriginalMIME(t *testing.T) {
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("emails = %v, %v; want one delivery", listed, err)
 	}
-	got, err := emailStore.GetEmailRaw(context.Background(), listed[0].Ref.ID)
+	got, err := emailStore.GetEmailRaw(context.Background(), "alice@example.com", listed[0].Ref.ID)
 	if err != nil {
 		t.Fatalf("GetEmailRaw() error = %v", err)
 	}

@@ -29,7 +29,7 @@ func TestMemoryStorage_AddAndGet(t *testing.T) {
 
 	addTestEmail(s, "test-1", "user@example.com", "inbox", e)
 
-	got, err := s.GetEmail(context.Background(), "test-1")
+	got, err := s.GetEmail(context.Background(), "user@example.com", "test-1")
 	if err != nil {
 		t.Fatalf("GetEmail() error = %v", err)
 	}
@@ -45,7 +45,7 @@ func TestMemoryStorage_AddEmailGeneratesIDAndUsesInbox(t *testing.T) {
 	s := NewMemoryStorage()
 	message := &email.UserEmail{Subject: "New", Text: "Body"}
 
-	id, err := s.AddEmail(context.Background(), "alice@example.com", message, nil)
+	id, err := s.AddEmail(context.Background(), "alice@example.com", "inbox", message, nil)
 	if err != nil {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
@@ -53,7 +53,7 @@ func TestMemoryStorage_AddEmailGeneratesIDAndUsesInbox(t *testing.T) {
 		t.Fatal("AddEmail() returned an empty id")
 	}
 
-	listed, err := s.GetEmail(context.Background(), id)
+	listed, err := s.GetEmail(context.Background(), "alice@example.com", id)
 	if err != nil {
 		t.Fatalf("GetEmail() error = %v", err)
 	}
@@ -68,7 +68,7 @@ func TestMemoryStorage_AddEmailGeneratesIDAndUsesInbox(t *testing.T) {
 func TestMemoryStorage_GetNotFound(t *testing.T) {
 	s := NewMemoryStorage()
 
-	_, err := s.GetEmail(context.Background(), "nonexistent")
+	_, err := s.GetEmail(context.Background(), "user@example.com", "nonexistent")
 	if err == nil {
 		t.Error("GetEmail() should return ErrNotFound for missing email")
 	}
@@ -86,7 +86,7 @@ func TestMemoryStorage_GetEmailRawRendersMessage(t *testing.T) {
 		Text:    "Body",
 	})
 
-	raw, err := s.GetEmailRaw(context.Background(), "test-1")
+	raw, err := s.GetEmailRaw(context.Background(), "user@example.com", "test-1")
 	if err != nil {
 		t.Fatalf("GetEmailRaw() error = %v", err)
 	}
@@ -96,7 +96,7 @@ func TestMemoryStorage_GetEmailRawRendersMessage(t *testing.T) {
 			t.Errorf("GetEmailRaw() = %q, want it to contain %q", message, want)
 		}
 	}
-	if _, err := s.GetEmailRaw(context.Background(), "missing"); err != ErrNotFound {
+	if _, err := s.GetEmailRaw(context.Background(), "user@example.com", "missing"); err != ErrNotFound {
 		t.Errorf("GetEmailRaw() error = %v, want ErrNotFound", err)
 	}
 }
@@ -260,7 +260,7 @@ func TestMemoryStorage_CloneIsolation(t *testing.T) {
 	e.Subject = "Modified"
 
 	// Retrieved email should not be affected
-	got, _ := s.GetEmail(context.Background(), "test-1")
+	got, _ := s.GetEmail(context.Background(), "user@example.com", "test-1")
 	if got.Email.Subject != "Test" {
 		t.Errorf("Got modified email: Subject = %q, want %q", got.Email.Subject, "Test")
 	}
@@ -277,11 +277,11 @@ func TestMemoryStorage_DeleteEmail(t *testing.T) {
 		Text:    "Body",
 	})
 
-	if err := s.DeleteEmail(context.Background(), "test-1"); err != nil {
+	if err := s.DeleteEmail(context.Background(), "user@example.com", "test-1"); err != nil {
 		t.Fatalf("DeleteEmail() error = %v", err)
 	}
 
-	if _, err := s.GetEmail(context.Background(), "test-1"); err != ErrNotFound {
+	if _, err := s.GetEmail(context.Background(), "user@example.com", "test-1"); err != ErrNotFound {
 		t.Errorf("GetEmail() after delete error = %v, want ErrNotFound", err)
 	}
 	emails, err := s.ListEmails(context.Background(), "user@example.com", "")
@@ -293,10 +293,10 @@ func TestMemoryStorage_DeleteEmail(t *testing.T) {
 	}
 
 	// Deleting an absent email is reported, and deleting twice does not resurrect it.
-	if err := s.DeleteEmail(context.Background(), "test-1"); err != ErrNotFound {
+	if err := s.DeleteEmail(context.Background(), "user@example.com", "test-1"); err != ErrNotFound {
 		t.Errorf("DeleteEmail() absent error = %v, want ErrNotFound", err)
 	}
-	if err := s.DeleteEmail(context.Background(), "never-existed"); err != ErrNotFound {
+	if err := s.DeleteEmail(context.Background(), "user@example.com", "never-existed"); err != ErrNotFound {
 		t.Errorf("DeleteEmail() nonexistent error = %v, want ErrNotFound", err)
 	}
 }

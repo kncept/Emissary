@@ -548,7 +548,7 @@ func TestDeleteEmailVisibilityAndRemoval(t *testing.T) {
 	}
 
 	// The other account's message is untouched.
-	if _, err := store.GetEmail(context.Background(), "unrelated"); err != nil {
+	if _, err := store.GetEmail(context.Background(), "dave@example.com", "unrelated"); err != nil {
 		t.Errorf("unrelated email should still exist: %v", err)
 	}
 }
@@ -667,7 +667,7 @@ func TestDeleteEmailKeepsMessageWhenMetadataDeleteFails(t *testing.T) {
 
 	// The message must remain so the client can retry the whole destroy once
 	// the metadata backend recovers.
-	if _, err := store.GetEmail(context.Background(), "received"); err != nil {
+	if _, err := store.GetEmail(context.Background(), "bob@example.com", "received"); err != nil {
 		t.Errorf("email was removed despite metadata delete failure: %v", err)
 	}
 }

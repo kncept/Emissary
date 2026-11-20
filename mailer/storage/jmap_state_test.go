@@ -101,6 +101,10 @@ func (f *conditionalS3) ListObjectsV2(context.Context, *s3.ListObjectsV2Input, .
 	return &s3.ListObjectsV2Output{}, nil
 }
 
+func (f *conditionalS3) CopyObject(context.Context, *s3.CopyObjectInput, ...func(*s3.Options)) (*s3.CopyObjectOutput, error) {
+	return &s3.CopyObjectOutput{}, nil
+}
+
 func TestS3JMAPStateStoreUsesETagConditionalWrites(t *testing.T) {
 	ctx := context.Background()
 	store := &S3Storage{

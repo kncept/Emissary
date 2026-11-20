@@ -111,8 +111,8 @@ func TestEmailRefFromID_DerivesAccountAndMailboxFromDeliveredKey(t *testing.T) {
 	const key = "users/alice@example.com/inbox/20261117T120000_ses-id.eml"
 
 	ref := EmailRefFromID(key)
-	if ref.ID != key {
-		t.Errorf("ID = %q, want full object key %q", ref.ID, key)
+	if ref.ID != "20261117T120000_ses-id.eml" {
+		t.Errorf("ID = %q, want stable token %q", ref.ID, "20261117T120000_ses-id.eml")
 	}
 	if ref.AccountID != "alice@example.com" {
 		t.Errorf("AccountID = %q, want alice@example.com", ref.AccountID)

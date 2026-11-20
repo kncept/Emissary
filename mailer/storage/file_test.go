@@ -39,35 +39,35 @@ func TestFileStorageAddListGetDelete(t *testing.T) {
 		t.Errorf("Name() = %q, want filesystem", store.Name())
 	}
 
-	id, err := store.AddEmail(ctx, "Alice@Example.com", fileTestMessage(), nil)
+	id, err := store.AddEmail(ctx, "Alice@Example.com", "inbox", fileTestMessage(), nil)
 	if err != nil {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
-	if !strings.HasPrefix(id, "users/alice@example.com/inbox/") || !strings.HasSuffix(id, ".eml") {
-		t.Errorf("AddEmail() id = %q", id)
+	if !strings.HasSuffix(id, ".eml") {
+		t.Errorf("AddEmail() id = %q, want token ending with .eml", id)
 	}
-	path := filepath.Join(root, "users", "alice@example.com", "inbox", filepath.Base(id))
+	path := filepath.Join(root, "users", "alice@example.com", "inbox", id)
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("message file %q missing: %v", path, err)
 	}
 
-	listed, err := store.GetEmail(ctx, id)
+	listed, err := store.GetEmail(ctx, "alice@example.com", id)
 	if err != nil {
 		t.Fatalf("GetEmail() error = %v", err)
 	}
-	if listed.Ref.AccountID != "alice@example.com" || listed.Ref.MailboxID != "inbox" {
-		t.Errorf("ref = %+v", listed.Ref)
+	if listed.Ref.AccountID != "alice@example.com" || listed.Ref.MailboxID != "inbox" || listed.Ref.ID != id {
+		t.Errorf("ref = %+v, want account alice@example.com inbox id %s", listed.Ref, id)
 	}
 	if listed.Email.Subject != "hello filesystem" {
 		t.Errorf("subject = %q", listed.Email.Subject)
 	}
 
-	raw, err := store.GetEmailRaw(ctx, id)
+	raw, err := store.GetEmailRaw(ctx, "alice@example.com", id)
 	if err != nil || !strings.Contains(string(raw), "Subject: hello filesystem") {
 		t.Errorf("GetEmailRaw() = %q, %v", raw, err)
 	}
 
-	// A user record and session scratch files are not messages.
+	// A user record and mailbox/session scratch files are not messages.
 	if err := os.WriteFile(filepath.Join(root, "users", "alice@example.com", "user.json"), []byte("{}"), 0644); err != nil {
 		t.Fatalf("write user.json: %v", err)
 	}
@@ -89,16 +89,16 @@ func TestFileStorageAddListGetDelete(t *testing.T) {
 		}
 	}
 
-	if err := store.DeleteEmail(ctx, id); err != nil {
+	if err := store.DeleteEmail(ctx, "alice@example.com", id); err != nil {
 		t.Fatalf("DeleteEmail() error = %v", err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("message file still exists after delete: %v", err)
 	}
-	if _, err := store.GetEmail(ctx, id); !errors.Is(err, ErrNotFound) {
+	if _, err := store.GetEmail(ctx, "alice@example.com", id); !errors.Is(err, ErrNotFound) {
 		t.Errorf("GetEmail() after delete = %v, want ErrNotFound", err)
 	}
-	if err := store.DeleteEmail(ctx, id); !errors.Is(err, ErrNotFound) {
+	if err := store.DeleteEmail(ctx, "alice@example.com", id); !errors.Is(err, ErrNotFound) {
 		t.Errorf("DeleteEmail() again = %v, want ErrNotFound", err)
 	}
 }
@@ -106,7 +106,7 @@ func TestFileStorageAddListGetDelete(t *testing.T) {
 func TestFileStoragePersistsAcrossReopen(t *testing.T) {
 	ctx := context.Background()
 	store, root := newTestFileStorage(t)
-	id, err := store.AddEmail(ctx, "alice@example.com", fileTestMessage(), nil)
+	id, err := store.AddEmail(ctx, "alice@example.com", "inbox", fileTestMessage(), nil)
 	if err != nil {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
@@ -115,7 +115,7 @@ func TestFileStoragePersistsAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen error = %v", err)
 	}
-	if _, err := reopened.GetEmail(ctx, id); err != nil {
+	if _, err := reopened.GetEmail(ctx, "alice@example.com", id); err != nil {
 		t.Fatalf("GetEmail() after reopen = %v", err)
 	}
 }
@@ -173,17 +173,17 @@ func TestFileStorageRejectsTraversal(t *testing.T) {
 	}
 
 	for _, id := range []string{"../secret.eml", "users/alice/../../secret.eml", "..\\secret.eml"} {
-		if _, err := store.GetEmail(ctx, id); err == nil {
+		if _, err := store.GetEmail(ctx, "alice@example.com", id); err == nil {
 			t.Errorf("GetEmail(%q) succeeded", id)
 		}
-		if _, err := store.GetEmailRaw(ctx, id); err == nil {
+		if _, err := store.GetEmailRaw(ctx, "alice@example.com", id); err == nil {
 			t.Errorf("GetEmailRaw(%q) succeeded", id)
 		}
-		if err := store.DeleteEmail(ctx, id); err == nil {
+		if err := store.DeleteEmail(ctx, "alice@example.com", id); err == nil {
 			t.Errorf("DeleteEmail(%q) succeeded", id)
 		}
 	}
-	if _, err := store.AddEmail(ctx, "../evil", fileTestMessage(), nil); err == nil {
+	if _, err := store.AddEmail(ctx, "../evil", "inbox", fileTestMessage(), nil); err == nil {
 		t.Error("AddEmail with traversal account succeeded")
 	}
 	if _, err := store.PutDraft(ctx, "../evil", "d1", fileTestMessage()); err == nil {

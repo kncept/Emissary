@@ -15,12 +15,12 @@ import (
 	"github.com/kncept/Emissary/mailer/metadata"
 )
 
-func (m *JMAPEmail) setBodyValues(e *mailemail.UserEmail, fetchText, fetchHTML, fetchAll bool, maxBytes int) {
+func (m *JMAPEmail) setBodyValues(e *mailemail.UserEmail, fetchText, fetchHTML bool, maxBytes int) {
 	values := map[string]EmailBodyValue{}
-	if (fetchText || fetchAll) && e.Text != "" {
+	if fetchText && e.Text != "" {
 		values["text1"] = truncateBodyValue(e.Text, maxBytes, "text/plain")
 	}
-	if (fetchHTML || fetchAll) && e.HTML != "" {
+	if fetchHTML && e.HTML != "" {
 		values["html1"] = truncateBodyValue(e.HTML, maxBytes, "text/html")
 	}
 	if len(values) > 0 {
@@ -93,11 +93,11 @@ func jmapAddressList(createMap map[string]interface{}, property string) ([]maile
 	for _, entry := range entries {
 		object, ok := entry.(map[string]interface{})
 		if !ok {
-			return nil, fmt.Errorf("invalidArguments: %s entries must be objects", property)
+			return nil, fmt.Errorf("%s entries must be objects", property)
 		}
 		address, ok := object["email"].(string)
 		if !ok {
-			return nil, fmt.Errorf("invalidArguments: %s entry has a non-string email", property)
+			return nil, fmt.Errorf("%s entry has a non-string email", property)
 		}
 		addresses = append(addresses, mailemail.Address{Address: address})
 	}
@@ -126,8 +126,6 @@ func messageIDDomain(address string) string {
 func (h *Handler) syncEmailState(ctx context.Context, accountID string) (string, error) {
 	listed, err := h.deps.Storage.ListEmails(ctx, accountID, "")
 	if err != nil {
-		// Keep the last known state; a storage failure must not invent a
-		// change or erase the delta history.
 		return h.deps.Changes.State(ctx, accountID, base.StateEmail)
 	}
 	return h.syncEmailStateFromListed(ctx, accountID, listed)
@@ -170,12 +168,11 @@ func emailFingerprint(listed *mailemail.ListedEmail, meta metadata.EmailMetadata
 }
 
 func (h *Handler) toJMAPEmail(ctx context.Context, listed *mailemail.ListedEmail) (*JMAPEmail, error) {
+	// keep error for interface symmetry/future parsing failures
+	_ = error(nil)
 	e := listed.Email
 	id := listed.Ref.ID
 
-	// Stitch JMAP keywords from metadata into the returned object. A missing
-	// metadata record is normal (older messages, receiver without metadata)
-	// and simply yields an empty keyword set; it must not fail the request.
 	meta := base.EmailMetadata(ctx, h.deps, listed.Ref.AccountID, id)
 	keywords := make(map[string]bool, len(meta.Keywords))
 	for keyword, enabled := range meta.Keywords {
@@ -184,40 +181,30 @@ func (h *Handler) toJMAPEmail(ctx context.Context, listed *mailemail.ListedEmail
 		}
 	}
 
-	// Determine mailbox IDs from the mailbox the message was delivered to.
-	// Locally created messages are stored in the inbox by AddEmail.
 	mailboxID := listed.Ref.MailboxID
 	if mailboxID == "" {
 		mailboxID = "inbox"
 	}
-	mailboxIDs := map[string]bool{
-		mailboxID: true,
-	}
+	mailboxIDs := map[string]bool{mailboxID: true}
 
-	// Convert addresses
 	from := []model.EmailAddress{{Name: e.From.Name, Email: e.From.Address}}
-
 	to := make([]model.EmailAddress, len(e.To))
 	for i, addr := range e.To {
 		to[i] = model.EmailAddress{Name: addr.Name, Email: addr.Address}
 	}
-
 	cc := make([]model.EmailAddress, len(e.Cc))
 	for i, addr := range e.Cc {
 		cc[i] = model.EmailAddress{Name: addr.Name, Email: addr.Address}
 	}
-
 	bcc := make([]model.EmailAddress, len(e.Bcc))
 	for i, addr := range e.Bcc {
 		bcc[i] = model.EmailAddress{Name: addr.Name, Email: addr.Address}
 	}
-
 	replyTo := make([]model.EmailAddress, len(e.ReplyTo))
 	for i, addr := range e.ReplyTo {
 		replyTo[i] = model.EmailAddress{Name: addr.Name, Email: addr.Address}
 	}
 
-	// Build preview from text body
 	preview := e.Text
 	if len(preview) > 200 {
 		preview = preview[:200]
@@ -236,16 +223,13 @@ func (h *Handler) toJMAPEmail(ctx context.Context, listed *mailemail.ListedEmail
 		htmlBody = append(htmlBody, EmailBodyPart{PartID: &htmlPartID, Type: "text/html", Size: len(e.HTML)})
 	}
 
-	// Format dates. receivedAt is server-managed metadata, not the Date
-	// header (which is the message's sent time). Legacy records without a
-	// receivedAt value fall back to the Date header.
 	receivedAt := base.ReceivedAtFromMetadata(meta, e.Date).UTC().Format(time.RFC3339)
 	sentAt := e.Date.UTC().Format(time.RFC3339)
 
 	return &JMAPEmail{
 		ID:            id,
-		BlobID:        id, // Use ID as blobId for now
-		ThreadID:      id, // Each email is its own thread for now
+		BlobID:        id,
+		ThreadID:      id,
 		MailboxIDs:    mailboxIDs,
 		Keywords:      keywords,
 		Size:          int(e.Size),
@@ -253,7 +237,7 @@ func (h *Handler) toJMAPEmail(ctx context.Context, listed *mailemail.ListedEmail
 		MessageID:     messageIDs(e.MessageID),
 		InReplyTo:     e.InReplyTo,
 		References:    e.References,
-		Sender:        from, // Use From as Sender for simplicity
+		Sender:        from,
 		From:          from,
 		To:            to,
 		Cc:            cc,
@@ -261,10 +245,8 @@ func (h *Handler) toJMAPEmail(ctx context.Context, listed *mailemail.ListedEmail
 		ReplyTo:       replyTo,
 		Subject:       e.Subject,
 		SentAt:        &sentAt,
-		HasAttachment: false, // Would need to parse from wire format
+		HasAttachment: false,
 		Preview:       preview,
-		BodyStructure: nil,
-		BodyValues:    nil,
 		TextBody:      textBody,
 		HTMLBody:      htmlBody,
 		Attachments:   []EmailBodyPart{},
@@ -279,14 +261,9 @@ func (h *Handler) matchesFilter(listed *mailemail.ListedEmail, filter *EmailFilt
 	e := listed.Email
 	mailboxID := listed.Ref.MailboxID
 
-	// InMailbox filter. Storage resolves this into a mailbox prefix; when the
-	// mailbox is known on the message, verify it as well so a stale or
-	// hand-crafted id cannot be used to read from another mailbox.
 	if filter.InMailbox != nil && mailboxID != "" && !strings.EqualFold(mailboxID, *filter.InMailbox) {
 		return false
 	}
-
-	// InMailboxOtherThan filter
 	if mailboxID != "" {
 		for _, mb := range filter.InMailboxOtherThan {
 			if strings.EqualFold(mb, mailboxID) {
@@ -295,7 +272,6 @@ func (h *Handler) matchesFilter(listed *mailemail.ListedEmail, filter *EmailFilt
 		}
 	}
 
-	// Date filters
 	if filter.Before != nil {
 		before, err := time.Parse(time.RFC3339, *filter.Before)
 		if err == nil && !e.Date.Before(before) {
@@ -309,7 +285,6 @@ func (h *Handler) matchesFilter(listed *mailemail.ListedEmail, filter *EmailFilt
 		}
 	}
 
-	// Size filters
 	if filter.MinSize != nil && int(e.Size) < *filter.MinSize {
 		return false
 	}
@@ -317,44 +292,30 @@ func (h *Handler) matchesFilter(listed *mailemail.ListedEmail, filter *EmailFilt
 		return false
 	}
 
-	// Text search (simple substring match on subject, from, to, text)
 	if filter.Text != nil {
 		text := strings.ToLower(*filter.Text)
-		found := false
-		if strings.Contains(strings.ToLower(e.Subject), text) {
-			found = true
-		}
-		// Check From (single address)
-		if strings.Contains(strings.ToLower(e.From.Address), text) || strings.Contains(strings.ToLower(e.From.Name), text) {
-			found = true
-		}
-		for _, addr := range e.To {
-			if strings.Contains(strings.ToLower(addr.Address), text) || strings.Contains(strings.ToLower(addr.Name), text) {
-				found = true
-				break
+		found := strings.Contains(strings.ToLower(e.Subject), text) ||
+			strings.Contains(strings.ToLower(e.From.Address), text) ||
+			strings.Contains(strings.ToLower(e.From.Name), text) ||
+			strings.Contains(strings.ToLower(e.Text), text)
+		if !found {
+			for _, addr := range e.To {
+				if strings.Contains(strings.ToLower(addr.Address), text) || strings.Contains(strings.ToLower(addr.Name), text) {
+					found = true
+					break
+				}
 			}
 		}
-		if strings.Contains(strings.ToLower(e.Text), text) {
-			found = true
-		}
 		if !found {
 			return false
 		}
 	}
-
-	// From filter
 	if filter.From != nil {
 		text := strings.ToLower(*filter.From)
-		found := false
-		if strings.Contains(strings.ToLower(e.From.Address), text) || strings.Contains(strings.ToLower(e.From.Name), text) {
-			found = true
-		}
-		if !found {
+		if !strings.Contains(strings.ToLower(e.From.Address), text) && !strings.Contains(strings.ToLower(e.From.Name), text) {
 			return false
 		}
 	}
-
-	// To filter
 	if filter.To != nil {
 		text := strings.ToLower(*filter.To)
 		found := false
@@ -368,28 +329,23 @@ func (h *Handler) matchesFilter(listed *mailemail.ListedEmail, filter *EmailFilt
 			return false
 		}
 	}
-
-	// Subject filter
 	if filter.Subject != nil {
 		if !strings.Contains(strings.ToLower(e.Subject), strings.ToLower(*filter.Subject)) {
 			return false
 		}
 	}
-
-	// Body filter
 	if filter.Body != nil {
 		if !strings.Contains(strings.ToLower(e.Text), strings.ToLower(*filter.Body)) {
 			return false
 		}
 	}
-
 	return true
 }
 
 // emailInAccount verifies that id belongs to accountID. Drafts use ids that
 // are relative to the JMAP session, so they are looked up separately.
 func (h *Handler) emailInAccount(ctx context.Context, accountID, id string) bool {
-	listed, err := h.deps.Storage.GetEmail(ctx, id)
+	listed, err := h.deps.Storage.GetEmail(ctx, accountID, id)
 	if err == nil && listed != nil && listed.Ref != nil && strings.EqualFold(listed.Ref.AccountID, accountID) {
 		return true
 	}
@@ -400,17 +356,73 @@ func (h *Handler) emailInAccount(ctx context.Context, accountID, id string) bool
 	return false
 }
 
+// extractCreateBodies extracts text/html bodies from a JMAP Email/set create
+// object. It supports both legacy "text"/"html" fields and the standard
+// bodyValues + textBody/htmlBody structure.
+func extractCreateBodies(createMap map[string]interface{}) (text, html string) {
+	if s, ok := createMap["text"].(string); ok {
+		text = s
+	}
+	if s, ok := createMap["html"].(string); ok {
+		html = s
+	}
+	bodyValues, _ := createMap["bodyValues"].(map[string]interface{})
+	if len(bodyValues) == 0 {
+		return text, html
+	}
+	getPart := func(parts []interface{}, wantType string) string {
+		for _, p := range parts {
+			pm, ok := p.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if pt, _ := pm["type"].(string); pt != "" && !strings.EqualFold(pt, wantType) {
+				continue
+			}
+			pid, _ := pm["partId"].(string)
+			if pid == "" {
+				continue
+			}
+			v, ok := bodyValues[pid].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if val, ok := v["value"].(string); ok {
+				return val
+			}
+		}
+		return ""
+	}
+	if tb, ok := createMap["textBody"].([]interface{}); ok && text == "" {
+		text = getPart(tb, "text/plain")
+	}
+	if hb, ok := createMap["htmlBody"].([]interface{}); ok && html == "" {
+		html = getPart(hb, "text/html")
+	}
+	// Fallbacks for common part ids or single-value cases.
+	if text == "" {
+		if v, ok := bodyValues["text1"].(map[string]interface{}); ok {
+			if val, ok := v["value"].(string); ok {
+				text = val
+			}
+		}
+	}
+	if html == "" {
+		if v, ok := bodyValues["html1"].(map[string]interface{}); ok {
+			if val, ok := v["value"].(string); ok {
+				html = val
+			}
+		}
+	}
+	return text, html
+}
+
 // ApplyKeywordPatch applies an Email/set update patch to a metadata record.
 // Per RFC 8621, "keywords/<name>": true sets a keyword and null removes it;
 // false is not a valid patch value. A full "keywords" object replaces the set.
-// receivedAt is server-owned: it is preserved by Clone and never read from the
-// patch, so clients cannot assign, edit or clear it. The returned string is a
-// JMAP error type when ok is false.
 func ApplyKeywordPatch(current metadata.EmailMetadata, patch map[string]interface{}) (metadata.EmailMetadata, bool, string) {
 	updated := current.Clone()
 
-	// Apply a whole-object replacement first, then any individual keyword
-	// patches, so the result does not depend on Go map iteration order.
 	if value, ok := patch["keywords"]; ok {
 		keywords, ok := value.(map[string]interface{})
 		if !ok {
@@ -438,7 +450,7 @@ func ApplyKeywordPatch(current metadata.EmailMetadata, patch map[string]interfac
 			continue
 		}
 		if !strings.HasPrefix(prop, "keywords/") {
-			// Ignore properties we do not manage (for example mailboxIds)
+			// Ignore properties we do not manage (for example mailboxIds handled elsewhere)
 			// rather than failing the whole update.
 			continue
 		}

@@ -19,11 +19,11 @@ type failOnceStorage struct {
 	failFor map[string]bool
 }
 
-func (s *failOnceStorage) AddEmail(ctx context.Context, accountID string, message *email.UserEmail, raw []byte) (string, error) {
+func (s *failOnceStorage) AddEmail(ctx context.Context, accountID, mailboxID string, message *email.UserEmail, raw []byte) (string, error) {
 	if s.failFor[accountID] {
 		return "", errors.New("storage temporarily unavailable")
 	}
-	return s.Storage.AddEmail(ctx, accountID, message, raw)
+	return s.Storage.AddEmail(ctx, accountID, mailboxID, message, raw)
 }
 
 // erroringBounceSender fails bounces for selected recipients.

@@ -149,11 +149,41 @@ func IsDeliveredMessageKey(key string) bool {
 	return ok
 }
 
-// MailboxFromID extracts the account and mailbox from a delivered message ID.
-// A delivered ID is the full object key of the .eml file (including the
-// timestamp), so it also identifies which account's mailbox the message lives
-// in. Keys at the bucket root (SES staging objects) have no mailbox and return
-// ok == false.
+// DeliveredMessageToken returns the stable message token for a delivered
+// object key. The token is the filename component (including the .eml suffix)
+// and stays the same when a message is moved between mailbox folders.
+func DeliveredMessageToken(key string) (string, bool) {
+	if !IsDeliveredMessageKey(key) {
+		return "", false
+	}
+	key = strings.TrimPrefix(key, "/")
+	parts := strings.Split(key, "/")
+	if len(parts) < 4 {
+		return "", false
+	}
+	token := parts[len(parts)-1]
+	if token == "" {
+		return "", false
+	}
+	return token, true
+}
+
+// DeliveredMessageKey builds the physical object key for a delivered message
+// from its stable token.
+func DeliveredMessageKey(accountID, mailboxID, token string) string {
+	token = strings.Trim(strings.TrimSpace(token), "/")
+	if token == "" {
+		return ""
+	}
+	return MailboxKeyPrefix(accountID, mailboxID) + token
+}
+
+// MailboxFromID extracts the account and mailbox from a delivered message
+// identifier. It accepts either a full physical object key
+// (users/<accountId>/<mailboxId>/<token>.eml) or the stable token form used by
+// JMAP ids for delivered mail; the latter does not encode a mailbox and
+// returns ok == false. Keys at the bucket root (SES staging objects) have no
+// mailbox and return ok == false.
 func MailboxFromID(id string) (accountID, mailboxID string, ok bool) {
 	id = strings.TrimPrefix(id, "/")
 
@@ -173,11 +203,17 @@ func MailboxFromID(id string) (accountID, mailboxID string, ok bool) {
 	return strings.ToLower(parts[0]), strings.ToLower(parts[1]), true
 }
 
-// EmailRefFromID builds the metadata ref for a message from its id. For
-// delivered mail the id is the full object key, which encodes the account and
-// mailbox; other ids keep only the id itself.
+// EmailRefFromID builds the metadata ref for a message from its identifier.
+// For a full delivered object key it derives the account/mailbox and uses the
+// stable filename token as the message ID so moves between folders do not
+// change the JMAP identity. Other identifiers keep only the id itself.
 func EmailRefFromID(id string) EmailRef {
-	accountID, mailboxID, _ := MailboxFromID(id)
+	accountID, mailboxID, ok := MailboxFromID(id)
+	if ok {
+		if token, ok := DeliveredMessageToken(id); ok {
+			return EmailRef{ID: token, AccountID: accountID, MailboxID: mailboxID}
+		}
+	}
 	return EmailRef{ID: id, AccountID: accountID, MailboxID: mailboxID}
 }
 

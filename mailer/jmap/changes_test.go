@@ -161,7 +161,7 @@ func TestEmailChangesReportsExternalCreatesAndDestroys(t *testing.T) {
 		t.Fatalf("created = %v after consuming the delta, want empty", empty["created"])
 	}
 
-	if err := store.DeleteEmail(ctx, "new-1"); err != nil {
+	if err := store.DeleteEmail(ctx, changesAccount, "new-1"); err != nil {
 		t.Fatalf("DeleteEmail() error = %v", err)
 	}
 	destroyed := emailChangesOf(t, h, ctx, newState, 0)
@@ -226,7 +226,7 @@ func TestEmailChangesMaxChangesUsesCoalescedCount(t *testing.T) {
 	emailStateOf(t, h, ctx)
 	addTestEmail(store, "two", changesAccount, "inbox", &email.UserEmail{Subject: "two"})
 	emailStateOf(t, h, ctx)
-	if err := store.DeleteEmail(ctx, "one"); err != nil {
+	if err := store.DeleteEmail(ctx, changesAccount, "one"); err != nil {
 		t.Fatalf("DeleteEmail() error = %v", err)
 	}
 

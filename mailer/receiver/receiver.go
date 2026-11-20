@@ -309,7 +309,7 @@ func (r *Receiver) handleRecipient(ctx context.Context, key, recipient string, p
 // bytes are passed through so the store keeps headers, MIME parts and
 // attachments intact instead of re-rendering the parsed copy.
 func (r *Receiver) deliverToRecipient(ctx context.Context, recipient string, message *email.UserEmail, raw []byte) error {
-	id, err := r.cfg.Storage.AddEmail(ctx, recipient, message, raw)
+	id, err := r.cfg.Storage.AddEmail(ctx, recipient, "inbox", message, raw)
 	if err != nil {
 		return fmt.Errorf("failed to add email for %s: %w", recipient, err)
 	}

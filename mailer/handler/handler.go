@@ -709,7 +709,7 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 		"maxSizeMailboxName":         jmapMaxSizeMailboxName,
 		"maxSizeAttachmentsPerEmail": maxFileSize,
 		"emailQuerySortOptions":      []string{"receivedAt"},
-		"mayCreateTopLevelMailbox":   false,
+		"mayCreateTopLevelMailbox":   true,
 	}
 	submissionAccountCapabilities := map[string]any{
 		"maxDelayedSend":       0,
@@ -852,7 +852,9 @@ func handleJMAPDownload(w http.ResponseWriter, r *http.Request) {
 
 // handleRawEmail serves the original RFC 5322 message for a single email. The
 // id is passed as a query parameter because delivered ids contain slashes and
-// would otherwise be ambiguous in a URL path.
+// would otherwise be ambiguous in a URL path. accountId may be provided; when
+// omitted it is derived from a delivered key or defaults to the authenticated
+// user for stable token ids.
 func handleRawEmail(w http.ResponseWriter, r *http.Request, store storage.Storage) {
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
 	if id == "" {
@@ -860,28 +862,30 @@ func handleRawEmail(w http.ResponseWriter, r *http.Request, store storage.Storag
 		return
 	}
 
-	accountID, err := rawEmailAccount(r.Context(), store, id)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "email not found")
-			return
-		}
-		logRequestError(r, "resolve raw email account", err)
-		writeError(w, http.StatusInternalServerError, "failed to load email")
-		return
-	}
-	if accountID == "" {
-		writeError(w, http.StatusBadRequest, "invalid email id")
+	claims := currentClaims(r)
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 
-	claims := currentClaims(r)
-	if claims == nil || (!claims.EmissaryUserManagement && !strings.EqualFold(accountID, claims.Subject)) {
+	accountID := strings.TrimSpace(r.URL.Query().Get("accountId"))
+	if accountID == "" {
+		if derived, _, ok := email.MailboxFromID(id); ok && derived != "" {
+			accountID = derived
+		} else {
+			accountID = claims.Subject
+		}
+	}
+	if accountID == "" {
+		writeError(w, http.StatusBadRequest, "accountId is required")
+		return
+	}
+	if !claims.EmissaryUserManagement && !strings.EqualFold(accountID, claims.Subject) {
 		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
 	}
 
-	raw, err := store.GetEmailRaw(r.Context(), id)
+	raw, err := store.GetEmailRaw(r.Context(), accountID, id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "email not found")
@@ -899,24 +903,6 @@ func handleRawEmail(w http.ResponseWriter, r *http.Request, store storage.Storag
 	if _, err := w.Write(raw); err != nil {
 		logRequestWarn(r, "write raw email", err)
 	}
-}
-
-// rawEmailAccount determines which account owns an email id. Delivered ids
-// encode the account in the object key, so the common case needs no storage
-// lookup. The fallback supports stores with opaque ids, such as the in-memory
-// development store.
-func rawEmailAccount(ctx context.Context, store storage.Storage, id string) (string, error) {
-	if accountID, _, ok := email.MailboxFromID(id); ok && accountID != "" {
-		return accountID, nil
-	}
-	listed, err := store.GetEmail(ctx, id)
-	if err != nil {
-		return "", err
-	}
-	if listed.Ref == nil {
-		return "", storage.ErrNotFound
-	}
-	return listed.Ref.AccountID, nil
 }
 
 func handleLogout(authenticator *auth.Authenticator) http.HandlerFunc {
