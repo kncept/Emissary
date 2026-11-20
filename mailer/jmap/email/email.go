@@ -113,6 +113,7 @@ type EmailBodyPart struct {
 	Language    []string        `json:"language,omitempty"`
 	Location    *string         `json:"location,omitempty"`
 	SubParts    []EmailBodyPart `json:"subParts,omitempty"`
+	Headers     []EmailHeader   `json:"headers,omitempty"`
 }
 
 // EmailBodyValue represents the fetched value of a JMAP body part.

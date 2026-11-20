@@ -561,3 +561,68 @@ func TestJMAPUnknownMethodRemainsMethodLevelError(t *testing.T) {
 		t.Errorf("error type = %q, want unknownMethod", args.Type)
 	}
 }
+
+func TestJMAPGetPropertySelectionEndToEnd(t *testing.T) {
+	h := newJMAPLimitHandler(t, 1<<20)
+	token := jmapToken(t, h)
+
+	const selected = `{"using":["urn:ietf:params:jmap:mail"],"methodCalls":[` +
+		`["Mailbox/get",{"accountId":"admin","ids":["inbox"],"properties":["name"]},"g1"]]}`
+	w := jmapRequestWithContentType(t, h, token, "application/json", selected)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+
+	var response struct {
+		MethodResponses [][]json.RawMessage `json:"methodResponses"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v (body %s)", err, w.Body.String())
+	}
+	if len(response.MethodResponses) != 1 {
+		t.Fatalf("methodResponses = %d, want 1", len(response.MethodResponses))
+	}
+	var result struct {
+		List []map[string]json.RawMessage `json:"list"`
+	}
+	if err := json.Unmarshal(response.MethodResponses[0][1], &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if len(result.List) != 1 {
+		t.Fatalf("list = %d items, want 1", len(result.List))
+	}
+	for key := range result.List[0] {
+		if key != "id" && key != "name" {
+			t.Errorf("unexpected property %q in selected mailbox", key)
+		}
+	}
+	if result.List[0]["id"] == nil || result.List[0]["name"] == nil {
+		t.Errorf("selected mailbox = %v, want id and name", result.List[0])
+	}
+
+	const rejected = `{"using":["urn:ietf:params:jmap:mail"],"methodCalls":[` +
+		`["Mailbox/get",{"accountId":"admin","ids":["inbox"],"properties":["notAProperty"]},"g1"]]}`
+	w = jmapRequestWithContentType(t, h, token, "application/json", rejected)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	response = struct {
+		MethodResponses [][]json.RawMessage `json:"methodResponses"`
+	}{}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v (body %s)", err, w.Body.String())
+	}
+	var name string
+	if err := json.Unmarshal(response.MethodResponses[0][0], &name); err != nil || name != "error" {
+		t.Fatalf("response name = %q, want error", name)
+	}
+	var args struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(response.MethodResponses[0][1], &args); err != nil {
+		t.Fatalf("decode error args: %v", err)
+	}
+	if args.Type != "invalidArguments" {
+		t.Errorf("error type = %q, want invalidArguments", args.Type)
+	}
+}

@@ -47,15 +47,19 @@
 import type { UTCDate } from './uTCDate';
 import type { VacationResponseId } from './vacationResponseId';
 
+/**
+ * A VacationResponse object. Only `id` is always returned: a `/get`
+ * call may request any subset of the other properties.
+ */
 export interface VacationResponse {
   id: VacationResponseId;
-  isEnabled: boolean;
-  fromDate: UTCDate | null;
-  toDate: UTCDate | null;
+  isEnabled?: boolean;
+  fromDate?: UTCDate | null;
+  toDate?: UTCDate | null;
   /** @nullable */
-  subject: string | null;
+  subject?: string | null;
   /** @nullable */
-  textBody: string | null;
+  textBody?: string | null;
   /** @nullable */
-  htmlBody: string | null;
+  htmlBody?: string | null;
 }

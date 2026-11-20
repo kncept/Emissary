@@ -48,11 +48,15 @@ import type { Id } from './id';
 import type { MailboxRights } from './mailboxRights';
 import type { UnsignedInt } from './unsignedInt';
 
+/**
+ * A Mailbox object. Only `id` is always returned: a `/get` call may
+ * request any subset of the other properties.
+ */
 export interface Mailbox {
   id: Id;
   /** @minLength 1 */
-  name: string;
-  parentId: Id | null;
+  name?: string;
+  parentId?: Id | null;
   /**
      * A role from the IANA "IMAP Mailbox Name Attributes" registry,
      * lowercased (for example `inbox`, `archive`, `drafts`, `flagged`,
@@ -60,17 +64,17 @@ export interface Mailbox {
      * this is not a closed enum.
      * @nullable
      */
-  role: string | null;
+  role?: string | null;
   /**
      * @minimum 0
      * @maximum 2147483647
      */
-  sortOrder: number;
-  totalEmails: UnsignedInt;
-  unreadEmails: UnsignedInt;
-  totalThreads: UnsignedInt;
-  unreadThreads: UnsignedInt;
-  myRights: MailboxRights;
-  isSubscribed: boolean;
+  sortOrder?: number;
+  totalEmails?: UnsignedInt;
+  unreadEmails?: UnsignedInt;
+  totalThreads?: UnsignedInt;
+  unreadThreads?: UnsignedInt;
+  myRights?: MailboxRights;
+  isSubscribed?: boolean;
   [key: string]: unknown;
  }

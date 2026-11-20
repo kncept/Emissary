@@ -544,6 +544,28 @@ Example response:
 }
 ```
 
+### Property selection on `/get` methods
+
+The implemented `/get` methods (`Mailbox/get`, `Thread/get`, `Email/get` and
+`Identity/get`) accept the RFC 8620 `properties` argument. When it is omitted
+or `null`, every property is returned; when it is an array, only those
+properties are returned and `id` is always included (so `properties: []`
+returns just `id`). Unknown property names are rejected with a method-level
+`invalidArguments` error in `methodResponses`, not an HTTP error. State
+tokens are computed from the full objects, so they do not change with the
+requested selection.
+
+`Email/get` also accepts the RFC 8621 body arguments:
+
+| Argument | Effect |
+| --- | --- |
+| `bodyProperties` | Selects properties of each returned `EmailBodyPart`; `partId` is needed to resolve `bodyValues`. Unknown names are also `invalidArguments`. |
+| `fetchAllBodyValues` | Includes body values for every available text part, overriding the narrower `fetchTextBodyValues` / `fetchHTMLBodyValues` flags. |
+| `maxBodyValueBytes` | Truncates each `bodyValues` value to at most this many octets and sets `isTruncated: true`. Truncation never splits a UTF-8 codepoint and avoids ending inside an HTML tag. |
+
+Dynamic `header:` property names are accepted syntactically; this server does
+not retain raw headers, so no value is returned for them today.
+
 ### Result references
 
 An argument name prefixed with `#` (for example `#ids`) is an RFC 8620 result

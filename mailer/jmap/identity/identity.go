@@ -53,6 +53,10 @@ func (h *Handler) IdentityGet(ctx context.Context, accountID string, args json.R
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
+	properties, err := base.ParseSelection(args, "properties", Identity{}, "")
+	if err != nil {
+		return nil, err
+	}
 
 	// Get user info to build identity
 	user, err := h.deps.UserMgr.Lookup(ctx, accountID)
@@ -84,10 +88,14 @@ func (h *Handler) IdentityGet(ctx context.Context, accountID string, args json.R
 		list = append(list, identity)
 	}
 
+	selected, err := properties.Filter(list)
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]interface{}{
 		"accountId": accountID,
 		"state":     h.deps.Changes.State(accountID, base.StateIdentity),
-		"list":      list,
+		"list":      selected,
 		"notFound":  notFound,
 	}
 	return json.Marshal(resp)

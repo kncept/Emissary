@@ -45,6 +45,10 @@ func (h *Handler) ThreadGet(ctx context.Context, accountID string, args json.Raw
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
+	properties, err := base.ParseSelection(args, "properties", Thread{}, "")
+	if err != nil {
+		return nil, err
+	}
 
 	threads := h.getThreads(ctx, accountID)
 	state := h.syncThreadState(ctx, accountID, threads)
@@ -67,10 +71,14 @@ func (h *Handler) ThreadGet(ctx context.Context, accountID string, args json.Raw
 		list = threads
 	}
 
+	selected, err := properties.Filter(list)
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]interface{}{
 		"accountId": accountID,
 		"state":     state,
-		"list":      list,
+		"list":      selected,
 		"notFound":  notFound,
 	}
 	return json.Marshal(resp)

@@ -1,0 +1,181 @@
+package base
+
+import (
+	"bytes"
+	"encoding/json"
+	"reflect"
+	"strings"
+)
+
+// Selection is a validated `properties` (or `bodyProperties`) argument for a
+// JMAP /get method. A nil Selection means the argument was omitted or null:
+// every property is returned and no filtering is performed.
+type Selection struct {
+	names         map[string]bool
+	dynamicPrefix string
+	recurseKey    string
+}
+
+// ParseSelection reads the named argument from a /get call and validates every
+// requested name against the JSON property names of model. A dynamicPrefix
+// (for example "header:") additionally permits names with that prefix, which
+// RFC 8621 defines as dynamic properties. An absent or null argument yields a
+// nil Selection; an unknown name yields an invalidArguments method error.
+func ParseSelection(args json.RawMessage, key string, model any, dynamicPrefix string) (*Selection, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(args, &raw); err != nil {
+		return nil, err
+	}
+	value, ok := raw[key]
+	if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		return nil, nil
+	}
+
+	var names []string
+	if err := json.Unmarshal(value, &names); err != nil {
+		return nil, Errorf("invalidArguments", "%s must be an array of strings or null", key)
+	}
+
+	allowed := propertyNames(model)
+	selected := make(map[string]bool, len(names))
+	for _, name := range names {
+		if allowed[name] {
+			selected[name] = true
+			continue
+		}
+		if dynamicPrefix != "" && validDynamicName(name, dynamicPrefix) {
+			selected[name] = true
+			continue
+		}
+		return nil, Errorf("invalidArguments", "unknown property %q in %s", name, key)
+	}
+	return &Selection{names: selected, dynamicPrefix: dynamicPrefix}, nil
+}
+
+// WithRecursion configures a Selection to recurse into the named child key
+// when filtering nested objects (EmailBodyPart.subParts, for example). The
+// child is only recursed into when it was itself requested.
+func (s *Selection) WithRecursion(key string) *Selection {
+	if s == nil {
+		return nil
+	}
+	copy := *s
+	copy.recurseKey = key
+	return &copy
+}
+
+// Filter marshals value and retains only the selected properties. The id
+// property is always kept when the object has one, as required by RFC 8620
+// section 5.1. Arrays are filtered item by item; non-object values pass
+// through unchanged.
+func (s *Selection) Filter(value any) (json.RawMessage, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return s.FilterRaw(raw)
+}
+
+// FilterRaw is Filter for a value that is already JSON.
+func (s *Selection) FilterRaw(raw json.RawMessage) (json.RawMessage, error) {
+	if s == nil {
+		return raw, nil
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return raw, nil
+	}
+	switch trimmed[0] {
+	case '[':
+		var items []json.RawMessage
+		if err := json.Unmarshal(trimmed, &items); err != nil {
+			return nil, err
+		}
+		out := make([]json.RawMessage, len(items))
+		for i, item := range items {
+			filtered, err := s.FilterRaw(item)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = filtered
+		}
+		return json.Marshal(out)
+	case '{':
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(trimmed, &obj); err != nil {
+			return nil, err
+		}
+		if s.recurseKey != "" {
+			if child, ok := obj[s.recurseKey]; ok {
+				filtered, err := s.FilterRaw(child)
+				if err != nil {
+					return nil, err
+				}
+				obj[s.recurseKey] = filtered
+			}
+		}
+		return json.Marshal(s.Apply(obj))
+	default:
+		return raw, nil
+	}
+}
+
+// Apply selects properties from an already-decoded JSON object.
+func (s *Selection) Apply(obj map[string]json.RawMessage) map[string]json.RawMessage {
+	if s == nil {
+		return obj
+	}
+	out := make(map[string]json.RawMessage, len(s.names)+1)
+	if id, ok := obj["id"]; ok {
+		out["id"] = id
+	}
+	for name := range s.names {
+		if value, ok := obj[name]; ok {
+			out[name] = value
+		}
+	}
+	if s.dynamicPrefix != "" {
+		for name, value := range obj {
+			if strings.HasPrefix(name, s.dynamicPrefix) {
+				out[name] = value
+			}
+		}
+	}
+	return out
+}
+
+// propertyNames returns the JSON property names declared by a model struct.
+func propertyNames(model any) map[string]bool {
+	t := reflect.TypeOf(model)
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	names := make(map[string]bool)
+	if t == nil || t.Kind() != reflect.Struct {
+		return names
+	}
+	for i := 0; i < t.NumField(); i++ {
+		tag := t.Field(i).Tag.Get("json")
+		name := strings.Split(tag, ",")[0]
+		if name == "" || name == "-" {
+			continue
+		}
+		names[name] = true
+	}
+	return names
+}
+
+// validDynamicName accepts RFC 8621 dynamic properties such as
+// "header:Subject". Header field names and suffixes are printable ASCII.
+func validDynamicName(name, prefix string) bool {
+	rest, ok := strings.CutPrefix(name, prefix)
+	if !ok || rest == "" {
+		return false
+	}
+	for _, r := range rest {
+		if r < 33 || r > 126 {
+			return false
+		}
+	}
+	return true
+}

@@ -54,7 +54,9 @@ export interface GetRequest {
      */
   ids?: Id[] | null;
   /**
-     * Properties to return, or null for all properties
+     * Properties to return. Null or omitted means all properties; an
+     * explicit empty array returns only `id`. Unknown names are rejected
+     * with invalidArguments.
      * @nullable
      */
   properties?: string[] | null;

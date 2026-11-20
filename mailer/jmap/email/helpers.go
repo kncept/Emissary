@@ -2,10 +2,12 @@ package email
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	mailemail "github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/jmap/internal/base"
@@ -13,17 +15,70 @@ import (
 	"github.com/kncept/Emissary/mailer/metadata"
 )
 
-func (m *JMAPEmail) setBodyValues(e *mailemail.UserEmail, fetchText, fetchHTML bool) {
+func (m *JMAPEmail) setBodyValues(e *mailemail.UserEmail, fetchText, fetchHTML, fetchAll bool, maxBytes int) {
 	values := map[string]EmailBodyValue{}
-	if fetchText && e.Text != "" {
-		values["text1"] = EmailBodyValue{Value: e.Text}
+	if (fetchText || fetchAll) && e.Text != "" {
+		values["text1"] = truncateBodyValue(e.Text, maxBytes, "text/plain")
 	}
-	if fetchHTML && e.HTML != "" {
-		values["html1"] = EmailBodyValue{Value: e.HTML}
+	if (fetchHTML || fetchAll) && e.HTML != "" {
+		values["html1"] = truncateBodyValue(e.HTML, maxBytes, "text/html")
 	}
 	if len(values) > 0 {
 		m.BodyValues = values
 	}
+}
+
+// truncateBodyValue enforces maxBodyValueBytes without splitting a UTF-8
+// codepoint. For HTML it also avoids ending inside a tag where possible, as
+// recommended by RFC 8621 section 4.2.
+func truncateBodyValue(value string, maxBytes int, contentType string) EmailBodyValue {
+	result := EmailBodyValue{Value: value}
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return result
+	}
+	cut := value[:maxBytes]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
+	}
+	if contentType == "text/html" && strings.HasPrefix(strings.ToLower(strings.TrimSpace(cut)), "<") {
+		// Back up to the end of the last complete tag rather than slicing it.
+		if open := strings.LastIndex(cut, "<"); open >= 0 && open > strings.LastIndex(cut, ">") {
+			cut = cut[:open]
+		}
+	}
+	result.Value = cut
+	result.IsTruncated = true
+	return result
+}
+
+// filtered applies bodyProperties to every returned EmailBodyPart and then
+// properties to the Email object itself. State calculation and body-value
+// fetching happen before this so they are independent of the selection.
+func (m *JMAPEmail) filtered(properties, bodyProperties *base.Selection) (json.RawMessage, error) {
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+	for _, key := range []string{"bodyStructure", "textBody", "htmlBody", "attachments"} {
+		value, ok := obj[key]
+		if !ok {
+			continue
+		}
+		filtered, err := bodyProperties.FilterRaw(value)
+		if err != nil {
+			return nil, err
+		}
+		obj[key] = filtered
+	}
+	selected, err := json.Marshal(obj)
+	if err != nil {
+		return nil, err
+	}
+	return properties.FilterRaw(selected)
 }
 
 // jmapAddressList converts a JMAP address property (to, cc, bcc) into internal

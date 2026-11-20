@@ -46,8 +46,12 @@
  */
 import type { Id } from './id';
 
+/**
+ * A Thread object. Only `id` is always returned: a `/get` call may
+ * request any subset of the other properties.
+ */
 export interface Thread {
   id: Id;
   /** Email ids in the thread, oldest first */
-  emailIds: Id[];
+  emailIds?: Id[];
 }

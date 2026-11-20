@@ -56,9 +56,12 @@ export interface EmailGetRequest {
   /**
      * Properties to fetch for each EmailBodyPart. Defaults to
      * partId, blobId, size, name, type, charset, disposition, cid,
-     * language, location.
+     * language, location. An explicit empty array returns no body part
+     * properties; null means the defaults. Unknown names are rejected
+     * with invalidArguments.
+     * @nullable
      */
-  bodyProperties?: string[];
+  bodyProperties?: string[] | null;
   fetchTextBodyValues?: boolean;
   fetchHTMLBodyValues?: boolean;
   fetchAllBodyValues?: boolean;

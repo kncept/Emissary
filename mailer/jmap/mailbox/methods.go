@@ -16,6 +16,10 @@ func (h *Handler) MailboxGet(ctx context.Context, accountID string, args json.Ra
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
+	properties, err := base.ParseSelection(args, "properties", Mailbox{}, "")
+	if err != nil {
+		return nil, err
+	}
 
 	mailboxes := h.getMailboxes(ctx, accountID)
 	var list []Mailbox
@@ -38,10 +42,14 @@ func (h *Handler) MailboxGet(ctx context.Context, accountID string, args json.Ra
 		list = mailboxes
 	}
 
+	selected, err := properties.Filter(list)
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]interface{}{
 		"accountId": accountID,
 		"state":     state,
-		"list":      list,
+		"list":      selected,
 		"notFound":  notFound,
 	}
 	return json.Marshal(resp)

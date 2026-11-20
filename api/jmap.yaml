@@ -699,7 +699,10 @@ components:
           items:
             type: string
           nullable: true
-          description: Properties to return, or null for all properties
+          description: |-
+            Properties to return. Null or omitted means all properties; an
+            explicit empty array returns only `id`. Unknown names are rejected
+            with invalidArguments.
       additionalProperties: true
     ChangesRequest:
       type: object
@@ -893,18 +896,11 @@ components:
       additionalProperties: false
     Mailbox:
       type: object
+      description: |-
+        A Mailbox object. Only `id` is always returned: a `/get` call may
+        request any subset of the other properties.
       required:
       - id
-      - name
-      - parentId
-      - role
-      - sortOrder
-      - totalEmails
-      - unreadEmails
-      - totalThreads
-      - unreadThreads
-      - myRights
-      - isSubscribed
       properties:
         id:
           $ref: '#/components/schemas/Id'
@@ -1251,9 +1247,11 @@ components:
       additionalProperties: true
     Thread:
       type: object
+      description: |-
+        A Thread object. Only `id` is always returned: a `/get` call may
+        request any subset of the other properties.
       required:
       - id
-      - emailIds
       properties:
         id:
           $ref: '#/components/schemas/Id'
@@ -1574,9 +1572,12 @@ components:
           description: |-
             Properties to fetch for each EmailBodyPart. Defaults to
             partId, blobId, size, name, type, charset, disposition, cid,
-            language, location.
+            language, location. An explicit empty array returns no body part
+            properties; null means the defaults. Unknown names are rejected
+            with invalidArguments.
           items:
             type: string
+          nullable: true
         fetchTextBodyValues:
           type: boolean
           default: false
@@ -2067,11 +2068,11 @@ components:
       additionalProperties: true
     Identity:
       type: object
+      description: |-
+        An Identity object. Only `id` is always returned: a `/get` call may
+        request any subset of the other properties.
       required:
       - id
-      - name
-      - email
-      - mayDelete
       properties:
         id:
           $ref: '#/components/schemas/Id'
@@ -2572,14 +2573,11 @@ components:
       additionalProperties: true
     VacationResponse:
       type: object
+      description: |-
+        A VacationResponse object. Only `id` is always returned: a `/get`
+        call may request any subset of the other properties.
       required:
       - id
-      - isEnabled
-      - fromDate
-      - toDate
-      - subject
-      - textBody
-      - htmlBody
       properties:
         id:
           type: string
@@ -2823,10 +2821,6 @@ components:
         requested (which the server rejects with `forbidden`).
       required:
       - id
-      - deviceClientId
-      - verificationCode
-      - expires
-      - types
       properties:
         id:
           $ref: '#/components/schemas/Id'

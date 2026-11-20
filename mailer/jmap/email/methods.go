@@ -19,12 +19,25 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 	var req struct {
 		AccountID           string   `json:"accountId"`
 		IDs                 []string `json:"ids,omitempty"`
-		Properties          []string `json:"properties,omitempty"`
 		FetchTextBodyValues bool     `json:"fetchTextBodyValues"`
 		FetchHTMLBodyValues bool     `json:"fetchHTMLBodyValues"`
+		FetchAllBodyValues  bool     `json:"fetchAllBodyValues"`
+		MaxBodyValueBytes   int      `json:"maxBodyValueBytes"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
+	}
+	properties, err := base.ParseSelection(args, "properties", JMAPEmail{}, "header:")
+	if err != nil {
+		return nil, err
+	}
+	bodyProperties, err := base.ParseSelection(args, "bodyProperties", EmailBodyPart{}, "header:")
+	if err != nil {
+		return nil, err
+	}
+	bodyProperties = bodyProperties.WithRecursion("subParts")
+	if req.MaxBodyValueBytes < 0 {
+		return nil, base.Errorf("invalidArguments", "maxBodyValueBytes must not be negative")
 	}
 
 	// Email/get must only expose messages in the requested account. When a
@@ -41,30 +54,39 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 		emailMap[e.Ref.ID] = e
 	}
 
-	var list []JMAPEmail
+	var list []json.RawMessage
 	var notFound []string
+
+	appendEmail := func(e *mailemail.ListedEmail) error {
+		jmapEmail, err := h.toJMAPEmail(ctx, e)
+		if err != nil {
+			return err
+		}
+		jmapEmail.setBodyValues(e.Email, req.FetchTextBodyValues, req.FetchHTMLBodyValues,
+			req.FetchAllBodyValues, req.MaxBodyValueBytes)
+		item, err := jmapEmail.filtered(properties, bodyProperties)
+		if err != nil {
+			return err
+		}
+		list = append(list, item)
+		return nil
+	}
 
 	if len(req.IDs) > 0 {
 		for _, id := range req.IDs {
 			if e, ok := emailMap[id]; ok {
-				jmapEmail, err := h.toJMAPEmail(ctx, e)
-				if err != nil {
+				if err := appendEmail(e); err != nil {
 					return nil, err
 				}
-				jmapEmail.setBodyValues(e.Email, req.FetchTextBodyValues, req.FetchHTMLBodyValues)
-				list = append(list, *jmapEmail)
 			} else {
 				notFound = append(notFound, id)
 			}
 		}
 	} else {
 		for _, e := range emails {
-			jmapEmail, err := h.toJMAPEmail(ctx, e)
-			if err != nil {
+			if err := appendEmail(e); err != nil {
 				return nil, err
 			}
-			jmapEmail.setBodyValues(e.Email, req.FetchTextBodyValues, req.FetchHTMLBodyValues)
-			list = append(list, *jmapEmail)
 		}
 	}
 

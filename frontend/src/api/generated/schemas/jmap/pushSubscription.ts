@@ -55,7 +55,7 @@ import type { UTCDate } from './uTCDate';
  */
 export interface PushSubscription {
   id: Id;
-  deviceClientId: string;
+  deviceClientId?: string;
   /**
      * HTTPS URL to which the server POSTs push messages
      * @pattern ^https://
@@ -63,8 +63,8 @@ export interface PushSubscription {
   url?: string;
   keys?: PushKeys | null;
   /** @nullable */
-  verificationCode: string | null;
-  expires: UTCDate | null;
+  verificationCode?: string | null;
+  expires?: UTCDate | null;
   /** @nullable */
-  types: string[] | null;
+  types?: string[] | null;
 }

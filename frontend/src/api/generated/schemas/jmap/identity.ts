@@ -47,16 +47,20 @@
 import type { EmailAddress } from './emailAddress';
 import type { Id } from './id';
 
+/**
+ * An Identity object. Only `id` is always returned: a `/get` call may
+ * request any subset of the other properties.
+ */
 export interface Identity {
   id: Id;
-  name: string;
-  email: string;
+  name?: string;
+  email?: string;
   /** @nullable */
   replyTo?: EmailAddress[] | null;
   /** @nullable */
   bcc?: EmailAddress[] | null;
   textSignature?: string;
   htmlSignature?: string;
-  mayDelete: boolean;
+  mayDelete?: boolean;
   [key: string]: unknown;
  }
