@@ -14,6 +14,7 @@ import (
 	supportapi "github.com/kncept/Emissary/api/support/generated"
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/receiver"
+	"github.com/kncept/Emissary/mailer/sender"
 	"github.com/kncept/Emissary/mailer/storage"
 )
 
@@ -56,7 +57,7 @@ func newReceiverSupportTestHandler(t *testing.T, lister SESIdentityLister, store
 			domain:        "example.com",
 		},
 		UserDomain:          "example.com",
-		Sender:              &captureSender{},
+		Sender:              sender.NewInMemoryRecording(),
 		ReceiverConfig:      config,
 		ReceiverConfigStore: store,
 

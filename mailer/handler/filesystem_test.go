@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/kncept/Emissary/mailer/sender"
 )
 
 func TestNew_FilesystemBackends(t *testing.T) {
@@ -18,7 +20,7 @@ func TestNew_FilesystemBackends(t *testing.T) {
 		MetadataPath:    filepath.Join(root, "metadata"),
 		UserDomain:      "example.com",
 		UserManagerType: "filesystem",
-		Sender:          &captureSender{},
+		Sender:          sender.NewInMemoryRecording(),
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

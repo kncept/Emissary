@@ -487,19 +487,6 @@ func TestEmailSetStoresHTMLBodyAndEmailGetReturnsIt(t *testing.T) {
 	}
 }
 
-type recordingSender struct {
-	messages []*email.UserEmail
-}
-
-func (s *recordingSender) Name() string { return "recording" }
-func (s *recordingSender) Send(_ context.Context, message *email.UserEmail) error {
-	s.messages = append(s.messages, message)
-	return nil
-}
-func (s *recordingSender) SendBounce(_ context.Context, _, _, _, _ string, _ *email.UserEmail) error {
-	return nil
-}
-
 func TestEmailSubmissionSetForwardsHTMLBody(t *testing.T) {
 	const accountID = "alice@example.com"
 	store := storage.NewMemoryStorage()
@@ -510,7 +497,7 @@ func TestEmailSubmissionSetForwardsHTMLBody(t *testing.T) {
 		Text:    "hello",
 		HTML:    "<p>hello</p>",
 	})
-	capture := &recordingSender{}
+	capture := sender.NewInMemoryRecording()
 	handler := NewHandler(store, metadata.NewMemoryMetadata(),
 		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
 		capture)
@@ -522,10 +509,10 @@ func TestEmailSubmissionSetForwardsHTMLBody(t *testing.T) {
 	if _, err := handler.EmailSubmissionSet(ctx, accountID, args); err != nil {
 		t.Fatalf("EmailSubmissionSet() error = %v", err)
 	}
-	if len(capture.messages) != 1 {
-		t.Fatalf("sent %d messages, want 1", len(capture.messages))
+	if len(capture.Sent) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(capture.Sent))
 	}
-	msg := capture.messages[0]
+	msg := capture.Sent[0]
 	if msg.Text != "hello" || msg.HTML != "<p>hello</p>" {
 		t.Fatalf("sent bodies = text %q, html %q", msg.Text, msg.HTML)
 	}
@@ -546,7 +533,7 @@ func TestEmailSubmissionSetCarriesThreadHeaders(t *testing.T) {
 		InReplyTo:  []string{"<original-1@example.com>"},
 		References: []string{"<first@example.com>", "<original-1@example.com>"},
 	})
-	capture := &recordingSender{}
+	capture := sender.NewInMemoryRecording()
 	handler := NewHandler(store, metadata.NewMemoryMetadata(),
 		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
 		capture)
@@ -558,10 +545,10 @@ func TestEmailSubmissionSetCarriesThreadHeaders(t *testing.T) {
 	if _, err := handler.EmailSubmissionSet(ctx, accountID, args); err != nil {
 		t.Fatalf("EmailSubmissionSet() error = %v", err)
 	}
-	if len(capture.messages) != 1 {
-		t.Fatalf("sent %d messages, want 1", len(capture.messages))
+	if len(capture.Sent) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(capture.Sent))
 	}
-	msg := capture.messages[0]
+	msg := capture.Sent[0]
 	if len(msg.InReplyTo) != 1 || msg.InReplyTo[0] != "<original-1@example.com>" {
 		t.Errorf("In-Reply-To = %v, want [<original-1@example.com>]", msg.InReplyTo)
 	}
@@ -586,7 +573,7 @@ func TestEmailSetCreateLocksFromAndGeneratesMessageID(t *testing.T) {
 		store := storage.NewMemoryStorage()
 		handler := NewHandler(store, metadata.NewMemoryMetadata(),
 			usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
-			&recordingSender{})
+			sender.NewInMemoryRecording())
 		ctx := ContextWithClaims(context.Background(), &auth.Claims{Subject: caller})
 		args := json.RawMessage(fmt.Sprintf(
 			`{"accountId":%q,"create":{"c1":{"from":[{"name":"","email":"carol@example.com"}],"to":[{"name":"","email":"dave@example.com"}],"subject":"s","bodyValues":{"text1":{"value":"hi"}},"textBody":[{"partId":"text1","size":2}]}}}`,
@@ -623,7 +610,7 @@ func TestEmailSetCreateLocksFromAndGeneratesMessageID(t *testing.T) {
 		store := storage.NewMemoryStorage()
 		handler := NewHandler(store, metadata.NewMemoryMetadata(),
 			usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
-			&recordingSender{})
+			sender.NewInMemoryRecording())
 		ctx := ContextWithClaims(context.Background(), &auth.Claims{Subject: caller, EmissaryUserManagement: true})
 		args := json.RawMessage(fmt.Sprintf(
 			`{"accountId":%q,"create":{"c1":{"from":[{"name":"","email":%q}],"to":[{"name":"","email":"dave@example.com"}],"subject":"s","bodyValues":{"text1":{"value":"hi"}},"textBody":[{"partId":"text1","size":2}]}}}`,
@@ -672,7 +659,7 @@ func TestEmailGetExposesThreadHeaders(t *testing.T) {
 	})
 	handler := NewHandler(store, metadata.NewMemoryMetadata(),
 		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
-		&recordingSender{})
+		sender.NewInMemoryRecording())
 
 	args := json.RawMessage(fmt.Sprintf(
 		`{"accountId":%q,"ids":["email-1"]}`, accountID))
@@ -787,7 +774,7 @@ func TestEmailSubmissionSetLocksFrom(t *testing.T) {
 				Subject: "subject",
 				Text:    "body",
 			})
-			capture := &recordingSender{}
+			capture := sender.NewInMemoryRecording()
 			handler := NewHandler(store, metadata.NewMemoryMetadata(),
 				usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
 				capture)
@@ -824,16 +811,16 @@ func TestEmailSubmissionSetLocksFrom(t *testing.T) {
 				if !ok || problem.Type != tc.wantError {
 					t.Fatalf("notCreated = %+v, want type %q", resp.NotCreated, tc.wantError)
 				}
-				if len(capture.messages) != 0 {
-					t.Fatalf("message was sent despite rejected From: %+v", capture.messages)
+				if len(capture.Sent) != 0 {
+					t.Fatalf("message was sent despite rejected From: %+v", capture.Sent)
 				}
 				return
 			}
 
-			if len(resp.Created) != 1 || len(capture.messages) != 1 {
-				t.Fatalf("created = %+v, sent = %+v, want one of each", resp.Created, capture.messages)
+			if len(resp.Created) != 1 || len(capture.Sent) != 1 {
+				t.Fatalf("created = %+v, sent = %+v, want one of each", resp.Created, capture.Sent)
 			}
-			if got := capture.messages[0].From.Address; got != tc.wantFrom {
+			if got := capture.Sent[0].From.Address; got != tc.wantFrom {
 				t.Errorf("sent From = %q, want %q", got, tc.wantFrom)
 			}
 		})
@@ -873,7 +860,7 @@ func TestEmailSubmissionSetMasqueradeReplyTo(t *testing.T) {
 				Subject: "subject",
 				Text:    "body",
 			})
-			capture := &recordingSender{}
+			capture := sender.NewInMemoryRecording()
 			handler := NewHandler(store, metadata.NewMemoryMetadata(),
 				usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
 				capture)
@@ -903,19 +890,19 @@ func TestEmailSubmissionSetMasqueradeReplyTo(t *testing.T) {
 				if got := resp.NotCreated["s1"].Type; got != tc.wantError {
 					t.Fatalf("notCreated type = %q, want %q (%+v)", got, tc.wantError, resp.NotCreated)
 				}
-				if len(capture.messages) != 0 {
-					t.Fatalf("message was sent despite Reply-To mismatch: %+v", capture.messages)
+				if len(capture.Sent) != 0 {
+					t.Fatalf("message was sent despite Reply-To mismatch: %+v", capture.Sent)
 				}
 				return
 			}
 
-			if len(resp.Created) != 1 || len(capture.messages) != 1 {
-				t.Fatalf("created = %+v, sent = %+v, want one of each", resp.Created, capture.messages)
+			if len(resp.Created) != 1 || len(capture.Sent) != 1 {
+				t.Fatalf("created = %+v, sent = %+v, want one of each", resp.Created, capture.Sent)
 			}
-			if got := capture.messages[0].From.Address; got != target {
+			if got := capture.Sent[0].From.Address; got != target {
 				t.Errorf("sent From = %q, want %q", got, target)
 			}
-			got := capture.messages[0].ReplyTo
+			got := capture.Sent[0].ReplyTo
 			if len(got) != len(tc.wantReplyTo) {
 				t.Fatalf("Reply-To = %+v, want %v", got, tc.wantReplyTo)
 			}

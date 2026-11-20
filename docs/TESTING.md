@@ -63,10 +63,11 @@ JSON, directory creation) plus a concurrency test. `usermanager`
 covers `none` and `ddb` (through a fake DynamoDB client), and
 that `ldap` constructs and selects but panics with `"unimplemented"`
 for ordinary users.
-`sender` covers the log sender and the MTA sender end to end over a
-`net.Pipe` SMTP session (MX preference/failover, recipient grouping, Bcc
-envelope handling, bounces) plus DMARC/SPF alignment checks with mox's mock
-DNS resolver. The SES sender is only constructed.
+`sender` covers the log sender, the in-memory recording sender used by tests,
+and the MTA sender end to end over a `net.Pipe` SMTP session (MX
+preference/failover, recipient grouping, Bcc envelope handling, bounces) plus
+DMARC/SPF alignment checks with mox's mock DNS resolver. The SES sender is only
+constructed.
 
 ### HTTP handler
 
@@ -102,7 +103,8 @@ no automated browser test today.
 
 - **In-memory implementations are production code**, shipped for
   AWS-free runs, and reused as test doubles. There is no parallel mock
-  of them to drift out of sync.
+  of them to drift out of sync; the sole test-only exception is
+  `sender.InMemoryRecording`, described below.
 - **AWS SDK clients are replaced by small hand-written fakes** that
   implement the same method set (`fakeS3` in
   `mailer/storage/s3_test.go`) and return real SDK output/error types
@@ -110,8 +112,10 @@ no automated browser test today.
   tests can assert wire-level behavior — e.g. that delivered messages
   are fetched by their full `.eml` object key, while legacy SES staging
   keys are fetched without an `.eml` suffix.
-- **`captureSender`** (in `mailer/handler/handler_test.go`) records
-  sent messages so from-address rules can be asserted without SES.
+- **`sender.InMemoryRecording`** (in `mailer/sender`) is the shared
+  test-only sender that records messages in its public `Sent` slice (and bounce
+  calls in `Bounces`). Handler, JMAP and receiver tests use it to assert send
+  and bounce behavior without SES.
 - **No mocking framework** — the standard `testing` package, plain
   structs and table-driven subtests throughout.
 - **Sentinel errors** (`storage.ErrNotFound`,

@@ -11,8 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/metadata"
+	"github.com/kncept/Emissary/mailer/sender"
 	"github.com/kncept/Emissary/mailer/storage"
 	"github.com/kncept/Emissary/mailer/usermanager"
 )
@@ -46,25 +46,6 @@ func (fakeUserManager) Lookup(_ context.Context, username string) (*usermanager.
 }
 func (fakeUserManager) Autocomplete(context.Context, string) ([]string, error) { return nil, nil }
 
-type bounceCall struct {
-	messageID    string
-	bounceSender string
-	recipient    string
-	bounceType   string
-	original     *email.UserEmail
-}
-
-type fakeSender struct {
-	bounces []bounceCall
-}
-
-func (*fakeSender) Name() string                                 { return "fake" }
-func (*fakeSender) Send(context.Context, *email.UserEmail) error { return nil }
-func (s *fakeSender) SendBounce(_ context.Context, originalMessageID, bounceSender, recipient, bounceType string, original *email.UserEmail) error {
-	s.bounces = append(s.bounces, bounceCall{originalMessageID, bounceSender, recipient, bounceType, original})
-	return nil
-}
-
 // rejectingUserManager treats one address as unknown so the receiver bounces it.
 type rejectingUserManager struct {
 	fakeUserManager
@@ -88,7 +69,7 @@ func newTestReceiverWithMeta(client S3Client, meta metadata.MetadataStore) (*Rec
 		Bucket:      "bucket",
 		Domain:      "example.com",
 		UserManager: fakeUserManager{},
-		Sender:      &fakeSender{},
+		Sender:      sender.NewInMemoryRecording(),
 		SESClient:   client,
 		Storage:     emailStore,
 		Metadata:    meta,
@@ -148,8 +129,8 @@ func TestProcessMessageRoutesByEnvelopeRecipientNotToHeader(t *testing.T) {
 	if err != nil || len(headed) != 0 {
 		t.Errorf("To-header emails = %v, %v; want no delivery", headed, err)
 	}
-	if len(mailSender.bounces) != 0 {
-		t.Errorf("bounces = %+v, want none", mailSender.bounces)
+	if len(mailSender.Bounces) != 0 {
+		t.Errorf("bounces = %+v, want none", mailSender.Bounces)
 	}
 }
 
@@ -167,8 +148,8 @@ func TestProcessMessageWithoutEnvelopeRecipientIsSkipped(t *testing.T) {
 	if err != nil || len(listed) != 0 {
 		t.Errorf("emails = %v, %v; want no delivery without an envelope recipient", listed, err)
 	}
-	if len(mailSender.bounces) != 0 {
-		t.Errorf("bounces = %+v, want none", mailSender.bounces)
+	if len(mailSender.Bounces) != 0 {
+		t.Errorf("bounces = %+v, want none", mailSender.Bounces)
 	}
 	if _, ok := client.objects[key]; ok {
 		t.Error("staging object was not deleted")
@@ -240,7 +221,7 @@ func TestProcessMessageSendsBounceThroughSender(t *testing.T) {
 	raw := receivedHeader("unknown@example.com") +
 		"From: sender@example.com\r\nTo: unknown@example.com\r\nSubject: hi\r\n\r\nbody\r\n"
 	client := &fakeS3{objects: map[string][]byte{key: []byte(raw)}}
-	mailSender := &fakeSender{}
+	mailSender := sender.NewInMemoryRecording()
 	r, err := NewReceiver(ReceiverConfig{
 		Bucket:      "bucket",
 		Domain:      "example.com",
@@ -256,24 +237,24 @@ func TestProcessMessageSendsBounceThroughSender(t *testing.T) {
 		t.Fatalf("ProcessMessage() error = %v", err)
 	}
 
-	if len(mailSender.bounces) != 1 {
-		t.Fatalf("bounces = %+v, want one bounce through the sender", mailSender.bounces)
+	if len(mailSender.Bounces) != 1 {
+		t.Fatalf("bounces = %+v, want one bounce through the sender", mailSender.Bounces)
 	}
-	bounce := mailSender.bounces[0]
-	if bounce.messageID != key {
-		t.Errorf("bounce message id = %q, want %q", bounce.messageID, key)
+	bounce := mailSender.Bounces[0]
+	if bounce.OriginalMessageID != key {
+		t.Errorf("bounce message id = %q, want %q", bounce.OriginalMessageID, key)
 	}
-	if bounce.bounceSender != "mailer-daemon@example.com" {
-		t.Errorf("bounce sender = %q, want mailer-daemon@example.com", bounce.bounceSender)
+	if bounce.BounceSender != "mailer-daemon@example.com" {
+		t.Errorf("bounce sender = %q, want mailer-daemon@example.com", bounce.BounceSender)
 	}
-	if bounce.recipient != "unknown@example.com" {
-		t.Errorf("bounce recipient = %q, want unknown@example.com", bounce.recipient)
+	if bounce.Recipient != "unknown@example.com" {
+		t.Errorf("bounce recipient = %q, want unknown@example.com", bounce.Recipient)
 	}
-	if bounce.bounceType != "UserUnknown" {
-		t.Errorf("bounce type = %q, want UserUnknown", bounce.bounceType)
+	if bounce.BounceType != "UserUnknown" {
+		t.Errorf("bounce type = %q, want UserUnknown", bounce.BounceType)
 	}
-	if bounce.original == nil || bounce.original.Subject != "hi" {
-		t.Errorf("bounce original = %+v, want the original message", bounce.original)
+	if bounce.OriginalMessage == nil || bounce.OriginalMessage.Subject != "hi" {
+		t.Errorf("bounce original = %+v, want the original message", bounce.OriginalMessage)
 	}
 }
 
@@ -282,7 +263,7 @@ func TestNewReceiverRequiresStorage(t *testing.T) {
 		Bucket:      "bucket",
 		Domain:      "example.com",
 		UserManager: fakeUserManager{},
-		Sender:      &fakeSender{},
+		Sender:      sender.NewInMemoryRecording(),
 		SESClient:   &fakeS3{objects: map[string][]byte{}},
 	})
 	if err == nil {
@@ -297,7 +278,7 @@ func TestNewReceiverRejectsInvalidIdentityConfig(t *testing.T) {
 		Bucket:         "bucket",
 		Domain:         "example.com",
 		UserManager:    fakeUserManager{},
-		Sender:         &fakeSender{},
+		Sender:         sender.NewInMemoryRecording(),
 		SESClient:      &fakeS3{objects: map[string][]byte{}},
 		Storage:        storage.NewMemoryStorage(),
 		IdentityConfig: identity,
@@ -328,9 +309,9 @@ func receivedHeader(recipients ...string) string {
 
 // newRoutingTestReceiver builds a receiver with an explicit identity config
 // and returns its store and sender so tests can inspect the outcomes.
-func newRoutingTestReceiver(identity MailIdentityConfig, users usermanager.UserManager, client S3Client) (*Receiver, *storage.MemoryStorage, *fakeSender) {
+func newRoutingTestReceiver(identity MailIdentityConfig, users usermanager.UserManager, client S3Client) (*Receiver, *storage.MemoryStorage, *sender.InMemoryRecording) {
 	emailStore := storage.NewMemoryStorage()
-	mailSender := &fakeSender{}
+	mailSender := sender.NewInMemoryRecording()
 	r, err := NewReceiver(ReceiverConfig{
 		Bucket:         "bucket",
 		Domain:         "example.com",
@@ -369,8 +350,8 @@ func TestProcessMessageDeliversToMailIdentityWithoutAUser(t *testing.T) {
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("mail identity emails = %v, %v; want one delivery", listed, err)
 	}
-	if len(mailSender.bounces) != 0 {
-		t.Errorf("bounces = %+v, want none", mailSender.bounces)
+	if len(mailSender.Bounces) != 0 {
+		t.Errorf("bounces = %+v, want none", mailSender.Bounces)
 	}
 }
 
@@ -395,8 +376,8 @@ func TestProcessMessageFallsThroughToRecipientIdentity(t *testing.T) {
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("recipient-identity emails = %v, %v; want one delivery", listed, err)
 	}
-	if len(mailSender.bounces) != 0 {
-		t.Errorf("bounces = %+v, want none", mailSender.bounces)
+	if len(mailSender.Bounces) != 0 {
+		t.Errorf("bounces = %+v, want none", mailSender.Bounces)
 	}
 }
 
@@ -413,8 +394,8 @@ func TestProcessMessageBounceRuleOverridesUserLookup(t *testing.T) {
 	if err := r.ProcessMessage(context.Background(), key); err != nil {
 		t.Fatalf("ProcessMessage() error = %v", err)
 	}
-	if len(mailSender.bounces) != 1 || mailSender.bounces[0].recipient != "blocked@example.com" {
-		t.Fatalf("bounces = %+v, want one bounce for blocked@example.com", mailSender.bounces)
+	if len(mailSender.Bounces) != 1 || mailSender.Bounces[0].Recipient != "blocked@example.com" {
+		t.Fatalf("bounces = %+v, want one bounce for blocked@example.com", mailSender.Bounces)
 	}
 	listed, err := emailStore.ListEmails(context.Background(), "blocked@example.com", "inbox")
 	if err != nil || len(listed) != 0 {
@@ -437,8 +418,8 @@ func TestProcessMessageDropRuleDiscardsWithoutBounce(t *testing.T) {
 	if err := r.ProcessMessage(context.Background(), key); err != nil {
 		t.Fatalf("ProcessMessage() error = %v", err)
 	}
-	if len(mailSender.bounces) != 0 {
-		t.Errorf("bounces = %+v, want none for an explicit drop", mailSender.bounces)
+	if len(mailSender.Bounces) != 0 {
+		t.Errorf("bounces = %+v, want none for an explicit drop", mailSender.Bounces)
 	}
 	listed, err := emailStore.ListEmails(context.Background(), "dropped@example.com", "inbox")
 	if err != nil || len(listed) != 0 {
@@ -466,8 +447,8 @@ func TestProcessMessageDropRuleTakesPrecedenceOverDelivery(t *testing.T) {
 	if err != nil || len(listed) != 0 {
 		t.Errorf("emails = %v, %v; want Drop to win over DeliverToUser", listed, err)
 	}
-	if len(mailSender.bounces) != 0 {
-		t.Errorf("bounces = %+v, want none", mailSender.bounces)
+	if len(mailSender.Bounces) != 0 {
+		t.Errorf("bounces = %+v, want none", mailSender.Bounces)
 	}
 }
 
@@ -484,8 +465,8 @@ func TestProcessMessageMatchesIdentityCaseInsensitively(t *testing.T) {
 	if err := r.ProcessMessage(context.Background(), key); err != nil {
 		t.Fatalf("ProcessMessage() error = %v", err)
 	}
-	if len(mailSender.bounces) != 1 || mailSender.bounces[0].recipient != "alias@example.com" {
-		t.Fatalf("bounces = %+v, want one bounce for the normalised address", mailSender.bounces)
+	if len(mailSender.Bounces) != 1 || mailSender.Bounces[0].Recipient != "alias@example.com" {
+		t.Fatalf("bounces = %+v, want one bounce for the normalised address", mailSender.Bounces)
 	}
 }
 
@@ -514,8 +495,8 @@ func TestProcessMessageFetchesRulesByMailIdentity(t *testing.T) {
 	// Each recipient must be handled by the rules for its own mail identity:
 	// the catchall's drop, the blocked identity's bounce, and the fallback's
 	// DeliverToUser for an unconfigured identity.
-	if len(mailSender.bounces) != 1 || mailSender.bounces[0].recipient != "poster@blocked.example.com" {
-		t.Fatalf("bounces = %+v, want one bounce for poster@blocked.example.com", mailSender.bounces)
+	if len(mailSender.Bounces) != 1 || mailSender.Bounces[0].Recipient != "poster@blocked.example.com" {
+		t.Fatalf("bounces = %+v, want one bounce for poster@blocked.example.com", mailSender.Bounces)
 	}
 	for _, dropped := range []string{"reader@news.example.com", "poster@blocked.example.com"} {
 		listed, err := emailStore.ListEmails(context.Background(), dropped, "inbox")
@@ -544,8 +525,8 @@ func TestProcessMessageStopsAtFirstApplicableRule(t *testing.T) {
 	if err := r.ProcessMessage(context.Background(), key); err != nil {
 		t.Fatalf("ProcessMessage() error = %v", err)
 	}
-	if len(mailSender.bounces) != 0 {
-		t.Errorf("bounces = %+v, want none after the first rule applied", mailSender.bounces)
+	if len(mailSender.Bounces) != 0 {
+		t.Errorf("bounces = %+v, want none after the first rule applied", mailSender.Bounces)
 	}
 	for _, mailbox := range []string{"alice@example.com", "catchall@example.com"} {
 		listed, err := emailStore.ListEmails(context.Background(), mailbox, "inbox")
@@ -585,8 +566,8 @@ func TestProcessMessageAppliesRulesInOrder(t *testing.T) {
 			if err := r.ProcessMessage(context.Background(), key); err != nil {
 				t.Fatalf("ProcessMessage() error = %v", err)
 			}
-			if got := len(mailSender.bounces) > 0; got != tt.wantBounce {
-				t.Errorf("bounced = %t, want %t (%+v)", got, tt.wantBounce, mailSender.bounces)
+			if got := len(mailSender.Bounces) > 0; got != tt.wantBounce {
+				t.Errorf("bounced = %t, want %t (%+v)", got, tt.wantBounce, mailSender.Bounces)
 			}
 			listed, err := emailStore.ListEmails(context.Background(), "alice@example.com", "inbox")
 			if err != nil {
@@ -635,8 +616,8 @@ func TestProcessMessageSkipsRulesThatDoNotApply(t *testing.T) {
 			if err := r.ProcessMessage(context.Background(), key); err != nil {
 				t.Fatalf("ProcessMessage() error = %v", err)
 			}
-			if got := len(mailSender.bounces) > 0; got != tt.wantBounce {
-				t.Errorf("bounced = %t, want %t (%+v)", got, tt.wantBounce, mailSender.bounces)
+			if got := len(mailSender.Bounces) > 0; got != tt.wantBounce {
+				t.Errorf("bounced = %t, want %t (%+v)", got, tt.wantBounce, mailSender.Bounces)
 			}
 			if tt.wantMailbox == "" {
 				return

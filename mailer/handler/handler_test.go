@@ -15,6 +15,7 @@ import (
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/metadata"
+	"github.com/kncept/Emissary/mailer/sender"
 	"github.com/kncept/Emissary/mailer/session"
 	"github.com/kncept/Emissary/mailer/storage"
 	"github.com/kncept/Emissary/mailer/usermanager"
@@ -30,19 +31,6 @@ type EmailResponse struct {
 	Timestamp string `json:"timestamp"`
 	Read      bool   `json:"read"`
 	Flagged   bool   `json:"flagged"`
-}
-
-type captureSender struct {
-	messages []*email.UserEmail
-}
-
-func (s *captureSender) Name() string { return "capture" }
-func (s *captureSender) Send(_ context.Context, message *email.UserEmail) error {
-	s.messages = append(s.messages, message)
-	return nil
-}
-func (s *captureSender) SendBounce(_ context.Context, originalMessageID, bounceSender, recipient, bounceType string, originalMessage *email.UserEmail) error {
-	return nil
 }
 
 // failingDeleteMetadata delegates everything except Delete, which always
@@ -99,10 +87,10 @@ func (m *testUserManager) user(username string) (*usermanager.User, error) {
 	return &usermanager.User{Email: address}, nil
 }
 
-func newHandlerForTest(t *testing.T, adminPassword string) (http.Handler, *storage.MemoryStorage, *captureSender) {
+func newHandlerForTest(t *testing.T, adminPassword string) (http.Handler, *storage.MemoryStorage, *sender.InMemoryRecording) {
 	t.Helper()
 	store := storage.NewMemoryStorage()
-	sender := &captureSender{}
+	mailSender := sender.NewInMemoryRecording()
 	h, err := New(HandlerConfig{
 		AuthUser:     "admin",
 		AuthPass:     adminPassword,
@@ -116,12 +104,12 @@ func newHandlerForTest(t *testing.T, adminPassword string) (http.Handler, *stora
 			domain:        "example.com",
 		},
 		UserDomain: "example.com",
-		Sender:     sender,
+		Sender:     mailSender,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	return h, store, sender
+	return h, store, mailSender
 }
 
 func request(t *testing.T, h http.Handler, method, target, body, token string) *httptest.ResponseRecorder {
@@ -734,7 +722,7 @@ func TestBlankAdminPasswordDisablesAdminLogin(t *testing.T) {
 // authenticated account (or the masquerade target account for a user
 // manager) and that a client-supplied From is ignored.
 func TestSendEmailFromRules(t *testing.T) {
-	h, store, sender := newHandlerForTest(t, "secret")
+	h, store, mailSender := newHandlerForTest(t, "secret")
 	addEmail(store, "original", "alice@example.com", "bob@example.com")
 
 	_, userToken, _ := login(t, h, "bob@example.com", "anything")
@@ -760,10 +748,10 @@ func TestSendEmailFromRules(t *testing.T) {
 		}, "s1"},
 	})
 
-	if len(sender.messages) == 0 {
+	if len(mailSender.Sent) == 0 {
 		t.Fatal("no email was sent")
 	}
-	if got := sender.messages[len(sender.messages)-1].From.Address; got != "bob@example.com" {
+	if got := mailSender.Sent[len(mailSender.Sent)-1].From.Address; got != "bob@example.com" {
 		t.Errorf("ordinary user from = %q, want bob@example.com", got)
 	}
 
@@ -789,10 +777,10 @@ func TestSendEmailFromRules(t *testing.T) {
 		}, "s1"},
 	})
 
-	if len(sender.messages) < 2 {
+	if len(mailSender.Sent) < 2 {
 		t.Fatal("masqueraded email was not sent")
 	}
-	if got := sender.messages[len(sender.messages)-1].From.Address; got != "carol@example.com" {
+	if got := mailSender.Sent[len(mailSender.Sent)-1].From.Address; got != "carol@example.com" {
 		t.Errorf("masqueraded from = %q, want carol@example.com", got)
 	}
 
@@ -871,10 +859,10 @@ func TestSendEmailFromRules(t *testing.T) {
 		}, "s1"},
 	})
 
-	if len(sender.messages) < 3 {
+	if len(mailSender.Sent) < 3 {
 		t.Fatal("reply email was not sent")
 	}
-	if got := sender.messages[len(sender.messages)-1].From.Address; got != "bob@example.com" {
+	if got := mailSender.Sent[len(mailSender.Sent)-1].From.Address; got != "bob@example.com" {
 		t.Errorf("reply from = %q, want bob@example.com", got)
 	}
 }
@@ -950,8 +938,8 @@ func TestSendEmailFromVerification(t *testing.T) {
 	if notCreated := submissionNotCreated(t, resp); len(notCreated) > 0 {
 		t.Fatalf("submission failed: %v", notCreated)
 	}
-	if len(capture.messages) != 1 || capture.messages[0].From.Address != "bob@example.com" {
-		t.Fatalf("expected one message from bob@example.com, got %+v", capture.messages)
+	if len(capture.Sent) != 1 || capture.Sent[0].From.Address != "bob@example.com" {
+		t.Fatalf("expected one message from bob@example.com, got %+v", capture.Sent)
 	}
 
 	// A user with masquerade permission sends as the target account.
@@ -967,8 +955,8 @@ func TestSendEmailFromVerification(t *testing.T) {
 	if notCreated := submissionNotCreated(t, resp); len(notCreated) > 0 {
 		t.Fatalf("masquerading submission failed: %v", notCreated)
 	}
-	if len(capture.messages) != 2 || capture.messages[1].From.Address != "carol@example.com" {
-		t.Fatalf("expected second message from carol@example.com, got %+v", capture.messages)
+	if len(capture.Sent) != 2 || capture.Sent[1].From.Address != "carol@example.com" {
+		t.Fatalf("expected second message from carol@example.com, got %+v", capture.Sent)
 	}
 }
 
@@ -1033,10 +1021,10 @@ func TestSendEmailWithCreationReference(t *testing.T) {
 		}
 	}
 
-	if len(capture.messages) != 1 {
-		t.Fatalf("sent %d messages, want 1: %+v", len(capture.messages), capture.messages)
+	if len(capture.Sent) != 1 {
+		t.Fatalf("sent %d messages, want 1: %+v", len(capture.Sent), capture.Sent)
 	}
-	if got := capture.messages[0].From.Address; got != "bob@example.com" {
+	if got := capture.Sent[0].From.Address; got != "bob@example.com" {
 		t.Errorf("sent From = %q, want bob@example.com", got)
 	}
 
@@ -1056,7 +1044,7 @@ func TestSendEmailWithCreationReference(t *testing.T) {
 }
 
 func TestSendEmailWithCCAndBCC(t *testing.T) {
-	h, _, sender := newHandlerForTest(t, "secret")
+	h, _, mailSender := newHandlerForTest(t, "secret")
 
 	_, userToken, _ := login(t, h, "bob@example.com", "anything")
 
@@ -1125,10 +1113,10 @@ func TestSendEmailWithCCAndBCC(t *testing.T) {
 		}, "s1"},
 	})
 
-	if len(sender.messages) == 0 {
+	if len(mailSender.Sent) == 0 {
 		t.Fatal("no email was sent")
 	}
-	msg := sender.messages[len(sender.messages)-1]
+	msg := mailSender.Sent[len(mailSender.Sent)-1]
 	if len(msg.To) != 1 || msg.To[0].Address != "dave@example.com" {
 		t.Errorf("to = %+v, want [dave@example.com]", msg.To)
 	}
@@ -1202,10 +1190,10 @@ func TestSendEmailWithCCAndBCC(t *testing.T) {
 		}, "s1"},
 	})
 
-	if len(sender.messages) < 2 {
+	if len(mailSender.Sent) < 2 {
 		t.Fatal("second email was not sent")
 	}
-	msg = sender.messages[len(sender.messages)-1]
+	msg = mailSender.Sent[len(mailSender.Sent)-1]
 	if len(msg.To) != 2 || msg.To[0].Address != "alice@example.com" || msg.To[1].Address != "carol@example.com" {
 		t.Errorf("multi to = %+v, want [alice@example.com, carol@example.com]", msg.To)
 	}
@@ -1344,7 +1332,7 @@ func newHandlerWithClockForTest(t *testing.T, adminPassword string, now func() t
 	}
 	store := storage.NewMemoryStorage()
 	sessions := session.NewMemorySessionStore()
-	sender := &captureSender{}
+	mailSender := sender.NewInMemoryRecording()
 	authenticator := auth.NewWithUserManager(users, sessions, "secret", time.Hour, "", "", "admin")
 	authenticator.SetNow(now)
 	cfg := HandlerConfig{
@@ -1356,9 +1344,9 @@ func newHandlerWithClockForTest(t *testing.T, adminPassword string, now func() t
 		Storage:      store,
 		UserManager:  users,
 		UserDomain:   "example.com",
-		Sender:       sender,
+		Sender:       mailSender,
 	}
-	return newHandler(authenticator, store, metadata.NewMemoryMetadata(), sessions, sender, users, cfg), authenticator
+	return newHandler(authenticator, store, metadata.NewMemoryMetadata(), sessions, mailSender, users, cfg), authenticator
 }
 
 func decodeAuthClaims(t *testing.T, token string) auth.Claims {

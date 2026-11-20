@@ -10,6 +10,7 @@ import (
 
 	usersapi "github.com/kncept/Emissary/api/users/generated"
 	"github.com/kncept/Emissary/mailer/auth"
+	"github.com/kncept/Emissary/mailer/sender"
 	"github.com/kncept/Emissary/mailer/session"
 	"github.com/kncept/Emissary/mailer/storage"
 	"github.com/kncept/Emissary/mailer/usermanager"
@@ -127,7 +128,7 @@ func TestNoPasswordUserOverHTTP(t *testing.T) {
 		Storage:      storage.NewMemoryStorage(),
 		UserManager:  manager,
 		UserDomain:   "example.com",
-		Sender:       &captureSender{},
+		Sender:       sender.NewInMemoryRecording(),
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -227,7 +228,7 @@ func TestDeleteSelfOverHTTP(t *testing.T) {
 		Storage:      storage.NewMemoryStorage(),
 		UserManager:  manager,
 		UserDomain:   "example.com",
-		Sender:       &captureSender{},
+		Sender:       sender.NewInMemoryRecording(),
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -481,7 +482,7 @@ func TestUserManagerCannotEscalateToSystemManagerOverHTTP(t *testing.T) {
 		Session:      session.NewMemorySessionStore(),
 		UserManager:  manager,
 		UserDomain:   "example.com",
-		Sender:       &captureSender{},
+		Sender:       sender.NewInMemoryRecording(),
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
