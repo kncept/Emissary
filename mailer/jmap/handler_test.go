@@ -3,6 +3,7 @@ package jmap
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/email"
+	"github.com/kncept/Emissary/mailer/identity"
 	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/sender"
 	"github.com/kncept/Emissary/mailer/storage"
@@ -822,6 +824,79 @@ func TestEmailSubmissionSetLocksFrom(t *testing.T) {
 			}
 			if got := capture.Sent[0].From.Address; got != tc.wantFrom {
 				t.Errorf("sent From = %q, want %q", got, tc.wantFrom)
+			}
+		})
+	}
+}
+
+type stubFromValidator struct{ err error }
+
+func (v stubFromValidator) Validate(context.Context, string) error { return v.err }
+
+func TestEmailSubmissionSetChecksFromIdentity(t *testing.T) {
+	tests := []struct {
+		name      string
+		validator FromValidator
+		wantType  string
+		wantSent  bool
+	}{
+		{"no validator allows submission", nil, "", true},
+		{"verified identity allows submission", stubFromValidator{}, "", true},
+		{
+			"unverified identity is rejected",
+			stubFromValidator{fmt.Errorf("not verified: %w", identity.ErrNotAllowed)},
+			"forbidden",
+			false,
+		},
+		{
+			"identity lookup failure is a server error",
+			stubFromValidator{errors.New("SES unavailable")},
+			"serverError",
+			false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			const account = "alice@example.com"
+			store := storage.NewMemoryStorage()
+			addTestEmail(store, "draft1", account, "inbox", &email.UserEmail{
+				From:    email.Address{Address: account},
+				To:      []email.Address{{Address: "dave@example.com"}},
+				Subject: "subject",
+				Text:    "body",
+			})
+			capture := sender.NewInMemoryRecording()
+			handler := NewHandler(store, metadata.NewMemoryMetadata(),
+				usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+				capture, tc.validator)
+
+			args := json.RawMessage(fmt.Sprintf(
+				`{"accountId":%q,"create":{"s1":{"identityId":"primary","emailId":"draft1"}}}`, account))
+			result, err := handler.EmailSubmissionSet(context.Background(), account, args)
+			if err != nil {
+				t.Fatalf("EmailSubmissionSet() error = %v", err)
+			}
+			var resp struct {
+				Created    map[string]json.RawMessage `json:"created"`
+				NotCreated map[string]struct {
+					Type string `json:"type"`
+				} `json:"notCreated"`
+			}
+			if err := json.Unmarshal(result, &resp); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if tc.wantSent {
+				if len(resp.Created) != 1 || len(capture.Sent) != 1 {
+					t.Fatalf("created = %+v, sent = %+v, want one of each", resp.Created, capture.Sent)
+				}
+				return
+			}
+			if problem, ok := resp.NotCreated["s1"]; !ok || problem.Type != tc.wantType {
+				t.Fatalf("notCreated = %+v, want type %q", resp.NotCreated, tc.wantType)
+			}
+			if len(capture.Sent) != 0 {
+				t.Fatalf("message was sent despite rejected From: %+v", capture.Sent)
 			}
 		})
 	}

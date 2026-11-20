@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ses"
@@ -18,6 +19,27 @@ import (
 // A narrow interface keeps the support API testable without AWS credentials.
 type SESIdentityLister interface {
 	ListIdentities(ctx context.Context, params *ses.ListIdentitiesInput, optFns ...func(*ses.Options)) (*ses.ListIdentitiesOutput, error)
+}
+
+// lazySESIdentityLister defers SES client creation until identities are
+// actually listed. Programmatic callers do not need AWS configuration just to
+// construct a handler; a failure surfaces on the submission that needs it.
+type lazySESIdentityLister struct {
+	mu     sync.Mutex
+	lister SESIdentityLister
+}
+
+func (l *lazySESIdentityLister) ListIdentities(ctx context.Context, params *ses.ListIdentitiesInput, optFns ...func(*ses.Options)) (*ses.ListIdentitiesOutput, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.lister == nil {
+		cfg, err := awsconfig.LoadDefaultConfig(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("load AWS config for SES identities: %w", err)
+		}
+		l.lister = ses.NewFromConfig(cfg)
+	}
+	return l.lister.ListIdentities(ctx, params, optFns...)
 }
 
 // identityLister lazily creates the SES client so installations that never

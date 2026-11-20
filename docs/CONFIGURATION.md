@@ -3,9 +3,13 @@
 Most runtime configuration is read from environment variables by
 `mailer/config` when `cmd/frontend` starts. `LOG_LEVEL` is the exception:
 `mailer/logging` reads it at process startup, before configuration is loaded.
-Values are cached, and any value that starts with `arn:aws:` is transparently
-resolved from AWS Secrets Manager (`mailer/envutil` + `mailer/awsutil`). This
-is how the deployed Lambda receives its JWT secret as an ARN.
+Values are cached, and values naming a Secrets Manager secret
+(`arn:*:secretsmanager:...`) are transparently resolved from AWS Secrets
+Manager (`mailer/envutil` + `mailer/awsutil`). This is how the deployed Lambda
+receives its JWT secret as an ARN. Other ARNs (for example `AWS_ROLE_ARN`) are
+left untouched. A failed resolution aborts startup: the ARN is never used as
+if it were the resolved credential. Client creation is retried on the next
+call, so a transient failure does not poison the process permanently.
 
 ## Server and authentication
 
@@ -19,6 +23,10 @@ is how the deployed Lambda receives its JWT secret as an ARN.
 | `JWT_ISSUER` | unset | Expected `iss` claim. The CDK app sets it to `emissary-<domain>`. |
 | `LISTEN_ADDR` | — | Listen address, e.g. `:9090` or `127.0.0.1:8080`. Takes precedence over `PORT`. |
 | `PORT` | `8080` | Listen port when `LISTEN_ADDR` is unset. |
+
+The standalone HTTP server applies bounded read-header, read, write and idle
+timeouts and shuts down gracefully on SIGINT/SIGTERM, allowing a bounded window
+for in-flight requests to finish.
 
 ## Logging
 
@@ -46,12 +54,25 @@ that need operator attention.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SENDER` | `aws-ses` when AWS credentials are configured, otherwise `log` | `aws-ses` (alias `ses`), `mta` or `log`. |
+| `SENDER` | `aws-ses` when AWS credentials are available, otherwise `log` | `aws-ses` (alias `ses`), `mta` or `log`. |
 | `MTA_PORT` | `25` | SMTP port used by the `mta` sender (e.g. `1025` for a local mail sink). |
+
+Credential detection uses the AWS SDK default chain, so IAM roles (EC2
+instance profiles, ECS task roles, web identity/IRSA and the Lambda execution
+role) select `aws-ses` even when no `AWS_*` credential variables are present.
+When no credentials are found and `SENDER` is unset, the log sender is still
+used as a local-development fallback (with a warning): it does **not** deliver
+replies or bounces.
 
 There is no configured From address. From is locked to the submitting user's
 own address (or the masquerade target's when a User Manager sends on behalf
-of another account); a From address supplied by the client is ignored.
+of another account); a From address supplied by the client is ignored. The
+locked address must belong to one of the account's verified email identities
+(SES `ListIdentities`, covering both full addresses and domains) whenever SES
+is the outbound sender; submissions from any other address are rejected with
+JMAP `forbidden`. Identity lookups are cached for five minutes, and a failed
+lookup fails the submission rather than allowing an unverified sender. Other
+senders have no SES identity source and keep the locked-From rule only.
 Reply-To is carried on the message and, when masquerading, must match From
 (it defaults to From when omitted). `In-Reply-To` and `References` headers
 from the draft are written into the delivered message, and the message's
@@ -72,7 +93,7 @@ authenticate to the MX host and uses STARTTLS when the server advertises it.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `RECEIVER` | `s3` when AWS credentials and `S3_BUCKET` are configured, otherwise `memory` | Backend for recipient routing rules: `s3`, `filesystem`, `ddb`/`dynamodb` or `memory`. |
+| `RECEIVER` | `s3` when AWS credentials are available and `S3_BUCKET` is configured, otherwise `memory` | Backend for recipient routing rules: `s3`, `filesystem`, `ddb`/`dynamodb` or `memory`. |
 | `RECEIVER_BUCKET` | `S3_BUCKET` | S3 bucket holding the rules when `RECEIVER=s3`. Set it explicitly to keep receiver rules in a dedicated bucket. |
 | `RECEIVER_FILESYSTEM_DIR` | `FILESYSTEM_DIR` (default `~/.emissary`) | Root directory holding the rules when `RECEIVER=filesystem`. The store adds the `receiver/` subdirectory. |
 | `RECEIVER_TABLE` | `<TABLE_PREFIX>receiver` | DynamoDB table name for the `ddb` backend (`TABLE_PREFIX` defaults to `emissary-`). |

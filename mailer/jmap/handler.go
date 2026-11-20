@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kncept/Emissary/mailer/email"
+	"github.com/kncept/Emissary/mailer/identity"
 	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/sender"
 	"github.com/kncept/Emissary/mailer/storage"
@@ -42,23 +43,38 @@ type EmailFilter struct {
 	Header                  []string `json:"header,omitempty"`
 }
 
+// FromValidator checks that a From address may be used for sending. Callers
+// that have no identity source (unit tests, local development) may omit it.
+type FromValidator interface {
+	Validate(ctx context.Context, from string) error
+}
+
 // Handler implements MethodHandler by bridging to the existing storage,
 // metadata, and user management layers.
 type Handler struct {
-	storage  storage.Storage
-	metadata metadata.MetadataStore
-	userMgr  usermanager.UserManager
-	sender   sender.Sender
+	storage       storage.Storage
+	metadata      metadata.MetadataStore
+	userMgr       usermanager.UserManager
+	sender        sender.Sender
+	fromValidator FromValidator
 }
 
-// NewHandler creates a new JMAP method handler.
-func NewHandler(store storage.Storage, meta metadata.MetadataStore, userMgr usermanager.UserManager, mailSender sender.Sender) *Handler {
-	return &Handler{
+// NewHandler creates a new JMAP method handler. An optional FromValidator
+// restricts submissions to the installation's verified email identities.
+func NewHandler(store storage.Storage, meta metadata.MetadataStore, userMgr usermanager.UserManager, mailSender sender.Sender, validators ...FromValidator) *Handler {
+	h := &Handler{
 		storage:  store,
 		metadata: meta,
 		userMgr:  userMgr,
 		sender:   mailSender,
 	}
+	for _, validator := range validators {
+		if validator != nil {
+			h.fromValidator = validator
+			break
+		}
+	}
+	return h
 }
 
 // Ensure Handler implements MethodHandler
@@ -1210,6 +1226,29 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 			continue
 		}
 		from = parsed.Address
+
+		// A locked From still has to belong to one of the account's verified
+		// email identities. SES identities are the source of truth; rejecting
+		// here keeps a misconfigured account from quietly sending as an
+		// unverified address (or, with the log sender, disappearing entirely).
+		if h.fromValidator != nil {
+			if err := h.fromValidator.Validate(ctx, from); err != nil {
+				if errors.Is(err, identity.ErrNotAllowed) {
+					slog.Warn("JMAP: rejected From outside verified identities", "from", from, "err", err)
+					notCreated[createID] = map[string]string{
+						"type":        "forbidden",
+						"description": "From address is not a verified email identity",
+					}
+				} else {
+					slog.Error("JMAP: could not verify From identity", "from", from, "err", err)
+					notCreated[createID] = map[string]string{
+						"type":        "serverError",
+						"description": "Could not verify From address",
+					}
+				}
+				continue
+			}
+		}
 
 		// When sending on behalf of another account, replies must go back to
 		// the same address that appears in From. Default Reply-To to From when

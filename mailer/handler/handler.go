@@ -21,6 +21,7 @@ import (
 	configvendor "github.com/kncept/Emissary/mailer/config-vendor"
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/gui"
+	"github.com/kncept/Emissary/mailer/identity"
 	"github.com/kncept/Emissary/mailer/jmap"
 	"github.com/kncept/Emissary/mailer/metadata"
 	"github.com/kncept/Emissary/mailer/receiver"
@@ -138,6 +139,16 @@ func receiverFilesystemRoot(cfg HandlerConfig) string {
 		return cfg.ReceiverFilesystemDir
 	}
 	return filesystemRoot(cfg.FilesystemDir)
+}
+
+// senderUsesSES reports whether outbound mail goes through SES, in which case
+// From addresses must be checked against the account's verified identities.
+func senderUsesSES(cfg HandlerConfig, mailSender sender.Sender) bool {
+	switch strings.ToLower(strings.TrimSpace(cfg.SenderType)) {
+	case "aws-ses", "ses":
+		return true
+	}
+	return mailSender != nil && mailSender.Name() == "AwsSesSender"
 }
 
 func New(cfg HandlerConfig) (http.Handler, error) {
@@ -267,8 +278,18 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 	mux := http.NewServeMux()
 	loginLimiter := newLoginLimiter(cfg.LoginRateLimit, cfg.LoginRateLimitWindow)
 
-	// Create JMAP handler with sender for EmailSubmission
-	jmapHandler := jmap.NewHandler(emailStore, metaStore, userManager, mailSender)
+	// Outbound From addresses must belong to a verified email identity. SES is
+	// the current identity source; local/test callers that do not use SES can
+	// omit the validator and keep the existing behaviour.
+	var fromValidator jmap.FromValidator
+	if senderUsesSES(cfg, mailSender) || cfg.SESIdentityLister != nil {
+		lister := cfg.SESIdentityLister
+		if lister == nil {
+			lister = &lazySESIdentityLister{}
+		}
+		fromValidator = identity.NewValidator(lister)
+	}
+	jmapHandler := jmap.NewHandler(emailStore, metaStore, userManager, mailSender, fromValidator)
 	dispatcher := jmap.NewDispatcher(jmapHandler, emailStore)
 
 	mux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, r *http.Request) {

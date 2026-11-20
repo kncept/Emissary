@@ -55,13 +55,18 @@ func initCache() {
 	})
 }
 
+// resolveSecret is a variable so tests can exercise resolution failures
+// without contacting AWS.
+var resolveSecret = awsutil.ResolveSecret
+
 // GetCachedEnv retrieves an environment variable value, using a local cache.
-// If the value starts with an AWS ARN (arn:aws:...), it resolves the secret
-// using awsutil.ResolveSecret.
+// A Secrets Manager ARN is resolved before the value is returned. A resolution
+// failure is propagated: returning the ARN as if it were a credential would
+// turn a recoverable startup error into a silently broken deployment.
 //
 // The context is passed to the secret resolution call for timeout/cancellation
 // support.
-func GetCachedEnv(ctx context.Context, key string) string {
+func GetCachedEnv(ctx context.Context, key string) (string, error) {
 	initCache()
 
 	// Fast path: check cache first (read lock)
@@ -69,36 +74,34 @@ func GetCachedEnv(ctx context.Context, key string) string {
 	val, ok := cache[key]
 	cacheMu.RUnlock()
 
-	if ok {
-		return resolveIfARN(ctx, val)
+	if !ok {
+		// Not in cache, check os.Getenv (handles updates after init)
+		val, ok = os.LookupEnv(key)
+		if ok {
+			cacheMu.Lock()
+			cache[key] = val
+			cacheMu.Unlock()
+		}
+	}
+	if !ok {
+		return "", nil
 	}
 
-	// Not in cache, check os.Getenv (handles updates after init)
-	val, ok = os.LookupEnv(key)
-	if ok {
-		// Update cache for next time (write lock)
-		cacheMu.Lock()
-		cache[key] = val
-		cacheMu.Unlock()
-		return resolveIfARN(ctx, val)
-	}
-
-	return ""
+	return resolveIfARN(ctx, val)
 }
 
-// resolveIfARN checks if the value is an AWS ARN and resolves it if so.
-func resolveIfARN(ctx context.Context, val string) string {
+// resolveIfARN resolves Secrets Manager ARNs. Other ARNs are returned verbatim:
+// config values such as AWS_ROLE_ARN are not secrets.
+func resolveIfARN(ctx context.Context, val string) (string, error) {
 	val = strings.TrimSpace(val)
-	if strings.HasPrefix(val, "arn:aws:") {
-		resolved, err := awsutil.ResolveSecret(ctx, val)
-		if err != nil {
-			// Log error but return original value to avoid breaking existing behavior
-			// In production, you might want to handle this differently
-			return val
-		}
-		return resolved
+	if !awsutil.IsSecretsManagerARN(val) {
+		return val, nil
 	}
-	return val
+	resolved, err := resolveSecret(ctx, val)
+	if err != nil {
+		return "", fmt.Errorf("resolve %q: %w", val, err)
+	}
+	return resolved, nil
 }
 
 // SetOverride sets an override value for a key in the cache.

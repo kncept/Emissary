@@ -53,6 +53,17 @@ func doRequest(r http.Handler, method, target, body string, token string) *httpt
 	return w
 }
 
+func TestNewHTTPServerHasBoundedTimeouts(t *testing.T) {
+	server := newHTTPServer(":8080", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	if server.Addr != ":8080" || server.Handler == nil {
+		t.Fatalf("server addr/handler = %q, %v", server.Addr, server.Handler)
+	}
+	if server.ReadHeaderTimeout <= 0 || server.ReadTimeout <= 0 || server.WriteTimeout <= 0 || server.IdleTimeout <= 0 {
+		t.Errorf("server timeouts must be positive: read_header=%v read=%v write=%v idle=%v",
+			server.ReadHeaderTimeout, server.ReadTimeout, server.WriteTimeout, server.IdleTimeout)
+	}
+}
+
 func TestLogin_IssuesJWT(t *testing.T) {
 	h, authenticator := newTestHandler()
 	w := doRequest(h, http.MethodPost, "/api/auth/login",

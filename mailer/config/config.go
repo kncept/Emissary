@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kncept/Emissary/mailer/awsutil"
 	"github.com/kncept/Emissary/mailer/envutil"
 	"github.com/kncept/Emissary/mailer/fsutil"
 )
@@ -296,11 +297,37 @@ func (c *Config) ReceiverTableName() string {
 	return resolveDDBTable(c.Receiver.DdbTable, c.DDBTablePrefix, "receiver")
 }
 
-// Load reads configuration from the environment. The account credentials are
-// required; every other value has a local-development friendly default.
-// Pass a context for secret resolution (e.g., from AWS Secrets Manager).
+// Load reads configuration from the environment. Values that name a Secrets
+// Manager secret are resolved; a failed resolution aborts startup instead of
+// leaking the ARN into a credential field. Pass a context for secret
+// resolution and IAM-role probing.
 func Load(ctx context.Context) (*Config, error) {
-	awsRegion := firstEnv(ctx, "AWS_REGION", "AWS_DEFAULT_REGION")
+	// Collect the first environment error so one bad ARN cannot be reported as
+	// a confusing "unknown backend" validation failure later on.
+	var envErr error
+	get := func(names ...string) string {
+		if envErr != nil {
+			return ""
+		}
+		value, err := firstEnv(ctx, names...)
+		if err != nil {
+			envErr = err
+		}
+		return value
+	}
+	getDefault := func(fallback string, names ...string) string {
+		value := get(names...)
+		if envErr != nil || value == "" {
+			return fallback
+		}
+		return value
+	}
+
+	listen, err := listenAddr(ctx)
+	if err != nil {
+		return nil, err
+	}
+	awsRegion := get("AWS_REGION", "AWS_DEFAULT_REGION")
 
 	// Read FILESYSTEM_DIR early to check if it's explicitly set.
 	// If explicitly set (even with ~), we expand it.
@@ -308,14 +335,14 @@ func Load(ctx context.Context) (*Config, error) {
 	// when filesystem-backed stores are actually needed.
 	// This avoids requiring $HOME in environments like AWS Lambda where
 	// it's not defined, unless filesystem mode is used or explicitly configured.
-	explicitFilesystemDir := firstEnv(ctx, "FILESYSTEM_DIR")
-	explicitReceiverFilesystemDir := firstEnv(ctx, "RECEIVER_FILESYSTEM_DIR")
+	explicitFilesystemDir := get("FILESYSTEM_DIR")
+	explicitReceiverFilesystemDir := get("RECEIVER_FILESYSTEM_DIR")
 
 	// Determine if filesystem-backed stores are needed.
-	storageType := strings.ToLower(strings.TrimSpace(firstEnv(ctx, "STORAGE")))
-	userManagerType := strings.ToLower(strings.TrimSpace(firstEnv(ctx, "USER_MANAGER")))
-	receiverType := strings.ToLower(strings.TrimSpace(firstEnv(ctx, "RECEIVER")))
-	metadataType := strings.ToLower(strings.TrimSpace(firstEnv(ctx, "METADATA")))
+	storageType := strings.ToLower(strings.TrimSpace(get("STORAGE")))
+	userManagerType := strings.ToLower(strings.TrimSpace(get("USER_MANAGER")))
+	receiverType := strings.ToLower(strings.TrimSpace(get("RECEIVER")))
+	metadataType := strings.ToLower(strings.TrimSpace(get("METADATA")))
 
 	needsFilesystem := storageType == "filesystem" ||
 		userManagerType == "filesystem" ||
@@ -323,17 +350,18 @@ func Load(ctx context.Context) (*Config, error) {
 		metadataType == "file"
 
 	var filesystemDir string
+	if envErr != nil {
+		return nil, envErr
+	}
 	if explicitFilesystemDir != "" {
 		// Explicitly set: expand it (handles ~)
-		var err error
 		filesystemDir, err = fsutil.ExpandDir(explicitFilesystemDir)
 		if err != nil {
 			return nil, fmt.Errorf("invalid FILESYSTEM_DIR: %w", err)
 		}
 	} else if needsFilesystem {
 		// Not explicitly set but filesystem mode needed: apply default and expand
-		var err error
-		filesystemDir, err = fsutil.ExpandDir(firstEnvDefault(ctx, "~/.emissary", "FILESYSTEM_DIR"))
+		filesystemDir, err = fsutil.ExpandDir(getDefault("~/.emissary", "FILESYSTEM_DIR"))
 		if err != nil {
 			return nil, fmt.Errorf("invalid FILESYSTEM_DIR: %w", err)
 		}
@@ -345,7 +373,6 @@ func Load(ctx context.Context) (*Config, error) {
 	// is not used by any other backend.
 	var receiverFilesystemDir string
 	if explicitReceiverFilesystemDir != "" {
-		var err error
 		receiverFilesystemDir, err = fsutil.ExpandDir(explicitReceiverFilesystemDir)
 		if err != nil {
 			return nil, fmt.Errorf("invalid RECEIVER_FILESYSTEM_DIR: %w", err)
@@ -354,61 +381,67 @@ func Load(ctx context.Context) (*Config, error) {
 
 	cfg := &Config{
 		Server: ServerConfig{
-			ListenAddr:  listenAddr(ctx),
-			Username:    firstEnv(ctx, "USERNAME"),
-			Password:    firstEnv(ctx, "PASSWORD"),
-			JWTSecret:   firstEnv(ctx, "JWT_SECRET"),
-			JWTAudience: firstEnv(ctx, "JWT_AUDIENCE"),
-			JWTIssuer:   firstEnv(ctx, "JWT_ISSUER"),
+			ListenAddr:  listen,
+			Username:    get("USERNAME"),
+			Password:    get("PASSWORD"),
+			JWTSecret:   get("JWT_SECRET"),
+			JWTAudience: get("JWT_AUDIENCE"),
+			JWTIssuer:   get("JWT_ISSUER"),
 		},
 		Storage: StorageConfig{
-			Type:          strings.ToLower(strings.TrimSpace(firstEnv(ctx, "STORAGE"))),
-			S3Bucket:      firstEnv(ctx, "S3_BUCKET"),
+			Type:          strings.ToLower(strings.TrimSpace(get("STORAGE"))),
+			S3Bucket:      get("S3_BUCKET"),
 			FilesystemDir: filesystemDir,
 		},
 		Sender: SenderConfig{
-			Type:    strings.ToLower(strings.TrimSpace(firstEnv(ctx, "SENDER"))),
-			MTAPort: firstEnvDefault(ctx, "25", "MTA_PORT"),
+			Type:    strings.ToLower(strings.TrimSpace(get("SENDER"))),
+			MTAPort: getDefault("25", "MTA_PORT"),
 		},
 		Receiver: ReceiverConfig{
 			Type:          receiverType,
-			S3Bucket:      firstEnv(ctx, "RECEIVER_BUCKET"),
+			S3Bucket:      get("RECEIVER_BUCKET"),
 			FilesystemDir: receiverFilesystemDir,
-			DdbTable:      firstEnv(ctx, "RECEIVER_TABLE"),
-			Region:        firstEnv(ctx, "RECEIVER_REGION"),
+			DdbTable:      get("RECEIVER_TABLE"),
+			Region:        get("RECEIVER_REGION"),
 		},
 		Metadata: MetadataConfig{
-			Type:     strings.ToLower(strings.TrimSpace(firstEnv(ctx, "METADATA"))),
-			DdbTable: firstEnv(ctx, "DDB_TABLE"),
-			FilePath: firstEnv(ctx, "METADATA_FILE"),
-			Region:   firstEnv(ctx, "METADATA_REGION"),
+			Type:     strings.ToLower(strings.TrimSpace(get("METADATA"))),
+			DdbTable: get("DDB_TABLE"),
+			FilePath: get("METADATA_FILE"),
+			Region:   get("METADATA_REGION"),
 		},
 		Session: SessionConfig{
-			Type:     strings.ToLower(strings.TrimSpace(firstEnv(ctx, "SESSION"))),
-			DdbTable: firstEnv(ctx, "SESSION_TABLE"),
-			Region:   firstEnv(ctx, "SESSION_REGION"),
+			Type:     strings.ToLower(strings.TrimSpace(get("SESSION"))),
+			DdbTable: get("SESSION_TABLE"),
+			Region:   get("SESSION_REGION"),
 		},
 		UserManager: UserManagerConfig{
-			Type:             strings.ToLower(strings.TrimSpace(firstEnv(ctx, "USER_MANAGER"))),
-			Domain:           strings.ToLower(strings.TrimSpace(firstEnv(ctx, "DOMAIN"))),
-			DdbTable:         firstEnv(ctx, "USER_TABLE"),
+			Type:             strings.ToLower(strings.TrimSpace(get("USER_MANAGER"))),
+			Domain:           strings.ToLower(strings.TrimSpace(get("DOMAIN"))),
+			DdbTable:         get("USER_TABLE"),
 			FilesystemDir:    filesystemDir,
-			Region:           firstEnv(ctx, "USER_REGION"),
-			LDAPURL:          firstEnv(ctx, "LDAP_URL"),
-			LDAPBindDN:       firstEnv(ctx, "LDAP_BIND_DN"),
-			LDAPBindPassword: firstEnv(ctx, "LDAP_BIND_PASSWORD"),
-			LDAPBaseDN:       firstEnv(ctx, "LDAP_BASE_DN"),
-			LDAPUserFilter:   firstEnv(ctx, "LDAP_USER_FILTER"),
-			LDAPCacheTTL:     firstEnv(ctx, "LDAP_CACHE_TTL"),
+			Region:           get("USER_REGION"),
+			LDAPURL:          get("LDAP_URL"),
+			LDAPBindDN:       get("LDAP_BIND_DN"),
+			LDAPBindPassword: get("LDAP_BIND_PASSWORD"),
+			LDAPBaseDN:       get("LDAP_BASE_DN"),
+			LDAPUserFilter:   get("LDAP_USER_FILTER"),
+			LDAPCacheTTL:     get("LDAP_CACHE_TTL"),
 		},
 		AWSRegion:      awsRegion,
 		FilesystemDir:  filesystemDir,
-		DDBTablePrefix: strings.TrimSpace(firstEnvDefault(ctx, "emissary", "TABLE_PREFIX", "DDB_TABLE_PREFIX")),
+		DDBTablePrefix: strings.TrimSpace(getDefault("emissary", "TABLE_PREFIX", "DDB_TABLE_PREFIX")),
+	}
+	if envErr != nil {
+		return nil, envErr
 	}
 
-	ttl, err := time.ParseDuration(firstEnvDefault(ctx, "24h", "JWT_TTL"))
+	ttl, err := time.ParseDuration(getDefault("24h", "JWT_TTL"))
 	if err != nil {
 		return nil, fmt.Errorf("invalid JWT_TTL: %w", err)
+	}
+	if envErr != nil {
+		return nil, envErr
 	}
 	cfg.Server.JWTExpiry = ttl
 
@@ -430,13 +463,25 @@ func Load(ctx context.Context) (*Config, error) {
 		}
 	}
 
-	// Sender defaults. When AWS credentials are available, SES is the
-	// natural outbound transport; otherwise fall back to local logging so
-	// development works without any AWS setup.
+	// Only probe the SDK credential chain when a backend actually needs the
+	// answer: an explicit SENDER and RECEIVER must not add startup latency.
+	var hasCreds bool
+	if cfg.Sender.Type == "" || cfg.Receiver.Type == "" {
+		hasCreds, err = hasAWSCredentials(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Sender defaults. SES is the natural outbound transport whenever the SDK
+	// can supply credentials, including IAM roles that are not visible as
+	// AWS_* environment variables. When no credentials are available at all,
+	// fall back to the log sender so local development works without AWS.
 	if cfg.Sender.Type == "" {
-		if hasAWSCredentials(ctx) {
+		if hasCreds {
 			cfg.Sender.Type = "aws-ses"
 		} else {
+			slog.Warn("No AWS credentials detected; using the log sender. Replies and bounces will not be delivered. Set SENDER=aws-ses or SENDER=mta for real delivery")
 			cfg.Sender.Type = "log"
 		}
 	}
@@ -445,7 +490,7 @@ func Load(ctx context.Context) (*Config, error) {
 	// receiver routes from files under receiver/ in that bucket; without them
 	// it keeps its configuration in memory. An explicit RECEIVER always wins.
 	if cfg.Receiver.Type == "" {
-		if hasAWSCredentials(ctx) && cfg.Storage.S3Bucket != "" {
+		if hasCreds && cfg.Storage.S3Bucket != "" {
 			cfg.Receiver.Type = "s3"
 		} else {
 			cfg.Receiver.Type = "memory"
@@ -519,46 +564,93 @@ func Load(ctx context.Context) (*Config, error) {
 	return cfg, nil
 }
 
-func listenAddr(ctx context.Context) string {
-	if addr := firstEnv(ctx, "LISTEN_ADDR"); addr != "" {
-		return addr
+func listenAddr(ctx context.Context) (string, error) {
+	addr, err := firstEnv(ctx, "LISTEN_ADDR")
+	if err != nil {
+		return "", err
 	}
-	port := firstEnvDefault(ctx, "8080", "PORT")
+	if addr != "" {
+		return addr, nil
+	}
+	port, err := firstEnvDefault(ctx, "8080", "PORT")
+	if err != nil {
+		return "", err
+	}
 	if strings.HasPrefix(port, ":") {
-		return port
+		return port, nil
 	}
-	return ":" + port
+	return ":" + port, nil
 }
 
-func firstEnv(ctx context.Context, names ...string) string {
+func firstEnv(ctx context.Context, names ...string) (string, error) {
 	for _, name := range names {
-		if value := envutil.GetCachedEnv(ctx, name); value != "" {
-			return value
+		value, err := envutil.GetCachedEnv(ctx, name)
+		if err != nil {
+			return "", fmt.Errorf("environment variable %s: %w", name, err)
+		}
+		if value != "" {
+			return value, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
-func firstEnvDefault(ctx context.Context, fallback string, names ...string) string {
-	if value := firstEnv(ctx, names...); value != "" {
-		return value
+func firstEnvDefault(ctx context.Context, fallback string, names ...string) (string, error) {
+	value, err := firstEnv(ctx, names...)
+	if err != nil {
+		return "", err
 	}
-	return fallback
+	if value != "" {
+		return value, nil
+	}
+	return fallback, nil
 }
 
-// hasAWSCredentials reports whether AWS credentials are configured in the
-// process environment. It covers the environment-based sources used by the
-// AWS SDK's default credential chain: static access keys, shared-config
-// profiles, web identity tokens and ECS container credentials.
-func hasAWSCredentials(ctx context.Context) bool {
-	if firstEnv(ctx, "AWS_ACCESS_KEY_ID") != "" && firstEnv(ctx, "AWS_SECRET_ACCESS_KEY") != "" {
-		return true
+// credentialProbe is a variable so tests can simulate an IAM role without
+// contacting the AWS credential chain.
+var credentialProbe = awsutil.HasCredentials
+
+// hasAWSCredentials reports whether AWS credentials are available. Environment
+// variables cover static keys, shared profiles, web identity and ECS task
+// roles; when none are present the SDK chain is probed so EC2 instance profiles
+// and other IAM roles are recognised instead of silently selecting the log
+// sender.
+func hasAWSCredentials(ctx context.Context) (bool, error) {
+	accessKey, err := firstEnv(ctx, "AWS_ACCESS_KEY_ID")
+	if err != nil {
+		return false, err
 	}
-	if firstEnv(ctx, "AWS_PROFILE", "AWS_DEFAULT_PROFILE") != "" {
-		return true
+	secretKey, err := firstEnv(ctx, "AWS_SECRET_ACCESS_KEY")
+	if err != nil {
+		return false, err
 	}
-	if firstEnv(ctx, "AWS_WEB_IDENTITY_TOKEN_FILE") != "" && firstEnv(ctx, "AWS_ROLE_ARN") != "" {
-		return true
+	if accessKey != "" && secretKey != "" {
+		return true, nil
 	}
-	return firstEnv(ctx, "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI") != ""
+	profile, err := firstEnv(ctx, "AWS_PROFILE", "AWS_DEFAULT_PROFILE")
+	if err != nil {
+		return false, err
+	}
+	if profile != "" {
+		return true, nil
+	}
+	tokenFile, err := firstEnv(ctx, "AWS_WEB_IDENTITY_TOKEN_FILE")
+	if err != nil {
+		return false, err
+	}
+	roleARN, err := firstEnv(ctx, "AWS_ROLE_ARN")
+	if err != nil {
+		return false, err
+	}
+	if tokenFile != "" && roleARN != "" {
+		return true, nil
+	}
+	containerURI, err := firstEnv(ctx, "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI")
+	if err != nil {
+		return false, err
+	}
+	if containerURI != "" {
+		return true, nil
+	}
+	return credentialProbe(ctx), nil
 }

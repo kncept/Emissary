@@ -11,6 +11,16 @@ import (
 	"github.com/kncept/Emissary/mailer/envutil"
 )
 
+func TestMain(m *testing.M) {
+	// All tests are hermetic: no metadata service and no IAM role unless a test
+	// injects one explicitly.
+	os.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	os.Setenv("AWS_SHARED_CREDENTIALS_FILE", os.DevNull)
+	os.Setenv("AWS_CONFIG_FILE", os.DevNull)
+	credentialProbe = func(context.Context) bool { return false }
+	os.Exit(m.Run())
+}
+
 func TestLoad_Defaults(t *testing.T) {
 	os.Setenv("USERNAME", "testuser")
 	os.Setenv("PASSWORD", "testpass")
@@ -697,6 +707,12 @@ func clearAWSCredentialEnv() {
 	} {
 		os.Unsetenv(key)
 	}
+	// Keep the SDK from probing EC2 instance metadata (and from picking up a
+	// developer's local profile) so tests are fast and hermetic. IAM-role
+	// detection itself is covered below with an injected probe.
+	os.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	os.Setenv("AWS_SHARED_CREDENTIALS_FILE", os.DevNull)
+	os.Setenv("AWS_CONFIG_FILE", os.DevNull)
 	envutil.ClearCache()
 }
 
@@ -828,6 +844,9 @@ func cleanupEnv() {
 	os.Unsetenv("USER_REGION")
 	os.Unsetenv("AWS_REGION")
 	clearAWSCredentialEnv()
+	os.Unsetenv("AWS_EC2_METADATA_DISABLED")
+	os.Unsetenv("AWS_SHARED_CREDENTIALS_FILE")
+	os.Unsetenv("AWS_CONFIG_FILE")
 }
 
 func TestLoad_FilesystemBackend(t *testing.T) {
@@ -896,5 +915,41 @@ func TestValidate_FilesystemTypes(t *testing.T) {
 	}
 	if err := (&UserManagerConfig{Type: "filesystem"}).Validate(); err == nil {
 		t.Error("user manager validate without dir succeeded")
+	}
+}
+
+func TestLoad_IAMRoleSelectsSESWithoutEnvCredentials(t *testing.T) {
+	clearAWSCredentialEnv()
+	defer cleanupEnv()
+	os.Setenv("USERNAME", "testuser")
+
+	oldProbe := credentialProbe
+	credentialProbe = func(context.Context) bool { return true }
+	defer func() { credentialProbe = oldProbe }()
+
+	cfg, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Sender.Type != "aws-ses" {
+		t.Errorf("Sender.Type = %q, want aws-ses when an IAM role supplies credentials", cfg.Sender.Type)
+	}
+}
+
+func TestLoad_NoCredentialsKeepsLogFallback(t *testing.T) {
+	clearAWSCredentialEnv()
+	defer cleanupEnv()
+	os.Setenv("USERNAME", "testuser")
+
+	oldProbe := credentialProbe
+	credentialProbe = func(context.Context) bool { return false }
+	defer func() { credentialProbe = oldProbe }()
+
+	cfg, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Sender.Type != "log" {
+		t.Errorf("Sender.Type = %q, want log when no credentials are available", cfg.Sender.Type)
 	}
 }
