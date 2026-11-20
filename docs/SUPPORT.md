@@ -241,8 +241,9 @@ mail bucket using a single `ListObjectsV2` call with `Delimiter: "/"`:
 
 - `objects` are the raw messages SES wrote to the bucket root and that have
   not been processed yet. Their keys are the SES message IDs.
-- `prefixes` are the top-level virtual directories, normally `users/`. See
-  [S3.md](S3.md#bucket-layout) for the mailbox layout.
+- `prefixes` are the top-level virtual directories, normally `users/` and the
+  internal `_processed/` idempotency-marker prefix. See
+  [S3.md](S3.md#bucket-layout) for the bucket layout.
 
 Example response (`200`):
 
@@ -257,7 +258,7 @@ Example response (`200`):
       "etag": "\"5d41402abc4b2a76b9719d911017c592\""
     }
   ],
-  "prefixes": ["users/"]
+  "prefixes": ["_processed/", "users/"]
 }
 ```
 
@@ -285,7 +286,8 @@ The `id` is the `key` reported by `GET /api/support/bucket/root`. Processing:
    `users/<recipient>/inbox/<timestamp>_<ses-message-id>.eml`, where
    `<timestamp>` is ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`).
 4. Sends bounces for recipients that do not exist.
-5. Deletes the staging object.
+5. Records a per-recipient idempotency marker, then deletes the staging object
+   only when every recipient has been handled successfully.
 
 Example response (`200`):
 
@@ -304,8 +306,10 @@ call returns `404 staging object not found`. The operation returns:
 | `502` | The message could not be processed; details are logged server-side. |
 
 A `502` can mean the object could not be read, the message could not be
-parsed, a delivery failed, or a bounce failed. The staging object is only
-deleted after all deliveries and bounces have been attempted.
+parsed, a delivery failed, a bounce failed, or the staging delete failed. The
+staging object is only deleted after all deliveries and bounces succeed. A
+retry after a partial failure skips recipients that were already handled, so
+it does not deliver or bounce them twice.
 
 ## Frontend
 

@@ -273,6 +273,7 @@ func (h *supportHandler) ProcessEmail(ctx context.Context, req *supportapi.Proce
 		SESClient:   store.Client(),
 		Storage:     h.storage,
 		Metadata:    h.metadata,
+		Dedup:       receiver.NewS3Dedup(store.Client(), store.BucketName()),
 
 		IdentityConfig: h.receiverConfig().Clone(),
 	})

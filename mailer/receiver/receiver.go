@@ -63,6 +63,12 @@ type ReceiverConfig struct {
 	// Metadata stores per-message JMAP state. The receiver creates a record
 	// for each delivered message, keyed by the id returned from Storage.
 	Metadata metadata.MetadataStore
+
+	// Dedup records which recipients have been handled for a staging key, so
+	// a Lambda retry after a partial failure cannot deliver or bounce them
+	// again. Nil defaults to S3-backed markers when SESClient supports them,
+	// otherwise to a process-local store.
+	Dedup DedupStore
 }
 
 // Receiver processes inbound messages from S3.
@@ -98,6 +104,15 @@ func NewReceiver(cfg ReceiverConfig) (*Receiver, error) {
 	}
 	if cfg.Metadata == nil {
 		cfg.Metadata = metadata.NewMemoryMetadata()
+	}
+	if cfg.Dedup == nil {
+		// A caller with a real S3 client gets durable markers automatically;
+		// simpler clients (and tests) fall back to process-local state.
+		if client, ok := cfg.SESClient.(DedupS3Client); ok {
+			cfg.Dedup = NewS3Dedup(client, cfg.Bucket)
+		} else {
+			cfg.Dedup = NewMemoryDedup()
+		}
 	}
 	return &Receiver{cfg: cfg}, nil
 }
@@ -151,98 +166,134 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 	slog.Debug("Receiver: message recipients", "key", key, "recipients", recipients)
 
 	// Resolve and apply the rules for each recipient in one pass. Every lookup
-	// is keyed by the recipient's mail identity. An identity's rules are tried
-	// in their configured order; processing stops at the first one that applies.
-	var deliveryErrors []error
-	var bounceErrors []error
+	// is keyed by the recipient's mail identity. Dedup markers are per staging
+	// key and recipient, so a retry only repeats the work that failed.
+	var processingErrors []error
+	dedupIDs := make([]string, 0, len(recipients))
 	bounceSender := fmt.Sprintf("mailer-daemon@%s", r.cfg.Domain)
 
 	for _, recipient := range recipients {
-		identity := MailIdentityForRecipient(recipient)
-		rules, err := r.cfg.IdentityConfig.GetByIdentity(identity)
+		id := DedupID(key, recipient)
+		dedupIDs = append(dedupIDs, id)
+
+		seen, err := r.cfg.Dedup.Seen(ctx, id)
 		if err != nil {
-			slog.Warn("Receiver: no routing rules; bouncing", "recipient", recipient, "identity", identity, "err", err)
-			if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
-				slog.Error("Receiver: failed to send bounce", "recipient", recipient, "err", err)
-				bounceErrors = append(bounceErrors, fmt.Errorf("bounce to %s failed: %w", recipient, err))
-			}
+			// Fail closed: without dedup state a retry might deliver twice.
+			return fmt.Errorf("failed to check dedup state for %s: %w", recipient, err)
+		}
+		if seen {
+			slog.Debug("Receiver: skipping already handled recipient", "key", key, "recipient", recipient)
 			continue
 		}
 
-		applied := false
-		for _, rule := range rules.Rules {
-			slog.Debug("Receiver: evaluating rule", "rule", rule, "mailbox", rules.MailIdentity, "recipient", recipient)
-			switch rule {
-			case DeliverToUser:
-				user, err := r.cfg.UserManager.Lookup(ctx, recipient)
-				if err != nil || user == nil {
-					// This rule does not apply: keep trying the remaining rules
-					// in order instead of deciding the recipient's fate here.
-					slog.Debug("Receiver: recipient is not a user", "recipient", recipient, "rule", rule)
-					continue
-				}
-				if err := r.deliverToRecipient(ctx, recipient, parsedEmail); err != nil {
-					slog.Error("Receiver: failed to deliver", "recipient", recipient, "err", err)
-					deliveryErrors = append(deliveryErrors, fmt.Errorf("delivery to %s failed: %w", recipient, err))
-				}
-				applied = true
-			case DeliverToMailIdentity:
-				mailbox := rules.deliveryIdentity(recipient)
-				slog.Debug("Receiver: routed to mail identity", "recipient", recipient, "mailbox", mailbox)
-				if err := r.deliverToRecipient(ctx, mailbox, parsedEmail); err != nil {
-					slog.Error("Receiver: failed to deliver", "recipient", mailbox, "err", err)
-					deliveryErrors = append(deliveryErrors, fmt.Errorf("delivery to %s failed: %w", mailbox, err))
-				}
-				applied = true
-			case Bounce:
-				if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
-					slog.Error("Receiver: failed to send bounce", "recipient", recipient, "err", err)
-					bounceErrors = append(bounceErrors, fmt.Errorf("bounce to %s failed: %w", recipient, err))
-				} else {
-					slog.Info("Receiver: sent bounce", "recipient", recipient)
-				}
-				applied = true
-			case Drop:
-				// Explicitly configured Drop is the only path that discards a
-				// recipient without a bounce. It is logged so operators can see
-				// where mail was intentionally dropped.
-				slog.Warn("Receiver: dropped message for recipient", "key", key, "recipient", recipient)
-				applied = true
-			default:
-				// Validate should reject unknown rules, but never lose mail if a
-				// config was built without going through NewReceiver.
-				slog.Warn("Receiver: ignoring unknown handler rule", "rule", rule, "recipient", recipient)
-			}
-			if applied {
-				// First applicable rule wins; do not try the remaining rules.
-				break
-			}
+		if err := r.handleRecipient(ctx, key, recipient, parsedEmail, bounceSender); err != nil {
+			slog.Error("Receiver: failed to handle recipient", "recipient", recipient, "err", err)
+			processingErrors = append(processingErrors, err)
+			continue
 		}
-		if !applied {
-			// No rule applied. Bounce rather than discard: dropping is only
-			// ever the result of an explicit Drop rule.
-			slog.Warn("Receiver: no handler rule matched; bouncing", "recipient", recipient)
-			if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
-				slog.Error("Receiver: failed to send bounce", "recipient", recipient, "err", err)
-				bounceErrors = append(bounceErrors, fmt.Errorf("bounce to %s failed: %w", recipient, err))
-			}
+		if err := r.cfg.Dedup.Record(ctx, id); err != nil {
+			processingErrors = append(processingErrors, fmt.Errorf("failed to record dedup state for %s: %w", recipient, err))
 		}
 	}
 
-	// Delete the staging object after all deliveries and bounces
+	if err := errors.Join(processingErrors...); err != nil {
+		// Keep the staging object so the Lambda retry can finish the failed
+		// recipients. Deleting it here would lose messages permanently.
+		return fmt.Errorf("processing completed with errors: %w", err)
+	}
+
+	// Only delete staging once every recipient has been handled successfully.
+	// If this delete fails, the markers above let a retry delete without
+	// redelivering the message.
 	if err := r.deleteStagingObject(ctx, key); err != nil {
 		return fmt.Errorf("failed to delete staging object after processing: %w", err)
 	}
 
-	// Return combined errors if any
-	if len(deliveryErrors) > 0 || len(bounceErrors) > 0 {
-		var allErrors []error
-		allErrors = append(allErrors, deliveryErrors...)
-		allErrors = append(allErrors, bounceErrors...)
-		return fmt.Errorf("processing completed with errors: %w", errors.Join(allErrors...))
+	// Markers are no longer needed once staging is gone. A cleanup failure is
+	// harmless: stale markers cannot collide with a different SES message id,
+	// and failing here would trigger a pointless retry of the delete.
+	if clearer, ok := r.cfg.Dedup.(DedupClearer); ok {
+		if err := clearer.Clear(ctx, dedupIDs...); err != nil {
+			slog.Warn("Receiver: failed to clear dedup markers", "key", key, "err", err)
+		}
 	}
 
 	slog.Info("Receiver: successfully processed message", "key", key, "recipients", len(recipients))
+	return nil
+}
+
+// handleRecipient applies the first applicable routing rule to one envelope
+// recipient. A returned error means the recipient still needs processing on a
+// retry; callers record a dedup marker only when this returns nil.
+func (r *Receiver) handleRecipient(ctx context.Context, key, recipient string, parsedEmail *email.UserEmail, bounceSender string) error {
+	identity := MailIdentityForRecipient(recipient)
+	rules, err := r.cfg.IdentityConfig.GetByIdentity(identity)
+	if err != nil {
+		slog.Warn("Receiver: no routing rules; bouncing", "recipient", recipient, "identity", identity, "err", err)
+		if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
+			slog.Error("Receiver: failed to send bounce", "recipient", recipient, "err", err)
+			return fmt.Errorf("bounce to %s failed: %w", recipient, err)
+		}
+		return nil
+	}
+
+	applied := false
+	for _, rule := range rules.Rules {
+		slog.Debug("Receiver: evaluating rule", "rule", rule, "mailbox", rules.MailIdentity, "recipient", recipient)
+		switch rule {
+		case DeliverToUser:
+			user, err := r.cfg.UserManager.Lookup(ctx, recipient)
+			if err != nil || user == nil {
+				// This rule does not apply: keep trying the remaining rules
+				// in order instead of deciding the recipient's fate here.
+				slog.Debug("Receiver: recipient is not a user", "recipient", recipient, "rule", rule)
+				continue
+			}
+			if err := r.deliverToRecipient(ctx, recipient, parsedEmail); err != nil {
+				slog.Error("Receiver: failed to deliver", "recipient", recipient, "err", err)
+				return fmt.Errorf("delivery to %s failed: %w", recipient, err)
+			}
+			applied = true
+		case DeliverToMailIdentity:
+			mailbox := rules.deliveryIdentity(recipient)
+			slog.Debug("Receiver: routed to mail identity", "recipient", recipient, "mailbox", mailbox)
+			if err := r.deliverToRecipient(ctx, mailbox, parsedEmail); err != nil {
+				slog.Error("Receiver: failed to deliver", "recipient", mailbox, "err", err)
+				return fmt.Errorf("delivery to %s failed: %w", mailbox, err)
+			}
+			applied = true
+		case Bounce:
+			if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
+				slog.Error("Receiver: failed to send bounce", "recipient", recipient, "err", err)
+				return fmt.Errorf("bounce to %s failed: %w", recipient, err)
+			}
+			slog.Info("Receiver: sent bounce", "recipient", recipient)
+			applied = true
+		case Drop:
+			// Explicitly configured Drop is the only path that discards a
+			// recipient without a bounce. It is logged so operators can see
+			// where mail was intentionally dropped.
+			slog.Warn("Receiver: dropped message for recipient", "key", key, "recipient", recipient)
+			applied = true
+		default:
+			// Validate should reject unknown rules, but never lose mail if a
+			// config was built without going through NewReceiver.
+			slog.Warn("Receiver: ignoring unknown handler rule", "rule", rule, "recipient", recipient)
+		}
+		if applied {
+			// First applicable rule wins; do not try the remaining rules.
+			break
+		}
+	}
+	if !applied {
+		// No rule applied. Bounce rather than discard: dropping is only
+		// ever the result of an explicit Drop rule.
+		slog.Warn("Receiver: no handler rule matched; bouncing", "recipient", recipient)
+		if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
+			slog.Error("Receiver: failed to send bounce", "recipient", recipient, "err", err)
+			return fmt.Errorf("bounce to %s failed: %w", recipient, err)
+		}
+	}
 	return nil
 }
 

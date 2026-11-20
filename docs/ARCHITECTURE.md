@@ -192,11 +192,19 @@ validation and delivery process applies:
      set and a server-stamped `receivedAt`.
    - Each recipient gets their own copy in their `inbox` mailbox
 
-4. **Mixed outcomes** — Different recipients of one message can take
-   different paths: delivery targets each get their own copy, bounced
+4. **Mixed outcomes and retries** — Different recipients of one message can
+   take different paths: delivery targets each get their own copy, bounced
    recipients each generate a separate bounce, and dropped recipients get
-   neither. The staging object is deleted after all deliveries and bounces
-   complete.
+   neither. The staging object is deleted only after every recipient has been
+   handled successfully. A failed delivery, bounce or delete leaves the object
+   in place and returns an error so the Lambda invocation is retried.
+
+   After each recipient is handled, the receiver records a marker derived from
+   the staging key and that recipient under `_processed/` in the mail bucket.
+   A retry skips recipients with a marker, so a partial failure only repeats
+   the work that failed and a failure to delete staging cannot cause a second
+   delivery. Markers are removed once staging has been deleted; a stale marker
+   is harmless because SES message ids are unique.
 
 Each delivery target has their own physical copy of the message in their
 mailbox structure, enabling independent management (move, delete, flag) per
