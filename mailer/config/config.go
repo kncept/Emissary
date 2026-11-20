@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,10 @@ import (
 	"github.com/kncept/Emissary/mailer/envutil"
 	"github.com/kncept/Emissary/mailer/fsutil"
 )
+
+// DefaultMaxFileSize is the default cap for a single JMAP request body or
+// MIME message (10 MiB). MAX_FILESIZE overrides it in bytes.
+const DefaultMaxFileSize int64 = 10 << 20
 
 // ServerConfig holds HTTP server and authentication configuration.
 type ServerConfig struct {
@@ -214,6 +219,10 @@ type Config struct {
 	// DDBTablePrefix is prepended to logical DynamoDB table names when
 	// building table names (see TABLE_PREFIX). It defaults to "emissary".
 	DDBTablePrefix string
+
+	// MaxFileSize caps a single JMAP request body and a single parsed MIME
+	// message, in bytes. It comes from MAX_FILESIZE and defaults to 10 MiB.
+	MaxFileSize int64
 }
 
 // Validate checks the entire configuration for consistency. It returns a
@@ -434,6 +443,17 @@ func Load(ctx context.Context) (*Config, error) {
 	}
 	if envErr != nil {
 		return nil, envErr
+	}
+
+	// MAX_FILESIZE is a byte count, not a duration or a secret ARN. Reject a
+	// malformed value at startup so a typo cannot silently disable the cap.
+	cfg.MaxFileSize = DefaultMaxFileSize
+	if raw := strings.TrimSpace(get("MAX_FILESIZE")); raw != "" {
+		maxFileSize, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil || maxFileSize <= 0 || maxFileSize >= 1<<40 {
+			return nil, fmt.Errorf("invalid MAX_FILESIZE %q: want a byte count between 1 and %d", raw, int64(1<<40)-1)
+		}
+		cfg.MaxFileSize = maxFileSize
 	}
 
 	ttl, err := time.ParseDuration(getDefault("24h", "JWT_TTL"))

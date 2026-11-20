@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 
@@ -140,8 +139,10 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 	}
 	defer obj.Body.Close()
 
-	// Read the raw message
-	rawMessage, err := io.ReadAll(obj.Body)
+	// Read the raw message with the configured size cap. Leave an oversized
+	// staging object in place so it can be inspected and so Lambda retries do
+	// not silently create an empty delivery.
+	rawMessage, err := email.ReadLimited(obj.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read object %s: %w", key, err)
 	}

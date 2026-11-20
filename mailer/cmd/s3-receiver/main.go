@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	mailerconfig "github.com/kncept/Emissary/mailer/config"
 	configvendor "github.com/kncept/Emissary/mailer/config-vendor"
+	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/envutil"
 	"github.com/kncept/Emissary/mailer/logging"
 	"github.com/kncept/Emissary/mailer/receiver"
@@ -73,6 +74,10 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
+
+	// Apply the same MIME cap as the frontend so MAX_FILESIZE is consistent
+	// across both Lambdas.
+	email.SetMaxPartSize(cfg.MaxFileSize)
 
 	// Load AWS config
 	awsCfg, err := awscfg.LoadDefaultConfig(ctx)

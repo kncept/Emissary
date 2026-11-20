@@ -492,6 +492,8 @@ async function emailClientStack(
       DOMAIN: emissaryDomain,
       // Deployments are quiet by default: only real errors are logged.
       LOG_LEVEL: env.LOG_LEVEL || 'ERROR',
+      // Same MIME/request cap for every Lambda; config validates the value.
+      MAX_FILESIZE: env.MAX_FILESIZE || '10485760',
       // Only set when provided: with STORAGE=s3 the app auto-selects the
       // s3 user manager when USER_MANAGER is unset.
       ...(env.USER_MANAGER ? { USER_MANAGER: env.USER_MANAGER } : {}),
@@ -586,6 +588,8 @@ async function emailClientStack(
       USERNAME: authUsername,
       DOMAIN: emissaryDomain,
       LOG_LEVEL: env.LOG_LEVEL || 'ERROR',
+      // Same MIME/request cap for every Lambda; config validates the value.
+      MAX_FILESIZE: env.MAX_FILESIZE || '10485760',
       // Only set when provided: with STORAGE=s3 the app auto-selects the
       // s3 user manager when USER_MANAGER is unset.
       ...(env.USER_MANAGER ? { USER_MANAGER: env.USER_MANAGER } : {}),

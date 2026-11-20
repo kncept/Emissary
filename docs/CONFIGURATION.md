@@ -23,10 +23,19 @@ call, so a transient failure does not poison the process permanently.
 | `JWT_ISSUER` | unset | Expected `iss` claim. The CDK app sets it to `emissary-<domain>`. |
 | `LISTEN_ADDR` | — | Listen address, e.g. `:9090` or `127.0.0.1:8080`. Takes precedence over `PORT`. |
 | `PORT` | `8080` | Listen port when `LISTEN_ADDR` is unset. |
+| `MAX_FILESIZE` | `10485760` (10 MiB) | Maximum size, in bytes, of one JMAP request body and one MIME message (including decoded parts). Must be a positive integer below 1 TiB; a bad value aborts startup. |
 
 The standalone HTTP server applies bounded read-header, read, write and idle
 timeouts and shuts down gracefully on SIGINT/SIGTERM, allowing a bounded window
 for in-flight requests to finish.
+
+`MAX_FILESIZE` is enforced by both the frontend and the inbound receiver. Every
+HTTP request body is capped at this size; an oversized JMAP batch is rejected
+with HTTP 413 and an `application/problem+json` body of type
+`urn:ietf:params:jmap:error:limit` and `limit: "maxSizeRequest"`. The configured
+value is advertised in the JMAP session as `maxSizeRequest`, `maxSizeUpload`
+and `maxSizeAttachmentsPerEmail`, so conformant clients can avoid sending
+requests that would be rejected.
 
 ## Logging
 

@@ -406,8 +406,13 @@ and API endpoints:
 ```json
 {
   "capabilities": {
-    "urn:ietf:params:jmap:core": {},
-    "urn:ietf:params:jmap:mail": {},
+    "urn:ietf:params:jmap:core": {
+      "maxSizeRequest": 10485760,
+      "maxSizeUpload": 10485760
+    },
+    "urn:ietf:params:jmap:mail": {
+      "maxSizeAttachmentsPerEmail": 10485760
+    },
     "urn:ietf:params:jmap:submission": {},
     "urn:ietf:params:jmap:vacationresponse": {}
   },
@@ -417,8 +422,13 @@ and API endpoints:
       "isPersonal": true,
       "isReadOnly": false,
       "accountCapabilities": {
-        "urn:ietf:params:jmap:core": {},
-        "urn:ietf:params:jmap:mail": {},
+        "urn:ietf:params:jmap:core": {
+          "maxSizeRequest": 10485760,
+          "maxSizeUpload": 10485760
+        },
+        "urn:ietf:params:jmap:mail": {
+          "maxSizeAttachmentsPerEmail": 10485760
+        },
         "urn:ietf:params:jmap:submission": {},
         "urn:ietf:params:jmap:vacationresponse": {}
       }
@@ -435,9 +445,11 @@ and API endpoints:
   "downloadUrl": "/download/{accountId}/{blobId}/{name}",
   "uploadUrl": "/upload/{accountId}/",
   "eventSourceUrl": "/eventsource/",
-  "state": "state123"
+  "state": "session-0"
 }
 ```
+
+The limit values above come from `MAX_FILESIZE` (10 MiB by default).
 
 ## `POST /api/jmap/` (JMAP Batch Request)
 
@@ -445,6 +457,9 @@ Processes an ordered batch of JMAP method calls. The request and
 response bodies are JSON `Request` and `Response` objects. Method
 failures are returned inside `methodResponses` as `error`
 invocations; only request-level failures use an HTTP error status.
+A body larger than `MAX_FILESIZE` is rejected with HTTP 413 and a
+problem details body (`urn:ietf:params:jmap:error:limit`,
+`limit: "maxSizeRequest"`).
 
 Example request to list emails:
 

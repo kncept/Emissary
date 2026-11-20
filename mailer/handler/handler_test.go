@@ -1037,6 +1037,21 @@ func TestSendEmailWithCreationReference(t *testing.T) {
 		t.Errorf("submission1 createdId = %v, want %q", got, emailID)
 	}
 
+	// onSuccessUpdateEmail must produce a second Email/set response with the
+	// same method call id (RFC 8621 section 7.5), keyed by the Email id.
+	if len(responses) != 3 {
+		t.Fatalf("methodResponses = %d, want 3 (Email/set, EmailSubmission/set, implicit Email/set)", len(responses))
+	}
+	last, _ := responses[2].([]interface{})
+	if len(last) < 3 || last[0] != "Email/set" || last[2] != "submissionCreate" {
+		t.Fatalf("implicit response = %v, want Email/set with client id submissionCreate", last)
+	}
+	lastResult, _ := last[1].(map[string]interface{})
+	updated, _ := lastResult["updated"].(map[string]interface{})
+	if _, ok := updated[emailID]; !ok {
+		t.Errorf("implicit Email/set updated = %v, want entry for %q", updated, emailID)
+	}
+
 	// The draft is session-scoped and must be removed after a successful send.
 	if _, err := store.GetDraft(context.Background(), bobSID, emailID); !errors.Is(err, storage.ErrNotFound) {
 		t.Errorf("GetDraft() error = %v, want %v", err, storage.ErrNotFound)

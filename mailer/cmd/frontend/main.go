@@ -17,6 +17,7 @@ import (
 	"github.com/kncept/Emissary/mailer/awsutil"
 	"github.com/kncept/Emissary/mailer/config"
 	configvendor "github.com/kncept/Emissary/mailer/config-vendor"
+	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/envutil"
 	"github.com/kncept/Emissary/mailer/handler"
 	"github.com/kncept/Emissary/mailer/logging"
@@ -46,6 +47,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}
+
+	// Cap MIME parsing at the same size advertised for JMAP uploads/requests.
+	// Store and receiver reads use this limit too, so oversized messages are
+	// rejected before they can be fully materialised in memory.
+	email.SetMaxPartSize(cfg.MaxFileSize)
 
 	// Vend every runtime component from its config subtype. The same factory
 	// is used by cmd/s3-receiver, so backends are registered in one place.
@@ -103,7 +109,8 @@ func run() error {
 		ReceiverTable:         cfg.ReceiverTableName(),
 		ReceiverRegion:        cfg.Receiver.Region,
 
-		IsLambda: awsutil.IsAwsLambda(),
+		IsLambda:    awsutil.IsAwsLambda(),
+		MaxFileSize: cfg.MaxFileSize,
 	}
 
 	h, err := handler.New(handlerCfg)

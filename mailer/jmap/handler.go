@@ -57,6 +57,7 @@ type Handler struct {
 	userMgr       usermanager.UserManager
 	sender        sender.Sender
 	fromValidator FromValidator
+	changes       *changeTracker
 }
 
 // NewHandler creates a new JMAP method handler. An optional FromValidator
@@ -67,6 +68,7 @@ func NewHandler(store storage.Storage, meta metadata.MetadataStore, userMgr user
 		metadata: meta,
 		userMgr:  userMgr,
 		sender:   mailSender,
+		changes:  newChangeTracker(),
 	}
 	for _, validator := range validators {
 		if validator != nil {
@@ -131,6 +133,7 @@ func (h *Handler) MailboxGet(ctx context.Context, accountID string, args json.Ra
 	mailboxes := h.getMailboxes(ctx, accountID)
 	var list []Mailbox
 	var notFound []string
+	state := h.syncMailboxState(ctx, accountID, mailboxes)
 
 	if len(req.IDs) > 0 {
 		mailboxMap := make(map[string]Mailbox)
@@ -150,7 +153,7 @@ func (h *Handler) MailboxGet(ctx context.Context, accountID string, args json.Ra
 
 	resp := map[string]interface{}{
 		"accountId": accountID,
-		"state":     h.getState(ctx),
+		"state":     state,
 		"list":      list,
 		"notFound":  notFound,
 	}
@@ -187,10 +190,11 @@ func (h *Handler) MailboxSet(ctx context.Context, accountID string, args json.Ra
 		notDestroyed[id] = map[string]string{"type": "forbidden", "description": "Cannot destroy mailboxes"}
 	}
 
+	state := h.state(accountID, stateMailbox)
 	resp := map[string]interface{}{
 		"accountId":    accountID,
-		"oldState":     h.getState(ctx),
-		"newState":     h.getState(ctx),
+		"oldState":     state,
+		"newState":     state,
 		"created":      created,
 		"updated":      updated,
 		"destroyed":    destroyed,
@@ -211,17 +215,12 @@ func (h *Handler) MailboxChanges(ctx context.Context, accountID string, args jso
 		return nil, err
 	}
 
-	// No changes since mailboxes are static
-	resp := map[string]interface{}{
-		"accountId":      accountID,
-		"oldState":       req.SinceState,
-		"newState":       h.getState(ctx),
-		"hasMoreChanges": false,
-		"created":        []string{},
-		"updated":        []string{},
-		"destroyed":      []string{},
+	h.syncMailboxState(ctx, accountID, h.getMailboxes(ctx, accountID))
+	result, err := h.tracker().changesFrom(accountID, stateMailbox, req.SinceState, req.MaxChanges)
+	if err != nil {
+		return nil, err
 	}
-	return json.Marshal(resp)
+	return json.Marshal(result)
 }
 
 func (h *Handler) MailboxQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
@@ -245,6 +244,7 @@ func (h *Handler) MailboxQuery(ctx context.Context, accountID string, args json.
 	}
 
 	mailboxes := h.getMailboxes(ctx, accountID)
+	state := h.syncMailboxState(ctx, accountID, mailboxes)
 
 	// Apply filter if provided
 	if req.Filter != nil {
@@ -302,7 +302,7 @@ func (h *Handler) MailboxQuery(ctx context.Context, accountID string, args json.
 
 	resp := map[string]interface{}{
 		"accountId":  accountID,
-		"queryState": h.getState(ctx),
+		"queryState": state,
 		"ids":        ids,
 		"total":      len(mailboxes),
 	}
@@ -320,16 +320,17 @@ func (h *Handler) MailboxQueryChanges(ctx context.Context, accountID string, arg
 		return nil, err
 	}
 
-	resp := map[string]interface{}{
-		"accountId":      accountID,
-		"oldQueryState":  req.SinceQueryState,
-		"newQueryState":  h.getState(ctx),
-		"hasMoreChanges": false,
-		"created":        []string{},
-		"updated":        []string{},
-		"destroyed":      []string{},
+	h.syncMailboxState(ctx, accountID, h.getMailboxes(ctx, accountID))
+	result, err := h.tracker().changesFrom(accountID, stateMailboxQuery, req.SinceQueryState, req.MaxChanges)
+	if err != nil {
+		return nil, err
 	}
-	return json.Marshal(resp)
+	// Query changes use the *QueryState field names in RFC 8620 section 5.5.
+	result["oldQueryState"] = result["oldState"]
+	result["newQueryState"] = result["newState"]
+	delete(result, "oldState")
+	delete(result, "newState")
+	return json.Marshal(result)
 }
 
 // ============================================================================
@@ -351,6 +352,7 @@ func (h *Handler) ThreadGet(ctx context.Context, accountID string, args json.Raw
 	}
 
 	threads := h.getThreads(ctx, accountID)
+	state := h.syncThreadState(ctx, accountID, threads)
 	var list []Thread
 	var notFound []string
 
@@ -372,7 +374,7 @@ func (h *Handler) ThreadGet(ctx context.Context, accountID string, args json.Raw
 
 	resp := map[string]interface{}{
 		"accountId": accountID,
-		"state":     h.getState(ctx),
+		"state":     state,
 		"list":      list,
 		"notFound":  notFound,
 	}
@@ -389,16 +391,12 @@ func (h *Handler) ThreadChanges(ctx context.Context, accountID string, args json
 		return nil, err
 	}
 
-	resp := map[string]interface{}{
-		"accountId":      accountID,
-		"oldState":       req.SinceState,
-		"newState":       h.getState(ctx),
-		"hasMoreChanges": false,
-		"created":        []string{},
-		"updated":        []string{},
-		"destroyed":      []string{},
+	h.syncThreadState(ctx, accountID, h.getThreads(ctx, accountID))
+	result, err := h.tracker().changesFrom(accountID, stateThread, req.SinceState, req.MaxChanges)
+	if err != nil {
+		return nil, err
 	}
-	return json.Marshal(resp)
+	return json.Marshal(result)
 }
 
 // ============================================================================
@@ -571,7 +569,7 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 
 	resp := map[string]interface{}{
 		"accountId": accountID,
-		"state":     h.getState(ctx),
+		"state":     h.syncEmailStateFromListed(ctx, accountID, emails),
 		"list":      list,
 		"notFound":  notFound,
 	}
@@ -611,6 +609,9 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
+
+	// Sync first so external changes are already reflected in oldState.
+	oldState := h.syncEmailState(ctx, accountID)
 
 	created := make(map[string]interface{})
 	updated := make(map[string]interface{})
@@ -843,8 +844,8 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 
 	resp := map[string]interface{}{
 		"accountId":    accountID,
-		"oldState":     h.getState(ctx),
-		"newState":     h.getState(ctx),
+		"oldState":     oldState,
+		"newState":     h.syncEmailState(ctx, accountID),
 		"created":      created,
 		"updated":      updated,
 		"destroyed":    destroyed,
@@ -865,17 +866,12 @@ func (h *Handler) EmailChanges(ctx context.Context, accountID string, args json.
 		return nil, err
 	}
 
-	// For simplicity, return no changes
-	resp := map[string]interface{}{
-		"accountId":      accountID,
-		"oldState":       req.SinceState,
-		"newState":       h.getState(ctx),
-		"hasMoreChanges": false,
-		"created":        []string{},
-		"updated":        []string{},
-		"destroyed":      []string{},
+	h.syncEmailState(ctx, accountID)
+	result, err := h.tracker().changesFrom(accountID, stateEmail, req.SinceState, req.MaxChanges)
+	if err != nil {
+		return nil, err
 	}
-	return json.Marshal(resp)
+	return json.Marshal(result)
 }
 
 func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
@@ -982,7 +978,7 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 
 	resp := map[string]interface{}{
 		"accountId":  accountID,
-		"queryState": h.getState(ctx),
+		"queryState": h.syncEmailState(ctx, accountID),
 		"ids":        ids,
 		"total":      total,
 	}
@@ -1004,16 +1000,16 @@ func (h *Handler) EmailQueryChanges(ctx context.Context, accountID string, args 
 		return nil, err
 	}
 
-	resp := map[string]interface{}{
-		"accountId":      accountID,
-		"oldQueryState":  req.SinceQueryState,
-		"newQueryState":  h.getState(ctx),
-		"hasMoreChanges": false,
-		"created":        []string{},
-		"updated":        []string{},
-		"destroyed":      []string{},
+	h.syncEmailState(ctx, accountID)
+	result, err := h.tracker().changesFrom(accountID, stateEmailQuery, req.SinceQueryState, req.MaxChanges)
+	if err != nil {
+		return nil, err
 	}
-	return json.Marshal(resp)
+	result["oldQueryState"] = result["oldState"]
+	result["newQueryState"] = result["newState"]
+	delete(result, "oldState")
+	delete(result, "newState")
+	return json.Marshal(result)
 }
 
 func (h *Handler) EmailCopy(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
@@ -1092,7 +1088,7 @@ func (h *Handler) IdentityGet(ctx context.Context, accountID string, args json.R
 
 	resp := map[string]interface{}{
 		"accountId": accountID,
-		"state":     h.getState(ctx),
+		"state":     h.state(accountID, stateIdentity),
 		"list":      list,
 		"notFound":  notFound,
 	}
@@ -1113,16 +1109,11 @@ func (h *Handler) IdentityChanges(ctx context.Context, accountID string, args js
 		return nil, err
 	}
 
-	resp := map[string]interface{}{
-		"accountId":      accountID,
-		"oldState":       req.SinceState,
-		"newState":       h.getState(ctx),
-		"hasMoreChanges": false,
-		"created":        []string{},
-		"updated":        []string{},
-		"destroyed":      []string{},
+	result, err := h.tracker().changesFrom(accountID, stateIdentity, req.SinceState, req.MaxChanges)
+	if err != nil {
+		return nil, err
 	}
-	return json.Marshal(resp)
+	return json.Marshal(result)
 }
 
 // ============================================================================
@@ -1133,7 +1124,18 @@ func (h *Handler) EmailSubmissionGet(ctx context.Context, accountID string, args
 	return nil, fmt.Errorf("EmailSubmission/get not implemented")
 }
 
+// EmailSubmissionSet implements the single-response form of the method. The
+// dispatcher uses EmailSubmissionSetWithImplicit so clients also receive the
+// separate Email/set response required by RFC 8621 section 7.5.
 func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
+	response, _, err := h.EmailSubmissionSetWithImplicit(ctx, accountID, args)
+	return response, err
+}
+
+// EmailSubmissionSetWithImplicit returns both the EmailSubmission/set response
+// and, when onSuccessUpdateEmail/onSuccessDestroyEmail were supplied, the
+// implicit Email/set response. Both share the caller's method call id.
+func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, json.RawMessage, error) {
 	slog.Debug("JMAP: submitting email", "account", accountID)
 	var req struct {
 		AccountID string `json:"accountId"`
@@ -1150,17 +1152,25 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 			} `json:"envelope,omitempty"`
 			SendAt *string `json:"sendAt,omitempty"`
 		} `json:"create,omitempty"`
-		OnSuccessUpdateEmail *struct {
-			Keywords map[string]bool `json:"keywords"`
-		} `json:"onSuccessUpdateEmail,omitempty"`
-		OnSuccessDestroyEmail []string `json:"onSuccessDestroyEmail,omitempty"`
+		// RFC 8621 section 7.5 keys onSuccessUpdateEmail by EmailSubmission
+		// id and onSuccessDestroyEmail by the same ids. Emissary uses the
+		// submission's email id as its submission id.
+		OnSuccessUpdateEmail  map[string]map[string]interface{} `json:"onSuccessUpdateEmail,omitempty"`
+		OnSuccessDestroyEmail []string                          `json:"onSuccessDestroyEmail,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
+	oldState := h.state(accountID, stateSubmission)
 	created := make(map[string]interface{})
 	notCreated := make(map[string]interface{})
+	notUpdated := make(map[string]interface{})
+	notDestroyed := make(map[string]interface{})
+	// Keys may be real submission ids or "#creationId" for submissions
+	// created by this invocation (RFC 8621 section 7.5).
+	successful := make(map[string]string) // submission id -> email id
+	draftsToDelete := []string{}
 
 	// For each submission to create
 	sessionID := ""
@@ -1363,18 +1373,14 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 		slog.Info("JMAP: email submitted", "account", accountID, "email_id", submission.EmailID)
 
 		// A session draft has served its purpose once the message is sent.
-		// Deletion failures must not turn a successful send into a client
-		// error, since that would encourage a duplicate submission.
+		// Deletion is deferred until after the implicit Email/set below so
+		// onSuccessUpdateEmail/onSuccessDestroyEmail can still address it.
 		if sessionID != "" {
-			if err := h.storage.DeleteDraft(ctx, sessionID, submission.EmailID); err != nil {
-				slog.Warn("JMAP: failed to delete sent draft", "email_id", submission.EmailID, "err", err)
-			}
-			// The draft's keyword record is tied to the draft id, so remove it
-			// too. A missing record is not an error.
-			if err := h.metadata.Delete(ctx, req.AccountID, submission.EmailID); err != nil {
-				slog.Warn("JMAP: failed to delete sent draft metadata", "account", req.AccountID, "email_id", submission.EmailID, "err", err)
-			}
+			draftsToDelete = append(draftsToDelete, submission.EmailID)
 		}
+		successful[submission.EmailID] = submission.EmailID
+		successful["#"+createID] = submission.EmailID
+		h.tracker().record(accountID, stateSubmission, submission.EmailID, changeCreate)
 
 		// Success - create the submission object
 		created[createID] = map[string]interface{}{
@@ -1388,18 +1394,90 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 		}
 	}
 
-	resp := map[string]interface{}{
-		"accountId":  req.AccountID,
-		"oldState":   h.getState(ctx),
-		"newState":   h.getState(ctx),
-		"created":    created,
-		"notCreated": notCreated,
+	// RFC 8621 section 7.5 requires one implicit Email/set call once all
+	// submissions have been processed. It is a normal Email/set, so its
+	// response is returned separately by the dispatcher with the same method
+	// call id, rather than being merged into this response.
+	implicit := map[string]interface{}{"accountId": accountID}
+	if len(req.OnSuccessUpdateEmail) > 0 {
+		updates := make(map[string]interface{}, len(req.OnSuccessUpdateEmail))
+		for submissionID, patch := range req.OnSuccessUpdateEmail {
+			emailID, ok := successful[submissionID]
+			if !ok {
+				slog.Debug("JMAP: onSuccessUpdateEmail references an unknown submission", "id", submissionID)
+				continue
+			}
+			updates[emailID] = patch
+		}
+		implicit["update"] = updates
 	}
-	return json.Marshal(resp)
+	if len(req.OnSuccessDestroyEmail) > 0 {
+		destroys := make([]string, 0, len(req.OnSuccessDestroyEmail))
+		for _, submissionID := range req.OnSuccessDestroyEmail {
+			emailID, ok := successful[submissionID]
+			if !ok {
+				slog.Debug("JMAP: onSuccessDestroyEmail references an unknown submission", "id", submissionID)
+				continue
+			}
+			destroys = append(destroys, emailID)
+		}
+		implicit["destroy"] = destroys
+	}
+	var implicitResult json.RawMessage
+	if implicit["update"] != nil || implicit["destroy"] != nil {
+		raw, err := json.Marshal(implicit)
+		if err != nil {
+			return nil, nil, err
+		}
+		implicitResult, err = h.EmailSet(ctx, accountID, raw)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	// Draft cleanup happens last so a failed implicit Email/set cannot leave a
+	// successfully sent draft behind, and a successful one can still address
+	// it. Deletion failures must not turn a successful send into a client
+	// error, since that would encourage a duplicate submission.
+	for _, draftID := range draftsToDelete {
+		if err := h.storage.DeleteDraft(ctx, sessionID, draftID); err != nil {
+			slog.Warn("JMAP: failed to delete sent draft", "email_id", draftID, "err", err)
+		}
+		if err := h.metadata.Delete(ctx, accountID, draftID); err != nil {
+			slog.Warn("JMAP: failed to delete sent draft metadata", "account", accountID, "email_id", draftID, "err", err)
+		}
+	}
+
+	resp := map[string]interface{}{
+		"accountId":    accountID,
+		"oldState":     oldState,
+		"newState":     h.state(accountID, stateSubmission),
+		"created":      created,
+		"notCreated":   notCreated,
+		"notUpdated":   notUpdated,
+		"notDestroyed": notDestroyed,
+	}
+	result, err := json.Marshal(resp)
+	if err != nil {
+		return nil, nil, err
+	}
+	return result, implicitResult, nil
 }
 
 func (h *Handler) EmailSubmissionChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	return nil, fmt.Errorf("EmailSubmission/changes not implemented")
+	var req struct {
+		AccountID  string `json:"accountId"`
+		SinceState string `json:"sinceState"`
+		MaxChanges *int   `json:"maxChanges,omitempty"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, err
+	}
+	result, err := h.tracker().changesFrom(accountID, stateSubmission, req.SinceState, req.MaxChanges)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
 }
 
 func (h *Handler) EmailSubmissionQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
@@ -1436,10 +1514,6 @@ func (h *Handler) PushSubscriptionGet(ctx context.Context, accountID string, arg
 
 func (h *Handler) PushSubscriptionSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	return nil, fmt.Errorf("PushSubscription/set not implemented")
-}
-
-func (h *Handler) PushSubscriptionChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	return nil, fmt.Errorf("PushSubscription/changes not implemented")
 }
 
 // ============================================================================
@@ -1612,12 +1686,6 @@ func (h *Handler) getThreads(ctx context.Context, accountID string) []Thread {
 		})
 	}
 	return threads
-}
-
-func (h *Handler) getState(ctx context.Context) string {
-	// Use a simple timestamp-based state
-	// In a real implementation, this would be a proper state token
-	return fmt.Sprintf("%d", time.Now().Unix())
 }
 
 func (h *Handler) countEmailsInMailbox(ctx context.Context, accountID, mailboxID string) int {

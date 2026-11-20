@@ -280,7 +280,8 @@ recipient by the configured rules for its domain.
 - `email.WireFormatEmail` — lossless, lenient RFC 5322 parser
   (headers, MIME tree, transfer encodings, charsets, folded headers).
   Parse errors are collected, not fatal. It can serialize back to wire
-  format. MIME parts are capped at 10 MiB.
+  format. The whole message and each decoded MIME part are capped by
+  `MAX_FILESIZE` (10 MiB by default).
 - `email.EmailRef` — metadata about where a message lives: its storage id
   plus the derived `AccountID`/`MailboxID`.
 - `email.UserEmail` — the simplified message content used everywhere else:

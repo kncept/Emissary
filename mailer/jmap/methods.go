@@ -55,7 +55,6 @@ type MethodHandler interface {
 	// PushSubscription methods
 	PushSubscriptionGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
 	PushSubscriptionSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
-	PushSubscriptionChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
 }
 
 // UnimplementedHandler is a default MethodHandler that panics for all methods.
@@ -200,10 +199,6 @@ func (h *UnimplementedHandler) PushSubscriptionGet(ctx context.Context, accountI
 }
 func (h *UnimplementedHandler) PushSubscriptionSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	h.panic("PushSubscription/set")
-	return nil, nil
-}
-func (h *UnimplementedHandler) PushSubscriptionChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	h.panic("PushSubscription/changes")
 	return nil, nil
 }
 

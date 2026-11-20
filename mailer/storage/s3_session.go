@@ -56,7 +56,7 @@ func (s *S3Storage) GetDraft(ctx context.Context, sessionID, id string) (*email.
 	}
 	defer output.Body.Close()
 
-	body, err := io.ReadAll(output.Body)
+	body, err := email.ReadLimited(output.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read draft %q: %w", key, err)
 	}

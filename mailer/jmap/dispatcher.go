@@ -277,14 +277,16 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 		}
 
 		slog.Debug("JMAP method call", "method", call.Name, "client_id", call.ClientID, "account", accountID)
-		resp, err := d.dispatchCall(ctx, accountID, call)
+		resps, err := d.dispatchCall(ctx, accountID, call)
 		if err != nil {
 			slog.Error("JMAP method failed", "method", call.Name, "account", accountID, "err", err)
 			// Return an error response for this method call
-			resp = d.errorResponse(call, err)
+			resps = []Invocation{d.errorResponse(call, err)}
 		}
-		recordCreatedIDs(resp, createdIDs)
-		responses = append(responses, resp)
+		for _, resp := range resps {
+			recordCreatedIDs(resp, createdIDs)
+			responses = append(responses, resp)
+		}
 	}
 
 	// Persist only when the map actually changed, so read-only JMAP requests
@@ -315,7 +317,15 @@ func sameStringMap(a, b map[string]string) bool {
 	return true
 }
 
-func (d *Dispatcher) dispatchCall(ctx context.Context, accountID string, call Invocation) (Invocation, error) {
+// implicitSetHandler is implemented by handlers whose method produces a
+// second response. RFC 8621 section 7.5 requires EmailSubmission/set to emit
+// a separate Email/set response for onSuccessUpdateEmail/DestroyEmail, with
+// the same method call id as the submission response.
+type implicitSetHandler interface {
+	EmailSubmissionSetWithImplicit(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, json.RawMessage, error)
+}
+
+func (d *Dispatcher) dispatchCall(ctx context.Context, accountID string, call Invocation) ([]Invocation, error) {
 	methodName := call.Name
 	args := call.Arguments
 	clientID := call.ClientID
@@ -323,10 +333,11 @@ func (d *Dispatcher) dispatchCall(ctx context.Context, accountID string, call In
 	// Marshal the entire args map to JSON for the handler methods
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
-		return d.errorResponseFromError(methodName, clientID, err), nil
+		return []Invocation{d.errorResponseFromError(methodName, clientID, err)}, nil
 	}
 
 	var result json.RawMessage
+	var extra []Invocation
 
 	switch methodName {
 	// Core methods
@@ -385,7 +396,15 @@ func (d *Dispatcher) dispatchCall(ctx context.Context, accountID string, call In
 	case "EmailSubmission/get":
 		result, err = d.handler.EmailSubmissionGet(ctx, accountID, argsJSON)
 	case "EmailSubmission/set":
-		result, err = d.handler.EmailSubmissionSet(ctx, accountID, argsJSON)
+		if multi, ok := d.handler.(implicitSetHandler); ok {
+			var implicit json.RawMessage
+			result, implicit, err = multi.EmailSubmissionSetWithImplicit(ctx, accountID, argsJSON)
+			if err == nil && len(implicit) > 0 {
+				extra = append(extra, d.resultInvocation("Email/set", clientID, implicit))
+			}
+		} else {
+			result, err = d.handler.EmailSubmissionSet(ctx, accountID, argsJSON)
+		}
 	case "EmailSubmission/changes":
 		result, err = d.handler.EmailSubmissionChanges(ctx, accountID, argsJSON)
 	case "EmailSubmission/query":
@@ -401,34 +420,36 @@ func (d *Dispatcher) dispatchCall(ctx context.Context, accountID string, call In
 	case "VacationResponse/changes":
 		result, err = d.handler.VacationResponseChanges(ctx, accountID, argsJSON)
 
-	// PushSubscription methods
+	// PushSubscription methods are account-less in RFC 8620 section 7.2,
+	// but still receive their full arguments object like every other method.
 	case "PushSubscription/get":
-		result, err = d.handler.PushSubscriptionGet(ctx, accountID, args[""])
+		result, err = d.handler.PushSubscriptionGet(ctx, accountID, argsJSON)
 	case "PushSubscription/set":
-		result, err = d.handler.PushSubscriptionSet(ctx, accountID, args[""])
-	case "PushSubscription/changes":
-		result, err = d.handler.PushSubscriptionChanges(ctx, accountID, args[""])
+		result, err = d.handler.PushSubscriptionSet(ctx, accountID, argsJSON)
 
 	default:
 		err = fmt.Errorf("unknown method: %s", methodName)
 	}
 
 	if err != nil {
-		return d.errorResponseFromError(methodName, clientID, err), nil
+		return []Invocation{d.errorResponseFromError(methodName, clientID, err)}, nil
 	}
+	return append([]Invocation{d.resultInvocation(methodName, clientID, result)}, extra...), nil
+}
 
-	// Construct the response invocation
-	// The response is [methodName, arguments, clientId], where arguments is
-	// the result object returned by the method handler.
+// resultInvocation constructs the response invocation. The response is
+// [methodName, arguments, clientId], where arguments is the result object
+// returned by the method handler.
+func (d *Dispatcher) resultInvocation(methodName, clientID string, result json.RawMessage) Invocation {
 	var resultArgs map[string]json.RawMessage
 	if err := json.Unmarshal(result, &resultArgs); err != nil {
-		return d.errorResponseFromError(methodName, clientID, err), nil
+		return d.errorResponseFromError(methodName, clientID, err)
 	}
 	return Invocation{
 		Name:      methodName,
 		Arguments: resultArgs,
 		ClientID:  clientID,
-	}, nil
+	}
 }
 
 func (d *Dispatcher) errorResponse(call Invocation, err error) Invocation {
@@ -448,6 +469,8 @@ func (d *Dispatcher) errorResponseFromError(methodName, clientID string, err err
 		errorType = "notFound"
 	} else if strings.HasPrefix(errMsg, "invalidArguments:") {
 		errorType = "invalidArguments"
+	} else if strings.HasPrefix(errMsg, "cannotCalculateChanges:") {
+		errorType = "cannotCalculateChanges"
 	}
 
 	errorArgs := map[string]json.RawMessage{

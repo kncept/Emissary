@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -31,7 +32,19 @@ import (
 	"github.com/kncept/Emissary/mailer/usermanager"
 )
 
-const maxRequestBody = 1 << 20
+const (
+	// maxRequestBody is the tighter cap used by the authentication endpoints,
+	// which only ever carry a username/password or a refresh token.
+	maxRequestBody = 1 << 20
+
+	// defaultMaxFileSize mirrors config.DefaultMaxFileSize for callers that
+	// build a HandlerConfig directly (tests and programmatic users).
+	defaultMaxFileSize = 10 << 20
+
+	// jmapSessionState is stable because the session object itself is static:
+	// every mutable value is reported per account by Foo/get's state token.
+	jmapSessionState = "session-0"
+)
 
 type HandlerConfig struct {
 	AuthUser         string
@@ -91,6 +104,18 @@ type HandlerConfig struct {
 	// client IP and the account. Zero selects the default (10 per minute).
 	LoginRateLimit       int
 	LoginRateLimitWindow time.Duration
+
+	// MaxFileSize caps JMAP request bodies and MIME messages in bytes. Zero
+	// selects the 10 MiB default. It is advertised as maxSizeRequest and
+	// maxSizeUpload in the JMAP session object.
+	MaxFileSize int64
+}
+
+func (cfg HandlerConfig) maxFileSize() int64 {
+	if cfg.MaxFileSize > 0 {
+		return cfg.MaxFileSize
+	}
+	return defaultMaxFileSize
 }
 
 func applyDDBTablePrefix(prefix, name string) string {
@@ -276,6 +301,7 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 
 func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, metaStore metadata.MetadataStore, sessionStore session.SessionStore, mailSender sender.Sender, userManager usermanager.UserManager, cfg HandlerConfig) http.Handler {
 	mux := http.NewServeMux()
+	maxFileSize := cfg.maxFileSize()
 	loginLimiter := newLoginLimiter(cfg.LoginRateLimit, cfg.LoginRateLimitWindow)
 
 	// Outbound From addresses must belong to a verified email identity. SES is
@@ -374,10 +400,10 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 	})
 
 	mux.Handle("GET /.well-known/jmap", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleJMAPSession(w, r)
+		handleJMAPSession(w, r, maxFileSize)
 	})))
 	mux.Handle("POST /api/jmap/", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleJMAPAPIRequest(w, r, dispatcher)
+		handleJMAPAPIRequest(w, r, dispatcher, maxFileSize)
 	})))
 	mux.Handle("POST /upload/", requireAuth(authenticator, http.HandlerFunc(handleJMAPUpload)))
 	mux.Handle("GET /download/", requireAuth(authenticator, http.HandlerFunc(handleJMAPDownload)))
@@ -473,6 +499,10 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 		if strings.HasPrefix(r.URL.Path, "/api/support/") {
 			w.Header().Set("Cache-Control", "no-store")
 		}
+		// One cap for every request body, including the generated OpenAPI
+		// decoders that read r.Body directly. Handlers that need a tighter
+		// limit (the auth endpoints) may wrap it again with MaxBytesReader.
+		r.Body = http.MaxBytesReader(w, r.Body, maxFileSize)
 		mux.ServeHTTP(w, r)
 	})
 }
@@ -632,14 +662,25 @@ func getContentType(path string) string {
 	return "application/octet-stream"
 }
 
-func handleJMAPSession(w http.ResponseWriter, r *http.Request) {
+func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64) {
 	claims := currentClaims(r)
 	username := claims.Subject
 
+	// RFC 8620 section 2 requires servers to advertise the limits they
+	// enforce. Advertising the configured value keeps clients from sending
+	// batches we would have to reject with a limit error.
+	coreCapabilities := map[string]any{
+		"maxSizeRequest": maxFileSize,
+		"maxSizeUpload":  maxFileSize,
+	}
+	mailCapabilities := map[string]any{
+		"maxSizeAttachmentsPerEmail": maxFileSize,
+	}
+
 	session := map[string]any{
 		"capabilities": map[string]any{
-			"urn:ietf:params:jmap:core":             map[string]any{},
-			"urn:ietf:params:jmap:mail":             map[string]any{},
+			"urn:ietf:params:jmap:core":             coreCapabilities,
+			"urn:ietf:params:jmap:mail":             mailCapabilities,
 			"urn:ietf:params:jmap:submission":       map[string]any{},
 			"urn:ietf:params:jmap:vacationresponse": map[string]any{},
 		},
@@ -649,8 +690,8 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request) {
 				"isPersonal": true,
 				"isReadOnly": false,
 				"accountCapabilities": map[string]any{
-					"urn:ietf:params:jmap:core":             map[string]any{},
-					"urn:ietf:params:jmap:mail":             map[string]any{},
+					"urn:ietf:params:jmap:core":             coreCapabilities,
+					"urn:ietf:params:jmap:mail":             mailCapabilities,
 					"urn:ietf:params:jmap:submission":       map[string]any{},
 					"urn:ietf:params:jmap:vacationresponse": map[string]any{},
 				},
@@ -667,16 +708,23 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request) {
 		"downloadUrl":    "/download/{accountId}/{blobId}/{name}",
 		"uploadUrl":      "/upload/{accountId}/",
 		"eventSourceUrl": "/eventsource/",
-		"state":          "state123",
+		"state":          jmapSessionState,
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(session)
 }
 
-func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jmap.Dispatcher) {
+func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jmap.Dispatcher, maxFileSize int64) {
 	var req jmap.Request
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			// RFC 8620 section 3.6.1: capability limit violations are an HTTP
+			// error with a problem details body naming the limit.
+			writeJMAPLimitError(w, "maxSizeRequest", maxFileSize)
+			return
+		}
 		writeJMAPError(w, "invalidRequest", "Invalid JSON request")
 		return
 	}
@@ -697,10 +745,24 @@ func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jm
 		return
 	}
 
-	resp.SessionState = "state123"
+	resp.SessionState = jmapSessionState
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// writeJMAPLimitError reports a request that exceeds an advertised capability
+// limit using the problem details format required by RFC 8620 section 3.6.1.
+func writeJMAPLimitError(w http.ResponseWriter, limit string, maxBytes int64) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(http.StatusRequestEntityTooLarge)
+	json.NewEncoder(w).Encode(map[string]any{
+		"type":   "urn:ietf:params:jmap:error:limit",
+		"title":  "Request exceeds server limit",
+		"status": http.StatusRequestEntityTooLarge,
+		"detail": fmt.Sprintf("Request exceeds the %s limit of %d bytes", limit, maxBytes),
+		"limit":  limit,
+	})
 }
 
 func handleJMAPUpload(w http.ResponseWriter, r *http.Request) {

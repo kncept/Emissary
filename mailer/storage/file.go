@@ -142,6 +142,9 @@ func (s *FileStorage) getRawByKey(key string) ([]byte, error) {
 	if info.IsDir() {
 		return nil, ErrNotFound
 	}
+	if info.Size() > email.MaxPartSize() {
+		return nil, fmt.Errorf("message %q exceeds maximum size of %d bytes", key, email.MaxPartSize())
+	}
 	raw, err := os.ReadFile(objectPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -273,6 +276,16 @@ func (s *FileStorage) GetDraft(_ context.Context, sessionID, id string) (*email.
 	objectPath, err := s.objectPath(key)
 	if err != nil {
 		return nil, err
+	}
+	info, err := os.Stat(objectPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to stat draft %q: %w", key, err)
+	}
+	if info.Size() > email.MaxPartSize() {
+		return nil, fmt.Errorf("draft %q exceeds maximum size of %d bytes", key, email.MaxPartSize())
 	}
 	body, err := os.ReadFile(objectPath)
 	if err != nil {

@@ -8,10 +8,37 @@ import (
 	"io"
 	"net/mail"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
-const maxPartSize = 10 << 20 // 10 MiB per MIME part
+// DefaultMaxPartSize is the default cap for a whole MIME message and for an
+// individual MIME part (10 MiB). SetMaxPartSize overrides it at startup.
+const DefaultMaxPartSize int64 = 10 << 20
+
+// maxAllowedPartSize leaves room for the extra lookahead byte used to detect
+// oversized readers without integer overflow.
+const maxAllowedPartSize int64 = 1 << 40
+
+var maxPartSize atomic.Int64
+
+func init() {
+	maxPartSize.Store(DefaultMaxPartSize)
+}
+
+// SetMaxPartSize sets the limit used by the MIME parser and by callers that
+// read untrusted message bodies. Non-positive values are ignored so a bad
+// configuration cannot remove the limit.
+func SetMaxPartSize(limit int64) {
+	if limit > 0 && limit < maxAllowedPartSize {
+		maxPartSize.Store(limit)
+	}
+}
+
+// MaxPartSize returns the configured MIME/message size limit in bytes.
+func MaxPartSize() int64 {
+	return maxPartSize.Load()
+}
 
 // MailboxKeyRoot is the S3 key prefix that holds per-user mailboxes.
 const MailboxKeyRoot = "users/"
@@ -246,6 +273,9 @@ func addressListString(addresses []Address) string {
 // when the account/mailbox metadata is needed.
 func Parse(_ string, r io.Reader) (*UserEmail, error) {
 	wfe := ParseWireFormat("", r)
+	if wfe.TooLarge {
+		return nil, fmt.Errorf("message exceeds maximum size of %d bytes", MaxPartSize())
+	}
 	return wfe.ToUserEmail(), nil
 }
 
@@ -256,15 +286,37 @@ func Parse(_ string, r io.Reader) (*UserEmail, error) {
 // This is the primary parsing function for applications that need full access
 // to the wire format (all headers, MIME structure, encodings, etc.).
 func ParseWireFormat(id string, r io.Reader) *WireFormatEmail {
-	return parseWireFormatBytes(id, readAllOrEmpty(r))
+	data, err := readAllLimited(r, MaxPartSize())
+	wfe := parseWireFormatBytes(id, data)
+	if err != nil {
+		wfe.TooLarge = true
+		wfe.Errs = append([]ParseError{{Section: "message", Message: err.Error()}}, wfe.Errs...)
+	}
+	return wfe
 }
 
-func readAllOrEmpty(r io.Reader) []byte {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return nil
+// ReadLimited reads an untrusted message body up to the configured limit.
+// Callers that read wire bytes before handing them to ParseWireFormat should
+// use this so the cap is enforced at the earliest possible point.
+func ReadLimited(r io.Reader) ([]byte, error) {
+	return readAllLimited(r, MaxPartSize())
+}
+
+// readAllLimited reads at most limit bytes plus one byte of lookahead, so an
+// oversized body is detected without ever materialising it in memory. Reader
+// errors are returned rather than being silently treated as an empty message.
+func readAllLimited(r io.Reader, limit int64) ([]byte, error) {
+	if r == nil {
+		return nil, nil
 	}
-	return data
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("message exceeds maximum size of %d bytes", limit)
+	}
+	return data, nil
 }
 
 // parseAddress parses a single address from a header value.

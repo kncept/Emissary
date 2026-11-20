@@ -46,10 +46,9 @@ const (
 	MethodVacationResponseSet     = "VacationResponse/set"
 	MethodVacationResponseChanges = "VacationResponse/changes"
 
-	// PushSubscription
-	MethodPushSubscriptionGet     = "PushSubscription/get"
-	MethodPushSubscriptionSet     = "PushSubscription/set"
-	MethodPushSubscriptionChanges = "PushSubscription/changes"
+	// PushSubscription (RFC 8620 section 7.2 defines only get and set)
+	MethodPushSubscriptionGet = "PushSubscription/get"
+	MethodPushSubscriptionSet = "PushSubscription/set"
 )
 
 // AllMethods returns a list of all JMAP method names.
@@ -65,6 +64,6 @@ func AllMethods() []string {
 		MethodEmailSubmissionGet, MethodEmailSubmissionSet, MethodEmailSubmissionChanges,
 		MethodEmailSubmissionQuery, MethodEmailSubmissionQueryChanges,
 		MethodVacationResponseGet, MethodVacationResponseSet, MethodVacationResponseChanges,
-		MethodPushSubscriptionGet, MethodPushSubscriptionSet, MethodPushSubscriptionChanges,
+		MethodPushSubscriptionGet, MethodPushSubscriptionSet,
 	}
 }

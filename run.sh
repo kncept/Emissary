@@ -201,6 +201,7 @@ deploy_show_env() {
 		echo "PASSWORD: (not defined)"
 	fi
 	echo "JWT_SECRET: $(if [[ -n "${JWT_SECRET:-}" ]]; then echo "(defined)"; else echo "<not set (will generate)>"; fi)"
+	echo "MAX_FILESIZE: ${MAX_FILESIZE:-<not set (defaults to 10485760 bytes)>}"
 	echo "========================================="
 }
 
@@ -301,6 +302,7 @@ run() {
 	export PORT="${PORT:-8080}"
 	# Local runs are verbose by default; deployment sets ERROR explicitly.
 	export LOG_LEVEL="${LOG_LEVEL:-DEBUG}"
+	export MAX_FILESIZE="${MAX_FILESIZE:-10485760}"
 
 	echo "Starting Emissary frontend..."
 	echo "  Username: $USERNAME"
@@ -320,6 +322,7 @@ run() {
 	echo "  Metadata Type: $METADATA"
 	echo "  Port: $PORT"
 	echo "  Log Level: $LOG_LEVEL"
+	echo "  Max File Size: $MAX_FILESIZE bytes"
 	echo ""
 
 	# Run the frontend binary, passing through any additional arguments

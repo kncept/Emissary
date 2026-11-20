@@ -73,6 +73,10 @@ type WireFormatEmail struct {
 	// The parser continues on error (best-effort), so this may be non-empty
 	// even when the email is partially usable.
 	Errs []ParseError
+
+	// TooLarge is true when the source message exceeded MaxPartSize. In that
+	// case the parsed content is incomplete and must not be delivered.
+	TooLarge bool
 }
 
 // Header represents a single email header field.
@@ -386,7 +390,9 @@ func (wfe *WireFormatEmail) parseMultipart(body []byte, mediaType string, params
 			break
 		}
 
-		partData, err := io.ReadAll(part)
+		// Bound each part independently. Without this, one crafted part can
+		// exhaust memory even when the whole message fits under the cap.
+		partData, err := io.ReadAll(io.LimitReader(part, MaxPartSize()+1))
 		if err != nil {
 			wfe.Errs = append(wfe.Errs, ParseError{
 				Section: "multipart",
@@ -396,6 +402,14 @@ func (wfe *WireFormatEmail) parseMultipart(body []byte, mediaType string, params
 			continue
 		}
 		part.Close()
+
+		if int64(len(partData)) > MaxPartSize() {
+			wfe.Errs = append(wfe.Errs, ParseError{
+				Section: "multipart",
+				Message: fmt.Sprintf("MIME part exceeds maximum size of %d bytes", MaxPartSize()),
+			})
+			continue
+		}
 
 		// Parse part headers
 		partHeaders := make([]Header, 0, len(part.Header))
@@ -512,7 +526,14 @@ func (wfe *WireFormatEmail) decodeTransferEncoding(encoding string, data []byte)
 		n, err := base64.StdEncoding.Decode(decoded, data)
 		return decoded[:n], err
 	case "quoted-printable":
-		return io.ReadAll(quotedprintable.NewReader(bytes.NewReader(data)))
+		decoded, err := io.ReadAll(io.LimitReader(quotedprintable.NewReader(bytes.NewReader(data)), MaxPartSize()+1))
+		if err != nil {
+			return nil, err
+		}
+		if int64(len(decoded)) > MaxPartSize() {
+			return nil, fmt.Errorf("decoded part exceeds maximum size of %d bytes", MaxPartSize())
+		}
+		return decoded, nil
 	case "7bit", "8bit", "binary", "":
 		return data, nil
 	default:
@@ -569,9 +590,12 @@ func decodeHeader(value string) string {
 func charsetReader(charset string, input io.Reader) (io.Reader, error) {
 	switch strings.ToLower(strings.TrimSpace(charset)) {
 	case "iso-8859-1", "latin1", "latin-1":
-		data, err := io.ReadAll(input)
+		data, err := io.ReadAll(io.LimitReader(input, MaxPartSize()+1))
 		if err != nil {
 			return nil, err
+		}
+		if int64(len(data)) > MaxPartSize() {
+			return nil, fmt.Errorf("encoded header exceeds maximum size of %d bytes", MaxPartSize())
 		}
 		return strings.NewReader(latin1String(data)), nil
 	default:

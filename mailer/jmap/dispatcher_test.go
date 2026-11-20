@@ -250,3 +250,75 @@ func TestDispatchRequestMalformedRecipientReturnsInvalidArguments(t *testing.T) 
 		t.Errorf("error type = %q, want invalidArguments", errorType)
 	}
 }
+
+// pushMethodHandler records arguments passed to the PushSubscription methods.
+// Embedding MethodHandler supplies methods this test does not exercise.
+type pushMethodHandler struct {
+	MethodHandler
+	getArgs map[string]json.RawMessage
+	setArgs map[string]json.RawMessage
+}
+
+func (s *pushMethodHandler) PushSubscriptionGet(_ context.Context, _ string, args json.RawMessage) (json.RawMessage, error) {
+	if err := json.Unmarshal(args, &s.getArgs); err != nil {
+		return nil, err
+	}
+	return json.RawMessage(`{"list":[],"notFound":[]}`), nil
+}
+
+func (s *pushMethodHandler) PushSubscriptionSet(_ context.Context, _ string, args json.RawMessage) (json.RawMessage, error) {
+	if err := json.Unmarshal(args, &s.setArgs); err != nil {
+		return nil, err
+	}
+	return json.RawMessage(`{"created":{},"updated":{},"destroyed":[],"notCreated":{},"notUpdated":{},"notDestroyed":{}}`), nil
+}
+
+func TestPushSubscriptionMethodsReceiveFullArguments(t *testing.T) {
+	handler := &pushMethodHandler{}
+	dispatcher := NewDispatcher(handler, nil)
+	req := &Request{
+		MethodCalls: []Invocation{
+			{
+				Name:     "PushSubscription/get",
+				ClientID: "c1",
+				Arguments: map[string]json.RawMessage{
+					"id": json.RawMessage(`"sub-1"`),
+				},
+			},
+			{
+				Name:     "PushSubscription/set",
+				ClientID: "c2",
+				Arguments: map[string]json.RawMessage{
+					"create": json.RawMessage(`{"create1":{"url":"https://example.com/callback"}}`),
+				},
+			},
+			// RFC 8620 defines no PushSubscription/changes method.
+			{Name: "PushSubscription/changes", ClientID: "c3", Arguments: map[string]json.RawMessage{}},
+		},
+	}
+
+	resp, err := dispatcher.DispatchRequest(context.Background(), "alice@example.com",
+		&auth.Claims{Subject: "alice@example.com"}, req)
+	if err != nil {
+		t.Fatalf("DispatchRequest() error = %v", err)
+	}
+	if len(resp.MethodResponses) != 3 {
+		t.Fatalf("method responses = %d, want 3", len(resp.MethodResponses))
+	}
+	if _, ok := handler.getArgs["id"]; !ok {
+		t.Errorf("PushSubscription/get args = %v, want the full arguments object", handler.getArgs)
+	}
+	if _, ok := handler.setArgs["create"]; !ok {
+		t.Errorf("PushSubscription/set args = %v, want the full arguments object", handler.setArgs)
+	}
+	if resp.MethodResponses[2].Name != "error" {
+		t.Fatalf("PushSubscription/changes response = %q, want error", resp.MethodResponses[2].Name)
+	}
+	var errorType string
+	if err := json.Unmarshal(resp.MethodResponses[2].Arguments["type"], &errorType); err != nil {
+		t.Fatalf("unmarshal error type: %v", err)
+	}
+	if errorType != "unknownMethod" {
+		t.Errorf("error type = %q, want unknownMethod", errorType)
+	}
+}

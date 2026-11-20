@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -247,7 +246,7 @@ func (s *S3Storage) getRawByKey(ctx context.Context, key string) ([]byte, error)
 	}
 	defer output.Body.Close()
 
-	body, err := io.ReadAll(output.Body)
+	body, err := email.ReadLimited(output.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read object %q: %w", key, err)
 	}
@@ -310,7 +309,7 @@ func (s *S3Storage) GetEmailLegacy(ctx context.Context, key string) (Email, erro
 	}
 	defer output.Body.Close()
 
-	body, err := io.ReadAll(output.Body)
+	body, err := email.ReadLimited(output.Body)
 	if err != nil {
 		return Email{}, fmt.Errorf("failed to read body: %w", err)
 	}
