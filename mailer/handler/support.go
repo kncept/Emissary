@@ -18,12 +18,12 @@ import (
 	"github.com/kncept/Emissary/mailer/auth"
 	configvendor "github.com/kncept/Emissary/mailer/config-vendor"
 	"github.com/kncept/Emissary/mailer/envutil"
-	"github.com/kncept/Emissary/mailer/metadata"
+	"github.com/kncept/Emissary/mailer/components/metadata"
 	"github.com/kncept/Emissary/mailer/receiver"
-	"github.com/kncept/Emissary/mailer/sender"
-	"github.com/kncept/Emissary/mailer/session"
-	"github.com/kncept/Emissary/mailer/storage"
-	"github.com/kncept/Emissary/mailer/usermanager"
+	"github.com/kncept/Emissary/mailer/components/sender"
+	"github.com/kncept/Emissary/mailer/components/session"
+	"github.com/kncept/Emissary/mailer/components/storage"
+	"github.com/kncept/Emissary/mailer/components/usermanager"
 )
 
 const (
@@ -266,14 +266,12 @@ func (h *supportHandler) ProcessEmail(ctx context.Context, req *supportapi.Proce
 	}
 
 	rcvr, err := receiver.NewReceiver(receiver.ReceiverConfig{
-		Bucket:      store.BucketName(),
-		UserManager: h.users,
-		Sender:      h.sender,
-		Domain:      h.cfg.UserDomain,
-		SESClient:   store.Client(),
-		Storage:     h.storage,
-		Metadata:    h.metadata,
-		Dedup:       receiver.NewS3Dedup(store.Client(), store.BucketName()),
+		UserManager:    h.users,
+		Sender:         h.sender,
+		Domain:         h.cfg.UserDomain,
+		Storage:        h.storage,
+		Metadata:       h.metadata,
+		Dedup:          receiver.NewS3Dedup(store.Client(), store.BucketName()),
 
 		IdentityConfig: h.receiverConfig().Clone(),
 	})
@@ -282,7 +280,9 @@ func (h *supportHandler) ProcessEmail(ctx context.Context, req *supportapi.Proce
 		return &supportapi.ProcessEmailBadGateway{Error: "failed to process email"}, nil
 	}
 
-	if err := rcvr.ProcessMessage(ctx, id); err != nil {
+	// Use the S3Event adapter to process the message via the new ProcessEvent API
+	event := NewRawS3Event(store.Client(), store.BucketName(), id)
+	if err := rcvr.ProcessEvent(ctx, event); err != nil {
 		slog.Error("Support: failed to process staging object", "key", id, "err", err)
 		return &supportapi.ProcessEmailBadGateway{Error: "failed to process email"}, nil
 	}

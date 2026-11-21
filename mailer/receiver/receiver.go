@@ -1,43 +1,29 @@
 // Package receiver implements the inbound mail processing logic for Emissary.
-// It reads raw messages from an S3 staging area, validates recipients,
+// It processes raw messages from an event source, validates recipients,
 // delivers messages to user mailboxes, and handles bounces for invalid recipients.
 package receiver
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/kncept/Emissary/mailer/email"
-	"github.com/kncept/Emissary/mailer/metadata"
-	"github.com/kncept/Emissary/mailer/sender"
-	"github.com/kncept/Emissary/mailer/storage"
-	"github.com/kncept/Emissary/mailer/usermanager"
+	"github.com/kncept/Emissary/mailer/components/metadata"
+	"github.com/kncept/Emissary/mailer/components/sender"
+	"github.com/kncept/Emissary/mailer/components/storage"
+	"github.com/kncept/Emissary/mailer/components/usermanager"
 )
 
 // ErrNoValidRecipients is returned when a message has no valid recipients.
 var ErrNoValidRecipients = errors.New("no valid recipients")
 
-// S3Client is the subset of the S3 client used by the receiver for the SES
-// staging area. Delivery no longer writes through this interface: it goes via
-// the configured storage. Staging read and delete are still S3 operations and
-// will be decoupled separately.
-type S3Client interface {
-	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
-	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
-}
-
 // ReceiverConfig holds the configuration for the receiver.
 type ReceiverConfig struct {
-	// Bucket is the S3 bucket name for inbound messages.
-	Bucket string
-
 	// UserManager is used to validate recipient addresses.
 	UserManager usermanager.UserManager
 
@@ -52,9 +38,6 @@ type ReceiverConfig struct {
 	// fallback rules: deliver to existing users, bounce everyone else.
 	IdentityConfig MailIdentityConfig
 
-	// SESClient is the S3 client for staging-area operations (read and delete).
-	SESClient S3Client
-
 	// Storage is the configured mail store used to deliver messages. It owns
 	// the generated email id and mailbox placement, so the receiver must not
 	// construct destination keys itself.
@@ -66,21 +49,17 @@ type ReceiverConfig struct {
 
 	// Dedup records which recipients have been handled for a staging key, so
 	// a Lambda retry after a partial failure cannot deliver or bounce them
-	// again. Nil defaults to S3-backed markers when SESClient supports them,
-	// otherwise to a process-local store.
+	// again. Defaults to a process-local store.
 	Dedup DedupStore
 }
 
-// Receiver processes inbound messages from S3.
+// Receiver processes inbound messages.
 type Receiver struct {
 	cfg ReceiverConfig
 }
 
 // NewReceiver creates a new Receiver with the given configuration.
 func NewReceiver(cfg ReceiverConfig) (*Receiver, error) {
-	if cfg.Bucket == "" {
-		return nil, errors.New("bucket is required")
-	}
 	if cfg.UserManager == nil {
 		return nil, errors.New("user manager is required")
 	}
@@ -99,72 +78,48 @@ func NewReceiver(cfg ReceiverConfig) (*Receiver, error) {
 	if err := cfg.IdentityConfig.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid mail identity config: %w", err)
 	}
-	if cfg.SESClient == nil {
-		return nil, errors.New("S3 client is required")
-	}
 	if cfg.Metadata == nil {
 		cfg.Metadata = metadata.NewMemoryMetadata()
 	}
 	if cfg.Dedup == nil {
-		// A caller with a real S3 client gets durable markers automatically;
-		// simpler clients (and tests) fall back to process-local state.
-		if client, ok := cfg.SESClient.(DedupS3Client); ok {
-			cfg.Dedup = NewS3Dedup(client, cfg.Bucket)
-		} else {
-			cfg.Dedup = NewMemoryDedup()
-		}
+		cfg.Dedup = NewMemoryDedup()
 	}
 	return &Receiver{cfg: cfg}, nil
 }
 
-// ProcessMessage processes a single message from the S3 staging area.
-// The key is the SES message ID (object key at bucket root).
-// Returns an error if the message cannot be processed.
-func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
-	slog.Info("Receiver: processing message", "key", key)
+// ParsedMessage holds the parsed email and its envelope recipients.
+type ParsedMessage struct {
+	WireEmail  *email.WireFormatEmail
+	ParsedEmail *email.UserEmail
+	RawMessage []byte
+	Recipients []string
+}
 
-	// Get the raw message from S3
-	obj, err := r.cfg.SESClient.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(r.cfg.Bucket),
-		Key:    aws.String(key),
-	})
-	if err != nil {
-		// Check if object doesn't exist (already processed or deleted)
-		var noSuchKey *types.NoSuchKey
-		if errors.As(err, &noSuchKey) {
-			slog.Debug("Receiver: staging object not found (already processed?)", "key", key)
-			return nil
-		}
-		return fmt.Errorf("failed to get object %s: %w", key, err)
-	}
-	defer obj.Body.Close()
-
-	// Read the raw message with the configured size cap. Leave an oversized
-	// staging object in place so it can be inspected and so Lambda retries do
-	// not silently create an empty delivery.
-	rawMessage, err := email.ReadLimited(obj.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read object %s: %w", key, err)
-	}
-
-	// The staged object is the raw RFC 5322 message accepted by SES. Parse it
-	// with the wire-format type so the Received headers survive: UserEmail is
-	// the simplified type used for delivered .eml files and drops them. Keep
-	// the original bytes alongside the parsed copy so delivery can store them
-	// verbatim; rendering from UserEmail would lose MIME parts and attachments.
+// ParseRawMessage parses raw email bytes into a ParsedMessage.
+// It extracts envelope recipients from the Received headers and converts
+// to UserEmail for delivery logic.
+func ParseRawMessage(key string, rawMessage []byte) *ParsedMessage {
 	wireEmail := email.ParseWireFormat(key, bytes.NewReader(rawMessage))
 	parsedEmail := wireEmail.ToUserEmail()
-
-	// Route on the SMTP envelope recipient (RCPT TO) recorded in the Received
-	// header, not on the sender-controlled To/Cc/Bcc headers.
 	recipients := email.EnvelopeRecipients(wireEmail)
+	return &ParsedMessage{
+		WireEmail:   wireEmail,
+		ParsedEmail: parsedEmail,
+		RawMessage:  rawMessage,
+		Recipients:  recipients,
+	}
+}
+
+// processMessage is the common processing logic shared by all entry points.
+// It handles recipient resolution, dedup, delivery, bounces.
+// The caller is responsible for parsing and providing the key, recipients,
+// parsed email, and raw message bytes.
+// Returns the list of dedup IDs that were recorded, so the caller can clear them
+// after any storage-specific cleanup (e.g., deleting the staging object).
+func (r *Receiver) processMessage(ctx context.Context, key string, recipients []string, parsedEmail *email.UserEmail, rawMessage []byte) ([]string, error) {
 	if len(recipients) == 0 {
 		slog.Warn("Receiver: no envelope recipients found", "key", key)
-		// Still delete the staging object to avoid reprocessing
-		if err := r.deleteStagingObject(ctx, key); err != nil {
-			return fmt.Errorf("failed to delete staging object after no recipients: %w", err)
-		}
-		return nil
+		return nil, nil
 	}
 
 	slog.Debug("Receiver: message recipients", "key", key, "recipients", recipients)
@@ -183,7 +138,7 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 		seen, err := r.cfg.Dedup.Seen(ctx, id)
 		if err != nil {
 			// Fail closed: without dedup state a retry might deliver twice.
-			return fmt.Errorf("failed to check dedup state for %s: %w", recipient, err)
+			return dedupIDs, fmt.Errorf("failed to check dedup state for %s: %w", recipient, err)
 		}
 		if seen {
 			slog.Debug("Receiver: skipping already handled recipient", "key", key, "recipient", recipient)
@@ -203,27 +158,132 @@ func (r *Receiver) ProcessMessage(ctx context.Context, key string) error {
 	if err := errors.Join(processingErrors...); err != nil {
 		// Keep the staging object so the Lambda retry can finish the failed
 		// recipients. Deleting it here would lose messages permanently.
-		return fmt.Errorf("processing completed with errors: %w", err)
+		return dedupIDs, fmt.Errorf("processing completed with errors: %w", err)
 	}
 
-	// Only delete staging once every recipient has been handled successfully.
-	// If this delete fails, the markers above let a retry delete without
-	// redelivering the message.
-	if err := r.deleteStagingObject(ctx, key); err != nil {
-		return fmt.Errorf("failed to delete staging object after processing: %w", err)
+	slog.Info("Receiver: successfully processed message", "key", key, "recipients", len(recipients))
+	return dedupIDs, nil
+}
+
+// ProcessEvent processes an inbound email event that provides raw email bytes.
+// This is the new preferred entry point for processing messages, replacing
+// ProcessMessage which takes a staging key.
+func (r *Receiver) ProcessEvent(ctx context.Context, event InboundRawEmailEvent) error {
+	// Get the raw email bytes from the event
+	rawMessage, err := event.RawEmail(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get raw email from event: %w", err)
 	}
 
-	// Markers are no longer needed once staging is gone. A cleanup failure is
-	// harmless: stale markers cannot collide with a different SES message id,
-	// and failing here would trigger a pointless retry of the delete.
+	// We need a key for dedup and bounce purposes. Since the event doesn't
+	// provide one, we generate one from the message content.
+	// In practice, callers should use an event that carries the original SES message ID.
+	key := generateEventKey(rawMessage)
+
+	slog.Info("Receiver: processing event", "key", key)
+
+	// Parse the raw message
+	parsed := ParseRawMessage(key, rawMessage)
+
+	// Delegate to the common processing function
+	dedupIDs, err := r.processMessage(ctx, key, parsed.Recipients, parsed.ParsedEmail, parsed.RawMessage)
+	if err != nil {
+		return err
+	}
+
+	// Mark the event as complete (delete from staging)
+	if err := event.OnComplete(ctx); err != nil {
+		return fmt.Errorf("failed to complete event: %w", err)
+	}
+
+	// Clear dedup markers on success
 	if clearer, ok := r.cfg.Dedup.(DedupClearer); ok {
 		if err := clearer.Clear(ctx, dedupIDs...); err != nil {
 			slog.Warn("Receiver: failed to clear dedup markers", "key", key, "err", err)
 		}
 	}
 
-	slog.Info("Receiver: successfully processed message", "key", key, "recipients", len(recipients))
 	return nil
+}
+
+// ProcessParsedEvent processes an inbound email event that provides an already
+// parsed WireFormatEmail. This avoids re-parsing when the caller has already
+// parsed the message (e.g., from an SQS event with the parsed message).
+func (r *Receiver) ProcessParsedEvent(ctx context.Context, event InboundEmailEvent) error {
+	// Get the already-parsed wire email from the event
+	wireEmail, err := event.RawEmail(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get parsed email from event: %w", err)
+	}
+
+	// Convert to UserEmail for delivery logic
+	parsedEmail := wireEmail.ToUserEmail()
+
+	// Extract envelope recipients from the Received headers
+	recipients := email.EnvelopeRecipients(wireEmail)
+
+	// We need a key for dedup and bounce purposes. Generate one from the Message-ID
+	// or use a hash of the wire email's serialized form.
+	key := generateEventKeyFromWireEmail(wireEmail)
+
+	slog.Info("Receiver: processing parsed event", "key", key)
+
+	// Serialize the wire email to raw bytes for storage (preserves exact MIME structure)
+	rawMessage, err := wireEmail.ToWireFormat()
+	if err != nil {
+		return fmt.Errorf("failed to serialize wire email: %w", err)
+	}
+
+	// Delegate to the common processing function
+	dedupIDs, err := r.processMessage(ctx, key, recipients, parsedEmail, rawMessage)
+	if err != nil {
+		return err
+	}
+
+	// Mark the event as complete (delete from staging)
+	if err := event.OnComplete(ctx); err != nil {
+		return fmt.Errorf("failed to complete event: %w", err)
+	}
+
+	// Clear dedup markers on success
+	if clearer, ok := r.cfg.Dedup.(DedupClearer); ok {
+		if err := clearer.Clear(ctx, dedupIDs...); err != nil {
+			slog.Warn("Receiver: failed to clear dedup markers", "key", key, "err", err)
+		}
+	}
+
+	return nil
+}
+
+// generateEventKeyFromWireEmail generates a deterministic key from a parsed
+// WireFormatEmail for use in dedup and bounce tracking.
+func generateEventKeyFromWireEmail(wfe *email.WireFormatEmail) string {
+	// Use Message-ID if available, otherwise hash the serialized form
+	if wfe.MessageID != "" {
+		// Sanitize Message-ID for use as a key
+		id := strings.Trim(wfe.MessageID, "<>")
+		id = strings.ReplaceAll(id, "@", "-at-")
+		id = strings.ReplaceAll(id, ".", "-dot-")
+		return "event-" + id
+	}
+	// Fallback: serialize and hash
+	data, _ := wfe.ToWireFormat()
+	return generateEventKey(data)
+}
+
+// generateEventKey generates a deterministic key from raw message bytes
+// for use in dedup and bounce tracking when no SES message ID is available.
+func generateEventKey(rawMessage []byte) string {
+	// Use a hash of the raw message as the key
+	// This is a simple implementation; in practice, SES provides a message ID
+	return fmt.Sprintf("event-%x", sha256Sum(rawMessage)[:16])
+}
+
+// sha256Sum returns the SHA256 hash of the input data.
+func sha256Sum(data []byte) []byte {
+	hash := sha256.New()
+	hash.Write(data)
+	return hash.Sum(nil)
 }
 
 // handleRecipient applies the first applicable routing rule to one envelope
@@ -341,23 +401,4 @@ func (r *Receiver) joinAddresses(addrs []email.Address) string {
 		parts = append(parts, a.Address)
 	}
 	return strings.Join(parts, ", ")
-}
-
-// deleteStagingObject deletes the staging object from S3.
-func (r *Receiver) deleteStagingObject(ctx context.Context, key string) error {
-	_, err := r.cfg.SESClient.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(r.cfg.Bucket),
-		Key:    aws.String(key),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to delete staging object %s: %w", key, err)
-	}
-	slog.Debug("Receiver: deleted staging object", "key", key)
-	return nil
-}
-
-// ProcessS3Event processes an S3 event notification (from Lambda).
-// This is the main entry point for the s3-receiver Lambda.
-func (r *Receiver) ProcessS3Event(ctx context.Context, key string) error {
-	return r.ProcessMessage(ctx, key)
 }

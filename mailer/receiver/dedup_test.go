@@ -11,8 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
-	"github.com/kncept/Emissary/mailer/sender"
-	"github.com/kncept/Emissary/mailer/storage"
+	"github.com/kncept/Emissary/mailer/components/sender"
+	"github.com/kncept/Emissary/mailer/components/storage"
 )
 
 type dedupFakeS3 struct {
@@ -141,19 +141,17 @@ func TestS3DedupPropagatesLookupErrors(t *testing.T) {
 	}
 }
 
-func TestNewReceiverUsesS3DedupForS3Client(t *testing.T) {
+func TestNewReceiverUsesMemoryDedupByDefault(t *testing.T) {
 	r, err := NewReceiver(ReceiverConfig{
-		Bucket:      "bucket",
 		Domain:      "example.com",
 		UserManager: fakeUserManager{},
 		Sender:      sender.NewInMemoryRecording(),
-		SESClient:   &dedupFakeS3{objects: make(map[string][]byte)},
 		Storage:     storage.NewMemoryStorage(),
 	})
 	if err != nil {
 		t.Fatalf("NewReceiver() error = %v", err)
 	}
-	if _, ok := r.cfg.Dedup.(*S3Dedup); !ok {
-		t.Errorf("Dedup = %T, want *S3Dedup", r.cfg.Dedup)
+	if _, ok := r.cfg.Dedup.(*MemoryDedup); !ok {
+		t.Errorf("Dedup = %T, want *MemoryDedup", r.cfg.Dedup)
 	}
 }

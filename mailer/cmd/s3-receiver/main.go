@@ -34,16 +34,10 @@ func isInboundEmailKey(key string) bool {
 	return !strings.Contains(key, "/")
 }
 
-// messageProcessor is the part of Receiver used by the Lambda entry point. It
-// lets event handling be tested without constructing AWS clients.
-type messageProcessor interface {
-	ProcessS3Event(ctx context.Context, key string) error
-}
-
 // processEvent processes every inbound record, then returns all failures so
 // Lambda marks the invocation failed and retries. Failures are joined rather
 // than returned immediately so one bad message cannot hide the others.
-func processEvent(ctx context.Context, rcvr messageProcessor, s3Event events.S3Event, bucket string) error {
+func processEvent(ctx context.Context, rcvr *receiver.Receiver, s3Event events.S3Event, bucket string, s3Client *s3.Client) error {
 	var errs []error
 	for _, record := range s3Event.Records {
 		recordBucket := record.S3.Bucket.Name
@@ -60,7 +54,8 @@ func processEvent(ctx context.Context, rcvr messageProcessor, s3Event events.S3E
 		}
 
 		slog.Debug("Processing S3 object", "bucket", recordBucket, "key", key)
-		if err := rcvr.ProcessS3Event(ctx, key); err != nil {
+		event := NewRawS3Event(s3Client, bucket, key)
+		if err := rcvr.ProcessEvent(ctx, event); err != nil {
 			slog.Error("Failed to process message", "key", key, "err", err)
 			errs = append(errs, fmt.Errorf("process %s: %w", key, err))
 		}
@@ -98,20 +93,17 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 	// Deduplication markers live in the staging bucket so they survive Lambda
 	// restarts and prevent an event retry from delivering mail twice.
 	rcvr, err := receiver.NewReceiver(receiver.ReceiverConfig{
-		Bucket:      cfg.Storage.S3Bucket,
-		UserManager: components.UserManager,
-		Sender:      components.Sender,
-		Domain:      cfg.UserManager.Domain,
-		SESClient:   s3Client,
-		Storage:     components.Storage,
-		Metadata:    components.Metadata,
-		Dedup:       receiver.NewS3Dedup(s3Client, cfg.Storage.S3Bucket),
-
+		UserManager:    components.UserManager,
+		Sender:         components.Sender,
+		Domain:         cfg.UserManager.Domain,
+		Storage:        components.Storage,
+		Metadata:       components.Metadata,
+		Dedup:          receiver.NewS3Dedup(s3Client, cfg.Storage.S3Bucket),
 		IdentityConfig: components.ReceiverConfig,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create receiver: %w", err)
 	}
 
-	return processEvent(ctx, rcvr, s3Event, cfg.Storage.S3Bucket)
+	return processEvent(ctx, rcvr, s3Event, cfg.Storage.S3Bucket, s3Client)
 }
