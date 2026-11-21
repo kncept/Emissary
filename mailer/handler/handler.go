@@ -10,8 +10,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -19,17 +17,15 @@ import (
 	supportapi "github.com/kncept/Emissary/api/support/generated"
 	usersapi "github.com/kncept/Emissary/api/users/generated"
 	"github.com/kncept/Emissary/mailer/auth"
+	"github.com/kncept/Emissary/mailer/components/storage"
+	"github.com/kncept/Emissary/mailer/components/usermanager"
+	"github.com/kncept/Emissary/mailer/config"
 	configvendor "github.com/kncept/Emissary/mailer/config-vendor"
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/gui"
 	"github.com/kncept/Emissary/mailer/identity"
 	"github.com/kncept/Emissary/mailer/jmap"
-	"github.com/kncept/Emissary/mailer/components/metadata"
 	"github.com/kncept/Emissary/mailer/receiver"
-	"github.com/kncept/Emissary/mailer/components/sender"
-	"github.com/kncept/Emissary/mailer/components/session"
-	"github.com/kncept/Emissary/mailer/components/storage"
-	"github.com/kncept/Emissary/mailer/components/usermanager"
 )
 
 const (
@@ -37,9 +33,9 @@ const (
 	// which only ever carry a username/password or a refresh token.
 	maxRequestBody = 1 << 20
 
-	// defaultMaxFileSize mirrors config.DefaultMaxFileSize for callers that
-	// build a HandlerConfig directly (tests and programmatic users).
-	defaultMaxFileSize = 10 << 20
+	// defaultJWTSecretTTL is used when neither the config nor the options
+	// specify a token lifetime.
+	defaultJWTSecretTTL = 24 * time.Hour
 
 	// jmapSessionState is stable because the session object itself is static:
 	// every mutable value is reported per account by Foo/get's state token.
@@ -69,141 +65,66 @@ const (
 	jmapUploadURLTemplate   = "/upload/{accountId}"
 )
 
-type HandlerConfig struct {
-	AuthUser         string
-	AuthPass         string
-	ListenAddr       string
-	JWTSecret        string
-	JWTSecretTTL     time.Duration
-	S3Bucket         string
-	FilesystemDir    string
-	StorageType      string
-	AWSRegion        string
-	MetadataType     string
-	MetadataPath     string
-	MetadataTable    string
-	MetadataRegion   string
-	SessionType      string
-	SessionTable     string
-	SessionRegion    string
-	DDBTablePrefix   string
-	Storage          storage.Storage
-	Metadata         metadata.MetadataStore
-	Session          session.SessionStore
-	JWTAudience      string
-	JWTIssuer        string
-	UserManager      usermanager.UserManager
-	UserManagerType  string
-	UserDomain       string
-	UserTable        string
-	UserRegion       string
-	LDAPURL          string
-	LDAPBindDN       string
-	LDAPBindPassword string
-	LDAPBaseDN       string
-	LDAPUserFilter   string
-	LDAPCacheTTL     string
-	Sender           sender.Sender
-	SenderType       string
-	SenderMTAPort    string
-
-	ReceiverConfigType    string // "s3", "filesystem", "memory" or "ddb"
-	ReceiverBucket        string // S3_BUCKET for the "s3" receiver config backend
-	ReceiverFilesystemDir string // FILESYSTEM_DIR root for the "filesystem" receiver config backend
-	ReceiverTable         string // DynamoDB table name for the "ddb" backend
-	ReceiverRegion        string // AWS region for the "ddb" backend
-	ReceiverConfig        receiver.MailIdentityConfig
-	// ReceiverConfigStore is the active store behind ReceiverConfig. It is
-	// retained so the support API can add rules at runtime; a supplied
-	// ReceiverConfig (tests or programmatic callers) leaves it nil.
-	ReceiverConfigStore receiver.ConfigStore
-	// SESIdentityLister supplies the identities shown by the receiver rules
-	// editor. Nil means create an SES client lazily on first use.
-	SESIdentityLister SESIdentityLister
-
-	IsLambda bool
-
-	// LoginRateLimit caps failed login attempts per window for both the
-	// client IP and the account. Zero selects the default (10 per minute).
+// Options holds the handler-local settings that are not component seams.
+// Empty scalar values fall back to the corresponding config.Config values so
+// production wiring only needs to set genuine overrides (for example IsLambda
+// or a test's SESIdentityLister).
+type Options struct {
+	JWTSecret            string
+	JWTSecretTTL         time.Duration
 	LoginRateLimit       int
 	LoginRateLimitWindow time.Duration
-
-	// MaxFileSize caps JMAP request bodies and MIME messages in bytes. Zero
-	// selects the 10 MiB default. It is advertised as maxSizeRequest and
-	// maxSizeUpload in the JMAP session object.
-	MaxFileSize int64
+	MaxFileSize          int64
+	IsLambda             bool
+	// SESIdentityLister is an optional override for tests. Nil means create
+	// an SES client lazily on first use.
+	SESIdentityLister SESIdentityLister
 }
 
-func (cfg HandlerConfig) maxFileSize() int64 {
+func resolvedJWTSecret(cfg *config.Config, opts Options) string {
+	if opts.JWTSecret != "" {
+		return opts.JWTSecret
+	}
+	return cfg.Server.JWTSecret
+}
+
+func resolvedJWTTTL(cfg *config.Config, opts Options) time.Duration {
+	if opts.JWTSecretTTL > 0 {
+		return opts.JWTSecretTTL
+	}
+	if cfg.Server.JWTExpiry > 0 {
+		return cfg.Server.JWTExpiry
+	}
+	return defaultJWTSecretTTL
+}
+
+func resolvedMaxFileSize(cfg *config.Config, opts Options) int64 {
+	if opts.MaxFileSize > 0 {
+		return opts.MaxFileSize
+	}
 	if cfg.MaxFileSize > 0 {
 		return cfg.MaxFileSize
 	}
-	return defaultMaxFileSize
+	return config.DefaultMaxFileSize
 }
 
-func applyDDBTablePrefix(prefix, name string) string {
-	prefix = strings.TrimSpace(prefix)
-	if prefix == "" {
-		prefix = "emissary"
+// New wires the HTTP handler from the one component bundle built by
+// configvendor.FromConfig. Configuration and component selection live in
+// config.Load and the vendor; this function only resolves handler-local
+// defaults and constructs the authenticator and routes.
+func New(ctx context.Context, cfg *config.Config, b *configvendor.Bundle, opts Options) (http.Handler, error) {
+	if cfg == nil {
+		return nil, errors.New("nil config")
 	}
-	if strings.HasSuffix(prefix, "-") || strings.HasSuffix(prefix, "_") {
-		return prefix + name
+	if b == nil {
+		return nil, errors.New("nil component bundle")
 	}
-	return prefix + "-" + name
-}
+	if b.Storage == nil || b.Metadata == nil || b.Session == nil || b.Sender == nil || b.UserManager == nil || b.ReceiverConfigStore == nil {
+		return nil, errors.New("component bundle is incomplete")
+	}
 
-func resolveDDBTable(explicit, prefix, logical string) string {
-	if strings.TrimSpace(explicit) != "" {
-		return strings.TrimSpace(explicit)
-	}
-	return applyDDBTablePrefix(prefix, logical)
-}
-
-// filesystemRoot mirrors config.FILESYSTEM_DIR's default for callers that
-// build a HandlerConfig directly (tests and programmatic users).
-func filesystemRoot(dir string) string {
-	if strings.TrimSpace(dir) != "" {
-		return dir
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, ".emissary")
-	}
-	return ".emissary"
-}
-
-// receiverBucket returns the receiver-specific S3 target, falling back to the
-// shared mail bucket for programmatic callers that do not set it.
-func receiverBucket(cfg HandlerConfig) string {
-	if strings.TrimSpace(cfg.ReceiverBucket) != "" {
-		return cfg.ReceiverBucket
-	}
-	return cfg.S3Bucket
-}
-
-// receiverFilesystemRoot returns the receiver-specific filesystem root,
-// falling back to the shared root for programmatic callers.
-func receiverFilesystemRoot(cfg HandlerConfig) string {
-	if strings.TrimSpace(cfg.ReceiverFilesystemDir) != "" {
-		return cfg.ReceiverFilesystemDir
-	}
-	return filesystemRoot(cfg.FilesystemDir)
-}
-
-// senderUsesSES reports whether outbound mail goes through SES, in which case
-// From addresses must be checked against the account's verified identities.
-func senderUsesSES(cfg HandlerConfig, mailSender sender.Sender) bool {
-	switch strings.ToLower(strings.TrimSpace(cfg.SenderType)) {
-	case "aws-ses", "ses":
-		return true
-	}
-	return mailSender != nil && mailSender.Name() == "AwsSesSender"
-}
-
-func New(cfg HandlerConfig) (http.Handler, error) {
-	var jwtSecret string
-	if cfg.JWTSecret != "" {
-		jwtSecret = cfg.JWTSecret
-	} else {
+	jwtSecret := resolvedJWTSecret(cfg, opts)
+	if jwtSecret == "" {
 		secret := make([]byte, 32)
 		if _, err := rand.Read(secret); err != nil {
 			return nil, err
@@ -211,134 +132,58 @@ func New(cfg HandlerConfig) (http.Handler, error) {
 		jwtSecret = base64.RawURLEncoding.EncodeToString(secret)
 		slog.Warn("JWT_SECRET not set; using an ephemeral secret. Tokens are invalidated on restart")
 	}
+	jwtTTL := resolvedJWTTTL(cfg, opts)
 
-	jwtTTL := cfg.JWTSecretTTL
-	if jwtTTL == 0 {
-		jwtTTL = 24 * time.Hour
+	// The caller (main) normally sets the process-wide MIME limit before
+	// building components. Apply it here only when that handoff did not
+	// happen, so a deliberate caller override is not silently replaced.
+	maxFileSize := resolvedMaxFileSize(cfg, opts)
+	if email.MaxPartSize() == email.DefaultMaxPartSize {
+		email.SetMaxPartSize(maxFileSize)
 	}
 
-	// Missing components are vended from the matching selector in cfg. Tests
-	// and programmatic callers can still supply a component directly.
-	var err error
-	users := cfg.UserManager
-	if users == nil {
-		users, err = configvendor.UserManager(configvendor.UserManagerOptions{
-			Type:             cfg.UserManagerType,
-			AdminUsername:    cfg.AuthUser,
-			AdminPassword:    cfg.AuthPass,
-			Domain:           cfg.UserDomain,
-			DdbTable:         resolveDDBTable(cfg.UserTable, cfg.DDBTablePrefix, "users"),
-			Region:           cfg.UserRegion,
-			S3Bucket:         cfg.S3Bucket,
-			FilesystemDir:    filepath.Join(filesystemRoot(cfg.FilesystemDir), "users"),
-			LDAPURL:          cfg.LDAPURL,
-			LDAPBindDN:       cfg.LDAPBindDN,
-			LDAPBindPassword: cfg.LDAPBindPassword,
-			LDAPBaseDN:       cfg.LDAPBaseDN,
-			LDAPUserFilter:   cfg.LDAPUserFilter,
-			LDAPCacheTTL:     cfg.LDAPCacheTTL,
-		})
+	// FromConfig loads the rules from the store. A caller may inject a config
+	// snapshot directly (tests and programmatic use); otherwise load it from
+	// the bundled store. Work on a copy so the caller's bundle is unchanged.
+	components := *b
+	if components.ReceiverConfig == nil {
+		identityConfig, err := receiver.LoadMailIdentityConfig(ctx, components.ReceiverConfigStore)
 		if err != nil {
 			return nil, err
 		}
+		components.ReceiverConfig = identityConfig
 	}
+	slog.Debug("Receiver rules loaded", "identities", len(components.ReceiverConfig))
 
-	sessionStore := cfg.Session
-	if sessionStore == nil {
-		sessionStore, err = configvendor.Session(configvendor.SessionOptions{
-			Type:      cfg.SessionType,
-			TableName: resolveDDBTable(cfg.SessionTable, cfg.DDBTablePrefix, "sessions"),
-			Region:    cfg.SessionRegion,
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	authenticator := auth.NewWithUserManager(users, sessionStore, jwtSecret, jwtTTL, cfg.JWTAudience, cfg.JWTIssuer, cfg.AuthUser)
-
-	emailStore := cfg.Storage
-	if emailStore == nil {
-		emailStore, err = configvendor.Storage(configvendor.StorageOptions{
-			Type:          cfg.StorageType,
-			S3Bucket:      cfg.S3Bucket,
-			FilesystemDir: filepath.Join(filesystemRoot(cfg.FilesystemDir), "mail"),
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	metaStore := cfg.Metadata
-	if metaStore == nil {
-		metaStore, err = configvendor.Metadata(configvendor.MetadataOptions{
-			Type:      cfg.MetadataType,
-			FilePath:  cfg.MetadataPath,
-			TableName: resolveDDBTable(cfg.MetadataTable, cfg.DDBTablePrefix, "metadata"),
-			Region:    cfg.MetadataRegion,
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	mailSender := cfg.Sender
-	if mailSender == nil {
-		mailSender, err = configvendor.Sender(context.Background(), configvendor.SenderOptions{
-			Type:    cfg.SenderType,
-			MTAPort: cfg.SenderMTAPort,
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Inbound routing rules are loaded once at startup from the configured
-	// backend. A supplied config (tests or programmatic callers) wins.
-	identityConfig := cfg.ReceiverConfig
-	if identityConfig == nil {
-		configStore := cfg.ReceiverConfigStore
-		if configStore == nil {
-			configStore, err = configvendor.ReceiverConfigStore(configvendor.ReceiverConfigStoreOptions{
-				Type:          cfg.ReceiverConfigType,
-				FilesystemDir: receiverFilesystemRoot(cfg),
-				Bucket:        receiverBucket(cfg),
-				TableName:     resolveDDBTable(cfg.ReceiverTable, cfg.DDBTablePrefix, "receiver"),
-				Region:        cfg.ReceiverRegion,
-			})
-			if err != nil {
-				return nil, err
-			}
-		}
-		identityConfig, err = receiver.LoadMailIdentityConfig(context.Background(), configStore)
-		if err != nil {
-			return nil, err
-		}
-		cfg.ReceiverConfigStore = configStore
-	}
-	slog.Debug("Receiver rules loaded", "identities", len(identityConfig))
-	cfg.ReceiverConfig = identityConfig
-
-	return newHandler(authenticator, emailStore, metaStore, sessionStore, mailSender, users, cfg), nil
+	authenticator := auth.NewWithUserManager(
+		components.UserManager, components.Session,
+		jwtSecret, jwtTTL,
+		cfg.Server.JWTAudience, cfg.Server.JWTIssuer, cfg.Server.Username,
+	)
+	return newHandler(ctx, authenticator, &components, cfg, opts), nil
 }
 
-func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, metaStore metadata.MetadataStore, sessionStore session.SessionStore, mailSender sender.Sender, userManager usermanager.UserManager, cfg HandlerConfig) http.Handler {
+func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *configvendor.Bundle, cfg *config.Config, opts Options) http.Handler {
 	mux := http.NewServeMux()
-	maxFileSize := cfg.maxFileSize()
-	loginLimiter := newLoginLimiter(cfg.LoginRateLimit, cfg.LoginRateLimitWindow)
+	maxFileSize := resolvedMaxFileSize(cfg, opts)
+	loginLimiter := newLoginLimiter(opts.LoginRateLimit, opts.LoginRateLimitWindow)
+
+	emailStore := b.Storage
+	mailSender := b.Sender
+	userManager := b.UserManager
 
 	// Outbound From addresses must belong to a verified email identity. SES is
 	// the current identity source; local/test callers that do not use SES can
 	// omit the validator and keep the existing behaviour.
 	var fromValidator jmap.FromValidator
-	if senderUsesSES(cfg, mailSender) || cfg.SESIdentityLister != nil {
-		lister := cfg.SESIdentityLister
+	if cfg.Sender.IsSES() || (mailSender != nil && mailSender.Name() == "AwsSesSender") || opts.SESIdentityLister != nil {
+		lister := opts.SESIdentityLister
 		if lister == nil {
 			lister = &lazySESIdentityLister{}
 		}
 		fromValidator = identity.NewValidator(lister)
 	}
-	jmapHandler := jmap.NewHandler(emailStore, metaStore, userManager, mailSender, fromValidator)
+	jmapHandler := jmap.NewHandler(emailStore, b.Metadata, userManager, mailSender, fromValidator)
 	dispatcher := jmap.NewDispatcher(jmapHandler, emailStore)
 
 	mux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, r *http.Request) {
@@ -464,7 +309,7 @@ func newHandler(authenticator *auth.Authenticator, emailStore storage.Storage, m
 		writeJSON(w, http.StatusOK, map[string]any{"users": matches})
 	})))
 
-	supportHandler := newSupportHandler(context.Background(), cfg, emailStore, metaStore, sessionStore, mailSender, userManager)
+	supportHandler := newSupportHandler(ctx, cfg, b, opts)
 	supportServer, err := supportapi.NewServer(supportHandler, supportSecurityHandler{authenticator}, supportapi.WithErrorHandler(supportErrorHandler))
 	if err != nil {
 		slog.Error("Failed to create support server", "err", err)

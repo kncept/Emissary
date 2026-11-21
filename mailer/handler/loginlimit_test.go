@@ -49,7 +49,7 @@ func TestLoginLimiterFixedWindow(t *testing.T) {
 
 func TestLoginEndpointRateLimitsFailures(t *testing.T) {
 	users := &testUserManager{adminUsername: "admin", adminPassword: "secret", domain: "example.com"}
-	h, err := New(HandlerConfig{
+	h, err := newTestHandler(t, handlerTestConfig{
 		AuthUser:             "admin",
 		AuthPass:             "secret",
 		JWTSecret:            "secret",

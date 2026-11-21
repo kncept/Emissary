@@ -79,6 +79,16 @@ type SenderConfig struct {
 	MTAPort string // SMTP port for the MTA sender (default 25)
 }
 
+// IsSES reports whether outbound mail goes through SES, in which case From
+// addresses must be checked against the account's verified identities.
+func (c SenderConfig) IsSES() bool {
+	switch strings.ToLower(strings.TrimSpace(c.Type)) {
+	case "aws-ses", "ses":
+		return true
+	}
+	return false
+}
+
 // Validate checks that the sender configuration is complete and consistent.
 func (c *SenderConfig) Validate() error {
 	var errs []error

@@ -181,7 +181,7 @@ func (h *supportHandler) SaveReceiverRules(ctx context.Context, req *supportapi.
 	}
 
 	if h.configStore != nil {
-		slog.Info("Support: persisting receiver rules", "entries", len(entries), "store", h.cfg.ReceiverConfigType)
+		slog.Info("Support: persisting receiver rules", "entries", len(entries), "store", h.cfg.Receiver.Type)
 		for _, entry := range entries {
 			if err := h.configStore.Put(ctx, entry.domain, entry.rules); err != nil {
 				slog.Error("Support: failed to save receiver rules", "identity", entry.domain, "err", err)

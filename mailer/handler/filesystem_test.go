@@ -10,7 +10,7 @@ import (
 
 func TestNew_FilesystemBackends(t *testing.T) {
 	root := t.TempDir()
-	h, err := New(HandlerConfig{
+	h, err := newTestHandler(t, handlerTestConfig{
 		AuthUser:        "admin",
 		AuthPass:        "admin-pass",
 		JWTSecret:       "test-secret",

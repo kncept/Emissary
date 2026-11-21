@@ -13,9 +13,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ses"
 	supportapi "github.com/kncept/Emissary/api/support/generated"
 	"github.com/kncept/Emissary/mailer/auth"
-	"github.com/kncept/Emissary/mailer/receiver"
 	"github.com/kncept/Emissary/mailer/components/sender"
 	"github.com/kncept/Emissary/mailer/components/storage"
+	"github.com/kncept/Emissary/mailer/receiver"
 )
 
 type fakeSESIdentityLister struct {
@@ -44,7 +44,7 @@ func newReceiverSupportTestHandler(t *testing.T, lister SESIdentityLister, store
 	if err != nil {
 		t.Fatalf("load receiver config: %v", err)
 	}
-	h, err := New(HandlerConfig{
+	h, err := newTestHandler(t, handlerTestConfig{
 		AuthUser:     "admin",
 		AuthPass:     "secret",
 		JWTSecret:    "secret",
@@ -80,10 +80,10 @@ func TestNewSupportHandlerLoadsCurrentRulesFromStore(t *testing.T) {
 		t.Fatalf("seed rules: %v", err)
 	}
 
-	h := newSupportHandler(ctx, HandlerConfig{
+	h := newTestSupportHandler(t, ctx, handlerTestConfig{
 		ReceiverConfig:      receiver.BaseMailIdentityConfig(),
 		ReceiverConfigStore: store,
-	}, nil, nil, nil, nil, nil)
+	})
 
 	config := h.receiverConfig()
 	if !config.Has("stored.example.com") {
@@ -96,9 +96,9 @@ func TestNewSupportHandlerLoadsCurrentRulesFromStore(t *testing.T) {
 		t.Error("created cache is missing the fallback rules")
 	}
 
-	empty := newSupportHandler(ctx, HandlerConfig{
+	empty := newTestSupportHandler(t, ctx, handlerTestConfig{
 		ReceiverConfigStore: receiver.NewMemoryConfigStore(),
-	}, nil, nil, nil, nil, nil)
+	})
 	fallback := empty.receiverConfig()
 	if len(fallback) != 1 || !reflect.DeepEqual(fallback[receiver.FallbackIdentity].Rules, []receiver.HandlerRule{receiver.DeliverToUser, receiver.Bounce}) {
 		t.Errorf("empty store cache = %+v, want only the base fallback", fallback)
@@ -116,7 +116,7 @@ func TestSupportReceiverSaveUpdatesCacheAndStore(t *testing.T) {
 		t.Fatalf("seed rules: %v", err)
 	}
 
-	h := newSupportHandler(ctx, HandlerConfig{ReceiverConfigStore: store}, nil, nil, nil, nil, nil)
+	h := newTestSupportHandler(t, ctx, handlerTestConfig{ReceiverConfigStore: store})
 	response, err := h.SaveReceiverRules(ctx, &supportapi.ReceiverRulesRequest{
 		Rules: []supportapi.ReceiverDomainRules{{
 			Domain: "save.example.com",
@@ -154,15 +154,20 @@ func TestSupportReceiverSaveUpdatesCacheAndStore(t *testing.T) {
 	}
 }
 
-func TestSupportReceiverCreatesStoreFromConfiguredType(t *testing.T) {
+func TestSupportReceiverUsesInjectedStore(t *testing.T) {
 	ctx := context.WithValue(context.Background(), claimsContextKey{}, &auth.Claims{SystemManager: true})
 	dir := t.TempDir()
-	h := newSupportHandler(ctx, HandlerConfig{
-		ReceiverConfigType: "filesystem",
-		FilesystemDir:      dir,
-	}, nil, nil, nil, nil, nil)
-	if h.configStore == nil {
-		t.Fatal("configured receiver type did not create a config store")
+	store, err := receiver.NewFileConfigStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileConfigStore() error = %v", err)
+	}
+	h := newTestSupportHandler(t, ctx, handlerTestConfig{
+		ReceiverConfigType:  "filesystem",
+		FilesystemDir:       dir,
+		ReceiverConfigStore: store,
+	})
+	if h.configStore != store {
+		t.Fatal("support handler did not use the store injected in the bundle")
 	}
 
 	receiverDir := filepath.Join(dir, "receiver")

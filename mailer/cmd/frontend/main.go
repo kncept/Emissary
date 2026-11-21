@@ -49,8 +49,9 @@ func run() error {
 	}
 
 	// Cap MIME parsing at the same size advertised for JMAP uploads/requests.
-	// Store and receiver reads use this limit too, so oversized messages are
-	// rejected before they can be fully materialised in memory.
+	// This is process-wide (storage and receiver reads use it too), so it is
+	// done here before component construction. handler.New applies the same
+	// limit only if a caller has not already set one.
 	email.SetMaxPartSize(cfg.MaxFileSize)
 
 	// Vend every runtime component from its config subtype. The same factory
@@ -60,60 +61,8 @@ func run() error {
 		return fmt.Errorf("create components from configuration: %w", err)
 	}
 
-	handlerCfg := handler.HandlerConfig{
-		AuthUser:       cfg.Server.Username,
-		AuthPass:       cfg.Server.Password,
-		ListenAddr:     cfg.Server.ListenAddr,
-		JWTSecret:      cfg.Server.JWTSecret,
-		JWTSecretTTL:   cfg.Server.JWTExpiry,
-		S3Bucket:       cfg.Storage.S3Bucket,
-		FilesystemDir:  cfg.FilesystemDir,
-		StorageType:    cfg.Storage.Type,
-		AWSRegion:      cfg.AWSRegion,
-		MetadataType:   cfg.Metadata.Type,
-		MetadataPath:   cfg.Metadata.FilePath,
-		MetadataTable:  cfg.Metadata.DdbTable,
-		MetadataRegion: cfg.Metadata.Region,
-		DDBTablePrefix: cfg.DDBTablePrefix,
-		SessionType:    cfg.Session.Type,
-		SessionTable:   cfg.Session.DdbTable,
-		SessionRegion:  cfg.Session.Region,
-		JWTAudience:    cfg.Server.JWTAudience,
-		JWTIssuer:      cfg.Server.JWTIssuer,
-
-		Storage:             components.Storage,
-		Metadata:            components.Metadata,
-		Session:             components.Session,
-		UserManager:         components.UserManager,
-		Sender:              components.Sender,
-		ReceiverConfigStore: components.ReceiverConfigStore,
-		ReceiverConfig:      components.ReceiverConfig,
-
-		UserManagerType:  cfg.UserManager.Type,
-		UserDomain:       cfg.UserManager.Domain,
-		UserTable:        cfg.UserManager.DdbTable,
-		UserRegion:       cfg.UserManager.Region,
-		LDAPURL:          cfg.UserManager.LDAPURL,
-		LDAPBindDN:       cfg.UserManager.LDAPBindDN,
-		LDAPBindPassword: cfg.UserManager.LDAPBindPassword,
-		LDAPBaseDN:       cfg.UserManager.LDAPBaseDN,
-		LDAPUserFilter:   cfg.UserManager.LDAPUserFilter,
-		LDAPCacheTTL:     cfg.UserManager.LDAPCacheTTL,
-
-		SenderType:    cfg.Sender.Type,
-		SenderMTAPort: cfg.Sender.MTAPort,
-
-		ReceiverConfigType:    cfg.Receiver.Type,
-		ReceiverBucket:        cfg.Receiver.S3Bucket,
-		ReceiverFilesystemDir: cfg.Receiver.FilesystemDir,
-		ReceiverTable:         cfg.ReceiverTableName(),
-		ReceiverRegion:        cfg.Receiver.Region,
-
-		IsLambda:    awsutil.IsAwsLambda(),
-		MaxFileSize: cfg.MaxFileSize,
-	}
-
-	h, err := handler.New(handlerCfg)
+	isLambda := awsutil.IsAwsLambda()
+	h, err := handler.New(ctx, cfg, components, handler.Options{IsLambda: isLambda})
 	if err != nil {
 		return fmt.Errorf("create handler: %w", err)
 	}
@@ -121,7 +70,6 @@ func run() error {
 	// The application http.Handler is fully built at this point. In Lambda,
 	// hand it to the runtime instead of starting a listener of our own; the
 	// adapter translates API Gateway events into requests.
-	isLambda := handlerCfg.IsLambda
 	if isLambda {
 		slog.Info("Lambda listener loaded")
 		lambda.Start(httpadapter.New(h).ProxyWithContext)

@@ -13,12 +13,12 @@ import (
 	"time"
 
 	"github.com/kncept/Emissary/mailer/auth"
-	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/components/metadata"
 	"github.com/kncept/Emissary/mailer/components/sender"
 	"github.com/kncept/Emissary/mailer/components/session"
 	"github.com/kncept/Emissary/mailer/components/storage"
 	"github.com/kncept/Emissary/mailer/components/usermanager"
+	"github.com/kncept/Emissary/mailer/email"
 )
 
 // EmailResponse is the test DTO used to decode email results from JMAP responses.
@@ -91,7 +91,7 @@ func newHandlerForTest(t *testing.T, adminPassword string) (http.Handler, *stora
 	t.Helper()
 	store := storage.NewMemoryStorage()
 	mailSender := sender.NewInMemoryRecording()
-	h, err := New(HandlerConfig{
+	h, err := newTestHandler(t, handlerTestConfig{
 		AuthUser:     "admin",
 		AuthPass:     adminPassword,
 		JWTSecret:    "secret",
@@ -558,7 +558,7 @@ func TestDeleteEmailAlsoDeletesMetadata(t *testing.T) {
 	metaStore := metadata.NewMemoryMetadata()
 	addEmail(store, "received", "alice@example.com", "bob@example.com")
 
-	h, err := New(HandlerConfig{
+	h, err := newTestHandler(t, handlerTestConfig{
 		AuthUser:     "admin",
 		AuthPass:     "secret",
 		JWTSecret:    "secret",
@@ -622,7 +622,7 @@ func TestDeleteEmailKeepsMessageWhenMetadataDeleteFails(t *testing.T) {
 	}
 	addEmail(store, "received", "alice@example.com", "bob@example.com")
 
-	h, err := New(HandlerConfig{
+	h, err := newTestHandler(t, handlerTestConfig{
 		AuthUser:     "admin",
 		AuthPass:     "secret",
 		JWTSecret:    "secret",
@@ -1473,18 +1473,18 @@ func newHandlerWithClockForTest(t *testing.T, adminPassword string, now func() t
 	mailSender := sender.NewInMemoryRecording()
 	authenticator := auth.NewWithUserManager(users, sessions, "secret", time.Hour, "", "", "admin")
 	authenticator.SetNow(now)
-	cfg := HandlerConfig{
+	cfg, b, opts := handlerTestConfig{
 		AuthUser:     "admin",
 		AuthPass:     adminPassword,
 		JWTSecret:    "secret",
 		JWTSecretTTL: time.Hour,
-		MetadataType: "memory",
 		Storage:      store,
+		Session:      sessions,
 		UserManager:  users,
 		UserDomain:   "example.com",
 		Sender:       mailSender,
-	}
-	return newHandler(authenticator, store, metadata.NewMemoryMetadata(), sessions, mailSender, users, cfg), authenticator
+	}.build(t)
+	return newHandler(context.Background(), authenticator, b, cfg, opts), authenticator
 }
 
 func decodeAuthClaims(t *testing.T, token string) auth.Claims {

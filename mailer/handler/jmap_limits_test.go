@@ -17,7 +17,7 @@ import (
 // so the size limit can be exercised without allocating megabytes.
 func newJMAPLimitHandler(t *testing.T, maxFileSize int64) http.Handler {
 	t.Helper()
-	h, err := New(HandlerConfig{
+	h, err := newTestHandler(t, handlerTestConfig{
 		AuthUser:     "admin",
 		AuthPass:     "secret",
 		JWTSecret:    "secret",

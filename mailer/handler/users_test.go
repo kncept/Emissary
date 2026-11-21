@@ -119,7 +119,7 @@ func TestNoPasswordUserOverHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFile() error = %v", err)
 	}
-	h, err := New(HandlerConfig{
+	h, err := newTestHandler(t, handlerTestConfig{
 		AuthUser:     "admin",
 		AuthPass:     "admin-pass",
 		JWTSecret:    "secret",
@@ -219,7 +219,7 @@ func TestDeleteSelfOverHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFile() error = %v", err)
 	}
-	h, err := New(HandlerConfig{
+	h, err := newTestHandler(t, handlerTestConfig{
 		AuthUser:     "admin",
 		AuthPass:     "admin-pass",
 		JWTSecret:    "secret",
@@ -276,7 +276,7 @@ func TestSelfServiceChangePasswordOverHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFile() error = %v", err)
 	}
-	h, err := New(HandlerConfig{
+	h, err := newTestHandler(t, handlerTestConfig{
 		AuthUser:     "admin",
 		AuthPass:     "admin-pass",
 		JWTSecret:    "secret",
@@ -347,7 +347,7 @@ func TestChangeOwnPasswordOverHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFile() error = %v", err)
 	}
-	h, err := New(HandlerConfig{
+	h, err := newTestHandler(t, handlerTestConfig{
 		AuthUser:     "admin",
 		AuthPass:     "admin-pass",
 		JWTSecret:    "secret",
@@ -417,7 +417,7 @@ func TestPasswordChangeSupportedOverHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFile() error = %v", err)
 	}
-	h, err := New(HandlerConfig{
+	h, err := newTestHandler(t, handlerTestConfig{
 		AuthUser:     "admin",
 		AuthPass:     "admin-pass",
 		JWTSecret:    "secret",
@@ -701,7 +701,7 @@ func TestUserManagerCannotEscalateToSystemManagerOverHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFile() error = %v", err)
 	}
-	h, err := New(HandlerConfig{
+	h, err := newTestHandler(t, handlerTestConfig{
 		AuthUser:     "admin",
 		AuthPass:     "admin-pass",
 		JWTSecret:    "secret",

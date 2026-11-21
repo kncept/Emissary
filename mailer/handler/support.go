@@ -10,20 +10,22 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-faster/errors"
 	"github.com/ogen-go/ogen/ogenerrors"
 
 	supportapi "github.com/kncept/Emissary/api/support/generated"
 	"github.com/kncept/Emissary/mailer/auth"
-	configvendor "github.com/kncept/Emissary/mailer/config-vendor"
-	"github.com/kncept/Emissary/mailer/envutil"
 	"github.com/kncept/Emissary/mailer/components/metadata"
-	"github.com/kncept/Emissary/mailer/receiver"
 	"github.com/kncept/Emissary/mailer/components/sender"
 	"github.com/kncept/Emissary/mailer/components/session"
 	"github.com/kncept/Emissary/mailer/components/storage"
 	"github.com/kncept/Emissary/mailer/components/usermanager"
+	"github.com/kncept/Emissary/mailer/config"
+	configvendor "github.com/kncept/Emissary/mailer/config-vendor"
+	"github.com/kncept/Emissary/mailer/envutil"
+	"github.com/kncept/Emissary/mailer/receiver"
 )
 
 const (
@@ -41,7 +43,15 @@ const (
 // restricted to System Managers; the generated security handler only validates
 // the bearer token and stores the claims in the context.
 type supportHandler struct {
-	cfg      HandlerConfig
+	// cfg is the single source of truth for reported settings. Only
+	// non-secret fields are read; secrets are reported as booleans.
+	cfg *config.Config
+
+	// Server settings effective for this handler, not raw config values.
+	jwtSecretConfigured bool
+	jwtTTL              time.Duration
+	isLambda            bool
+
 	storage  storage.Storage
 	metadata metadata.MetadataStore
 	session  session.SessionStore
@@ -58,44 +68,34 @@ type supportHandler struct {
 	sesIdentities SESIdentityLister
 }
 
-func newSupportHandler(ctx context.Context, cfg HandlerConfig, emailStore storage.Storage, metaStore metadata.MetadataStore, sessionStore session.SessionStore, mailSender sender.Sender, users usermanager.UserManager) *supportHandler {
+func newSupportHandler(ctx context.Context, cfg *config.Config, b *configvendor.Bundle, opts Options) *supportHandler {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	if b == nil {
+		b = &configvendor.Bundle{}
+	}
 	h := &supportHandler{
-		cfg:      cfg,
-		storage:  emailStore,
-		metadata: metaStore,
-		session:  sessionStore,
-		sender:   mailSender,
-		users:    users,
+		cfg: cfg,
 
-		configStore:   cfg.ReceiverConfigStore,
-		sesIdentities: cfg.SESIdentityLister,
+		jwtSecretConfigured: resolvedJWTSecret(cfg, opts) != "",
+		jwtTTL:              resolvedJWTTTL(cfg, opts),
+		isLambda:            opts.IsLambda,
+
+		storage:  b.Storage,
+		metadata: b.Metadata,
+		session:  b.Session,
+		sender:   b.Sender,
+		users:    b.UserManager,
+
+		configStore:   b.ReceiverConfigStore,
+		sesIdentities: opts.SESIdentityLister,
 	}
 
-	// Never let a configured backend silently degrade to process-local rules.
-	// New() normally supplies the store, but constructing one here as well
-	// guarantees that a reported type of s3/filesystem/ddb really is written
-	// to when OK is pressed, regardless of how HandlerConfig was assembled.
-	if h.configStore == nil && strings.TrimSpace(cfg.ReceiverConfigType) != "" {
-		store, err := configvendor.ReceiverConfigStore(configvendor.ReceiverConfigStoreOptions{
-			Type:          cfg.ReceiverConfigType,
-			FilesystemDir: receiverFilesystemRoot(cfg),
-			Bucket:        receiverBucket(cfg),
-			TableName:     resolveDDBTable(cfg.ReceiverTable, cfg.DDBTablePrefix, "receiver"),
-			Region:        cfg.ReceiverRegion,
-		})
-		if err != nil {
-			slog.Error("Support: failed to create receiver config store", "err", err)
-		} else {
-			h.configStore = store
-		}
-	}
-
-	// The store is authoritative. A caller may supply ReceiverConfig for
-	// tests or programmatic use, but an active store still wins so a fresh
-	// handler (including one created on a Lambda cold start) sees saved
-	// rules. Only an empty/unavailable store falls back to the supplied
-	// config and ultimately the base rules.
-	config := cfg.ReceiverConfig.Clone()
+	// The bundled store is authoritative. A caller may inject a snapshot for
+	// tests, but an active store still wins so a fresh handler (including one
+	// created on a Lambda cold start) sees saved rules.
+	config := b.ReceiverConfig.Clone()
 	if h.configStore != nil {
 		stored, err := receiver.LoadMailIdentityConfig(ctx, h.configStore)
 		if err != nil {
@@ -266,12 +266,12 @@ func (h *supportHandler) ProcessEmail(ctx context.Context, req *supportapi.Proce
 	}
 
 	rcvr, err := receiver.NewReceiver(receiver.ReceiverConfig{
-		UserManager:    h.users,
-		Sender:         h.sender,
-		Domain:         h.cfg.UserDomain,
-		Storage:        h.storage,
-		Metadata:       h.metadata,
-		Dedup:          receiver.NewS3Dedup(store.Client(), store.BucketName()),
+		UserManager: h.users,
+		Sender:      h.sender,
+		Domain:      h.cfg.UserManager.Domain,
+		Storage:     h.storage,
+		Metadata:    h.metadata,
+		Dedup:       receiver.NewS3Dedup(store.Client(), store.BucketName()),
 
 		IdentityConfig: h.receiverConfig().Clone(),
 	})
@@ -303,7 +303,7 @@ type configurationSummary struct {
 
 func (h *supportHandler) configurationSummaries() []configurationSummary {
 	serverImpl := "http"
-	if h.cfg.IsLambda {
+	if h.isLambda {
 		serverImpl = "http (lambda)"
 	}
 	return []configurationSummary{
@@ -314,32 +314,32 @@ func (h *supportHandler) configurationSummaries() []configurationSummary {
 		},
 		{
 			name:           storageConfigurationName,
-			implementation: storageImplementation(h.cfg.StorageType, h.storage),
+			implementation: storageImplementation(h.cfg.Storage.Type, h.storage),
 			description:    "Email storage backend",
 		},
 		{
 			name:           senderConfigurationName,
-			implementation: senderImplementation(h.cfg.SenderType, h.sender),
+			implementation: senderImplementation(h.cfg.Sender.Type, h.sender),
 			description:    "Outbound email sender",
 		},
 		{
 			name:           receiverConfigurationName,
-			implementation: receiverImplementation(h.cfg.ReceiverConfigType),
+			implementation: receiverImplementation(h.cfg.Receiver.Type),
 			description:    "Inbound recipient routing rules",
 		},
 		{
 			name:           metadataConfigurationName,
-			implementation: metadataImplementation(h.cfg.MetadataType, h.metadata),
+			implementation: metadataImplementation(h.cfg.Metadata.Type, h.metadata),
 			description:    "Email metadata store",
 		},
 		{
 			name:           sessionConfigurationName,
-			implementation: sessionImplementation(h.cfg.SessionType, h.session),
+			implementation: sessionImplementation(h.cfg.Session.Type, h.session),
 			description:    "Refresh-token session store",
 		},
 		{
 			name:           userManagerConfigurationName,
-			implementation: userManagerImplementation(h.cfg.UserManagerType, h.users),
+			implementation: userManagerImplementation(h.cfg.UserManager.Type, h.users),
 			description:    "User authentication backend",
 		},
 		{
@@ -369,25 +369,26 @@ func (h *supportHandler) configurationDetail(name string) (*supportapi.Configura
 
 func (h *supportHandler) configurationSettings(name string) map[string]string {
 	settings := make(map[string]string)
+	cfg := h.cfg
 
 	switch name {
 	case serverConfigurationName:
-		addSetting(settings, "listenAddr", h.cfg.ListenAddr)
-		addSetting(settings, "adminUsername", h.cfg.AuthUser)
-		settings["adminPasswordConfigured"] = boolSetting(h.cfg.AuthPass != "")
-		settings["jwtSecretConfigured"] = boolSetting(h.cfg.JWTSecret != "")
-		if h.cfg.JWTSecretTTL > 0 {
-			addSetting(settings, "jwtTTL", h.cfg.JWTSecretTTL.String())
+		addSetting(settings, "listenAddr", cfg.Server.ListenAddr)
+		addSetting(settings, "adminUsername", cfg.Server.Username)
+		settings["adminPasswordConfigured"] = boolSetting(cfg.Server.Password != "")
+		settings["jwtSecretConfigured"] = boolSetting(h.jwtSecretConfigured)
+		if h.jwtTTL > 0 {
+			addSetting(settings, "jwtTTL", h.jwtTTL.String())
 		}
-		addSetting(settings, "jwtAudience", h.cfg.JWTAudience)
-		addSetting(settings, "jwtIssuer", h.cfg.JWTIssuer)
+		addSetting(settings, "jwtAudience", cfg.Server.JWTAudience)
+		addSetting(settings, "jwtIssuer", cfg.Server.JWTIssuer)
 		addSetting(settings, "commitHash", envutil.CommitHash)
 		addSetting(settings, "buildTime", envutil.BuildTime)
-		addSetting(settings, "lambda", boolSetting(h.cfg.IsLambda))
+		addSetting(settings, "lambda", boolSetting(h.isLambda))
 
 	case storageConfigurationName:
-		addSetting(settings, "type", storageImplementation(h.cfg.StorageType, h.storage))
-		addSetting(settings, "bucket", h.cfg.S3Bucket)
+		addSetting(settings, "type", storageImplementation(cfg.Storage.Type, h.storage))
+		addSetting(settings, "bucket", cfg.Storage.S3Bucket)
 		if s3store, ok := h.storage.(*storage.S3Storage); ok {
 			addSetting(settings, "bucket", s3store.BucketName())
 		}
@@ -396,28 +397,30 @@ func (h *supportHandler) configurationSettings(name string) map[string]string {
 		}
 
 	case senderConfigurationName:
-		addSetting(settings, "type", senderImplementation(h.cfg.SenderType, h.sender))
+		addSetting(settings, "type", senderImplementation(cfg.Sender.Type, h.sender))
 
 	case receiverConfigurationName:
-		implementation := receiverImplementation(h.cfg.ReceiverConfigType)
+		implementation := receiverImplementation(cfg.Receiver.Type)
 		addSetting(settings, "type", implementation)
-		// Only report the settings relevant to the active backend.
+		// Only report the settings relevant to the active backend. These are
+		// the same resolved values config.Load and FromConfig hand to the
+		// bundled store, so the reported setting matches the active store.
 		switch implementation {
 		case "s3":
-			addSetting(settings, "bucket", h.cfg.S3Bucket)
+			addSetting(settings, "bucket", cfg.Receiver.S3Bucket)
 		case "filesystem":
-			addSetting(settings, "dir", filepath.Join(filesystemRoot(h.cfg.FilesystemDir), "receiver"))
+			addSetting(settings, "dir", filepath.Join(cfg.Receiver.FilesystemDir, "receiver"))
 		case "ddb":
-			addSetting(settings, "table", resolveDDBTable(h.cfg.ReceiverTable, h.cfg.DDBTablePrefix, "receiver"))
-			addSetting(settings, "region", h.cfg.ReceiverRegion)
+			addSetting(settings, "table", cfg.ReceiverTableName())
+			addSetting(settings, "region", cfg.Receiver.Region)
 		}
-		config := h.receiverConfig()
-		settings["identityCount"] = strconv.Itoa(len(config))
+		identityConfig := h.receiverConfig()
+		settings["identityCount"] = strconv.Itoa(len(identityConfig))
 		// The rules themselves are safe for a System Manager to read. Show
 		// each identity as a JSON array of rule names so the loaded map is
 		// auditable, including the "_" base fallback. Rules are evaluated in
 		// order, which is the order they are stored in.
-		for identity, rules := range config {
+		for identity, rules := range identityConfig {
 			encoded, err := json.Marshal(rules.Rules)
 			if err != nil {
 				slog.Warn("Support: failed to encode receiver rules", "identity", identity, "err", err)
@@ -427,34 +430,34 @@ func (h *supportHandler) configurationSettings(name string) map[string]string {
 		}
 
 	case metadataConfigurationName:
-		addSetting(settings, "type", metadataImplementation(h.cfg.MetadataType, h.metadata))
-		addSetting(settings, "path", h.cfg.MetadataPath)
-		addSetting(settings, "table", resolveDDBTable(h.cfg.MetadataTable, h.cfg.DDBTablePrefix, "metadata"))
-		addSetting(settings, "region", h.cfg.MetadataRegion)
+		addSetting(settings, "type", metadataImplementation(cfg.Metadata.Type, h.metadata))
+		addSetting(settings, "path", cfg.Metadata.FilePath)
+		addSetting(settings, "table", cfg.MetadataTableName())
+		addSetting(settings, "region", cfg.Metadata.Region)
 
 	case sessionConfigurationName:
-		addSetting(settings, "type", sessionImplementation(h.cfg.SessionType, h.session))
-		addSetting(settings, "table", resolveDDBTable(h.cfg.SessionTable, h.cfg.DDBTablePrefix, "sessions"))
-		addSetting(settings, "region", h.cfg.SessionRegion)
+		addSetting(settings, "type", sessionImplementation(cfg.Session.Type, h.session))
+		addSetting(settings, "table", cfg.SessionTableName())
+		addSetting(settings, "region", cfg.Session.Region)
 
 	case userManagerConfigurationName:
-		addSetting(settings, "type", userManagerImplementation(h.cfg.UserManagerType, h.users))
-		addSetting(settings, "domain", h.cfg.UserDomain)
+		addSetting(settings, "type", userManagerImplementation(cfg.UserManager.Type, h.users))
+		addSetting(settings, "domain", cfg.UserManager.Domain)
 		if fileUsers, ok := h.users.(*usermanager.FileManager); ok {
 			addSetting(settings, "dir", fileUsers.RootDir())
 		}
-		addSetting(settings, "table", resolveDDBTable(h.cfg.UserTable, h.cfg.DDBTablePrefix, "users"))
-		addSetting(settings, "region", h.cfg.UserRegion)
-		addSetting(settings, "ldapURL", h.cfg.LDAPURL)
-		addSetting(settings, "ldapBindDN", h.cfg.LDAPBindDN)
-		addSetting(settings, "ldapBaseDN", h.cfg.LDAPBaseDN)
-		addSetting(settings, "ldapUserFilter", h.cfg.LDAPUserFilter)
-		addSetting(settings, "ldapCacheTTL", h.cfg.LDAPCacheTTL)
-		settings["ldapBindPasswordConfigured"] = boolSetting(h.cfg.LDAPBindPassword != "")
+		addSetting(settings, "table", cfg.UserTableName())
+		addSetting(settings, "region", cfg.UserManager.Region)
+		addSetting(settings, "ldapURL", cfg.UserManager.LDAPURL)
+		addSetting(settings, "ldapBindDN", cfg.UserManager.LDAPBindDN)
+		addSetting(settings, "ldapBaseDN", cfg.UserManager.LDAPBaseDN)
+		addSetting(settings, "ldapUserFilter", cfg.UserManager.LDAPUserFilter)
+		addSetting(settings, "ldapCacheTTL", cfg.UserManager.LDAPCacheTTL)
+		settings["ldapBindPasswordConfigured"] = boolSetting(cfg.UserManager.LDAPBindPassword != "")
 
 	case awsConfigurationName:
-		addSetting(settings, "region", h.cfg.AWSRegion)
-		addSetting(settings, "tablePrefix", h.cfg.DDBTablePrefix)
+		addSetting(settings, "region", cfg.AWSRegion)
+		addSetting(settings, "tablePrefix", cfg.DDBTablePrefix)
 	}
 
 	return settings

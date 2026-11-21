@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -10,25 +11,30 @@ import (
 	"time"
 
 	"github.com/kncept/Emissary/mailer/auth"
+	"github.com/kncept/Emissary/mailer/config"
+	configvendor "github.com/kncept/Emissary/mailer/config-vendor"
 	"github.com/kncept/Emissary/mailer/handler"
-	"github.com/kncept/Emissary/mailer/components/storage"
 )
 
 func newTestHandler() (http.Handler, *auth.Authenticator) {
 	authenticator := auth.New("user", "pass", "secret", 24*time.Hour, "", "")
 
-	cfg := handler.HandlerConfig{
-		AuthUser:     "user",
-		AuthPass:     "pass",
-		JWTSecret:    "secret",
-		JWTSecretTTL: 24 * time.Hour,
-		MetadataType: "memory",
-		Storage:      storage.NewMemoryStorage(),
-		JWTAudience:  "",
-		JWTIssuer:    "",
+	ctx := context.Background()
+	cfg := &config.Config{
+		Server:      config.ServerConfig{Username: "user", Password: "pass", JWTSecret: "secret", JWTExpiry: 24 * time.Hour},
+		Storage:     config.StorageConfig{Type: "memory"},
+		Sender:      config.SenderConfig{Type: "log"},
+		Receiver:    config.ReceiverConfig{Type: "memory"},
+		Metadata:    config.MetadataConfig{Type: "memory"},
+		Session:     config.SessionConfig{Type: "memory"},
+		UserManager: config.UserManagerConfig{Type: "none"},
+	}
+	components, err := configvendor.FromConfig(ctx, cfg)
+	if err != nil {
+		panic(err)
 	}
 
-	h, err := handler.New(cfg)
+	h, err := handler.New(ctx, cfg, components, handler.Options{})
 	if err != nil {
 		panic(err)
 	}
