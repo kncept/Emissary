@@ -75,6 +75,15 @@ export default function EmailView() {
       setLoading(true);
       const data = await getEmail(emailID);
       setEmail(data);
+      // Mark as read if unread
+      if (data && !data.read) {
+        try {
+          await markRead(data.id, true);
+          setEmail({ ...data, read: true });
+        } catch {
+          // Ignore mark-read errors, email still displayed
+        }
+      }
     } catch (err) {
       setError('Failed to load email');
     } finally {

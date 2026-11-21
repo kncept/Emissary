@@ -61,7 +61,8 @@ export interface EmailGetRequest {
      * partId, blobId, size, name, type, charset, disposition, cid,
      * language, location. An explicit empty array returns no body part
      * properties; null means the defaults. Unknown names are rejected
-     * with invalidArguments.
+     * with invalidArguments. The `header:{name}[:as{form}][:all]`
+     * dynamic properties are also permitted (RFC 8621 §4.1).
      * @nullable
      */
   bodyProperties?: string[] | null;

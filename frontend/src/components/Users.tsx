@@ -33,6 +33,8 @@ export default function Users({ currentUser }: { currentUser?: string }) {
   const [editSystemManager, setEditSystemManager] = useState(false);
   const [editUserManager, setEditUserManager] = useState(false);
   const [editRules, setEditRules] = useState('');
+  const [editOldPassword, setEditOldPassword] = useState('');
+  const [editNewPassword, setEditNewPassword] = useState('');
 
   const [passwordFor, setPasswordFor] = useState<string | null>(null);
   const [oldPassword, setOldPassword] = useState('');
@@ -105,6 +107,8 @@ export default function Users({ currentUser }: { currentUser?: string }) {
     setEditSystemManager(user.systemManager);
     setEditUserManager(user.userManager);
     setEditRules((user.rules || []).join(', '));
+    setEditOldPassword('');
+    setEditNewPassword('');
     setMessage('');
     setError('');
   };
@@ -116,12 +120,17 @@ export default function Users({ currentUser }: { currentUser?: string }) {
     setError('');
     setMessage('');
     try {
-      await updateUser(editing.email, {
+      const update: { enabled: boolean; systemManager: boolean; userManager: boolean; rules: string[]; oldPassword?: string; newPassword?: string } = {
         enabled: editEnabled,
         systemManager: editSystemManager,
         userManager: editUserManager,
         rules: parseRules(editRules),
-      });
+      };
+      if (editNewPassword.trim()) {
+        if (editOldPassword.trim()) update.oldPassword = editOldPassword;
+        update.newPassword = editNewPassword;
+      }
+      await updateUser(editing.email, update);
       setEditing(null);
       setMessage('User updated');
       await load();
@@ -231,7 +240,7 @@ export default function Users({ currentUser }: { currentUser?: string }) {
       {editing && (
         <form className="compose-card" style={{ marginBottom: '1.5rem', padding: '1rem' }} onSubmit={onEdit}>
           <h3 style={{ marginBottom: '1rem' }}>Edit {editing.email}</h3>
-          <div className="form-group" style={{ flexDirection: 'row', gap: '1.5rem', alignItems: 'center' }}>
+          <div className="form-group" style={{ flexDirection: 'row', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <label><input type="checkbox" checked={editEnabled} onChange={(e) => setEditEnabled(e.target.checked)} disabled={busy} /> Enabled</label>
             <label><input type="checkbox" checked={editSystemManager} onChange={(e) => setEditSystemManager(e.target.checked)} disabled={busy} /> System Manager</label>
             <label><input type="checkbox" checked={editUserManager} onChange={(e) => setEditUserManager(e.target.checked)} disabled={busy} /> User Manager</label>
@@ -239,6 +248,15 @@ export default function Users({ currentUser }: { currentUser?: string }) {
           <div className="form-group">
             <label htmlFor="edit-rules">Rules (comma-separated)</label>
             <input id="edit-rules" type="text" value={editRules} onChange={(e) => setEditRules(e.target.value)} disabled={busy} />
+          </div>
+          <hr style={{ margin: '1rem 0', borderColor: 'var(--color-border)' }} />
+          <div className="form-group">
+            <label htmlFor="edit-old-password">Old password (required when changing your own password)</label>
+            <input id="edit-old-password" type="password" value={editOldPassword} onChange={(e) => setEditOldPassword(e.target.value)} disabled={busy} />
+          </div>
+          <div className="form-group">
+            <label htmlFor="edit-new-password">New password (leave blank to keep current)</label>
+            <input id="edit-new-password" type="password" value={editNewPassword} onChange={(e) => setEditNewPassword(e.target.value)} disabled={busy} />
           </div>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button className="btn btn-primary" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
@@ -293,25 +311,25 @@ export default function Users({ currentUser }: { currentUser?: string }) {
                   <td style={{ padding: '0.75rem 1rem' }}>{u.systemManager ? 'Yes' : 'No'}</td>
                   <td style={{ padding: '0.75rem 1rem' }}>{u.userManager ? 'Yes' : 'No'}</td>
                   <td style={{ padding: '0.75rem 1rem' }}>{(u.rules || []).join(', ') || '—'}</td>
-                  <td style={{ padding: '0.75rem 1rem' }}>
-                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                      <button className="btn btn-secondary" onClick={() => openEdit(u)} disabled={busy}>Edit</button>
-                      <button className="btn btn-secondary" onClick={() => { setPasswordFor(u.email); setOldPassword(''); setNewPassword(''); setMessage(''); setError(''); }} disabled={busy}>Password</button>
+                  <td style={{ padding: '0.75rem 1rem', whiteSpace: 'nowrap' }}>
+                    <div style={{ display: 'flex', gap: '0.375rem', alignItems: 'center' }}>
+                      <button className="btn btn-secondary" onClick={() => openEdit(u)} disabled={busy} style={{ padding: '0.375rem 0.75rem', fontSize: '0.8125rem' }}>Edit</button>
                       <button
                         className="btn btn-secondary"
                         onClick={() => setMasqueradeTarget(u.email)}
                         disabled={busy}
                         aria-label={`Masquerade as ${u.email}`}
                         title={`Masquerade as ${u.email}`}
+                        style={{ padding: '0.375rem', fontSize: '0.8125rem', minWidth: '36px' }}
                       >
                         <MaskIcon />
-                        Masquerade
                       </button>
                       <button
                         className="btn btn-danger"
                         onClick={() => { setDeleteTarget(u.email); setMessage(''); setError(''); }}
                         disabled={busy || isOwnAccount(u.email)}
                         title={isOwnAccount(u.email) ? 'You cannot delete your own account' : undefined}
+                        style={{ padding: '0.375rem 0.75rem', fontSize: '0.8125rem' }}
                       >
                         Delete
                       </button>

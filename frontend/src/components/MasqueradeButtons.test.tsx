@@ -58,7 +58,7 @@ describe('masquerade buttons', () => {
     await act(async () => {});
 
     const button = Array.from(container.querySelectorAll('button')).find(
-      (b) => b.textContent?.includes('Masquerade'),
+      (b) => b.getAttribute('aria-label') === 'Masquerade as alice@example.com',
     )!;
     expect(button.getAttribute('aria-label')).toBe('Masquerade as alice@example.com');
     expect(button.getAttribute('title')).toBe('Masquerade as alice@example.com');

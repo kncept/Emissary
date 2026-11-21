@@ -35,11 +35,30 @@ export function onEmailCheck(listener: EmailCheckListener): () => void {
 type EmailRefreshRequestListener = () => void;
 
 const refreshListeners = new Set<EmailRefreshRequestListener>();
+let refreshPending = false;
 
 export function requestEmailRefresh(): void {
+  if (refreshListeners.size === 0) {
+    // The inbox is not mounted (e.g. the user clicked Inbox from the email
+    // view); remember the request so it can be honoured on mount.
+    refreshPending = true;
+  }
   for (const listener of [...refreshListeners]) {
     listener();
   }
+}
+
+// Consume a pending refresh request. Returns true once for each request that
+// has not yet been handled by a mounted inbox.
+export function consumeEmailRefreshRequest(): boolean {
+  if (!refreshPending) return false;
+  refreshPending = false;
+  return true;
+}
+
+// Clear any pending refresh request (used by tests between independent mounts).
+export function clearEmailRefreshRequest(): void {
+  refreshPending = false;
 }
 
 export function onEmailRefreshRequest(listener: EmailRefreshRequestListener): () => void {

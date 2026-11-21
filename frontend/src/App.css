@@ -335,12 +335,58 @@ input, textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 1rem;
 }
 
 .email-list-header h2 {
-  font-size: 1.5rem;
+  font-size: 1.25rem;
   font-weight: 600;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* Density Selector */
+.density-selector {
+  display: inline-flex;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.125rem;
+}
+
+.density-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.density-btn:hover {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.density-btn.active {
+  background: var(--color-primary);
+  color: white;
+}
+
+.density-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
 }
 
 .admin-filter {
@@ -348,7 +394,7 @@ input, textarea {
   align-items: center;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
 }
 
 .admin-filter label {
@@ -364,6 +410,444 @@ input, textarea {
   background: var(--color-surface);
 }
 
+/* Compact table-like email list (Gmail-style) */
+.email-table {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/* Density: Dense (most compact) */
+.email-table.density-dense .sender-avatar {
+  width: 24px;
+  height: 24px;
+  font-size: 0.6875rem;
+}
+
+.email-table.density-dense .sender-name {
+  font-size: 0.8125rem;
+}
+
+.email-table.density-dense .email-subject {
+  font-size: 0.8125rem;
+}
+
+.email-table.density-dense .email-preview {
+  font-size: 0.75rem;
+}
+
+.email-table.density-dense .email-time {
+  font-size: 0.6875rem;
+}
+
+.email-table.density-dense .star-btn {
+  font-size: 0.875rem;
+  padding: 0;
+}
+
+.email-table.density-dense .actions-col .icon-btn {
+  padding: 0.1875rem;
+  font-size: 0.8125rem;
+}
+
+.email-table.density-dense .checkbox-col,
+.email-table.density-dense .star-col {
+  width: 20px;
+}
+
+.email-table.density-dense .row-checkbox {
+  width: 14px;
+  height: 14px;
+}
+
+/* Dense inline actions (read/delete on same line as sender) */
+.inline-actions {
+  display: flex;
+  gap: 0.25rem;
+  margin-left: 0.5rem;
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--color-border);
+}
+
+.inline-actions .icon-btn {
+  padding: 0.125rem;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.inline-actions .icon-btn:hover {
+  opacity: 1;
+  background: var(--color-bg);
+}
+
+/* Actions column on the left of sender (dense + comfortable) */
+.dense-actions-col,
+.left-actions-col {
+  width: 48px;
+  justify-content: flex-end;
+  padding-right: 0.25rem;
+}
+
+.dense-actions-col .icon-btn,
+.left-actions-col .icon-btn {
+  padding: 0.125rem;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.dense-actions-col .icon-btn:hover,
+.left-actions-col .icon-btn:hover {
+  opacity: 1;
+  background: var(--color-bg);
+}
+
+/* Comfortable: left actions use slightly larger buttons */
+.email-table.density-comfortable .left-actions-col .icon-btn {
+  padding: 0.1875rem;
+  font-size: 0.8125rem;
+}
+
+/* Dense: subject on same line as sender */
+.sender-col {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.dense-subject {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.email-table.density-dense .dense-subject {
+  font-size: 0.8125rem;
+}
+
+/* Comfortable/Spacious: subject on same line as sender */
+.comfortable-subject {
+  font-size: 0.875rem;
+  font-weight: 400;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-left: 0.75rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.email-table.density-comfortable .comfortable-subject,
+.email-table.density-spacious .comfortable-subject {
+  font-size: 0.875rem;
+}
+
+.email-table.density-spacious .comfortable-subject {
+  font-size: 1rem;
+}
+
+/* Comfortable/Spacious: preview on second line under sender */
+.comfortable-preview {
+  display: block;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 0.125rem;
+  margin-left: 2.5rem; /* align with sender name (avatar width + gap) */
+  min-width: 0;
+}
+
+.email-table.density-comfortable .comfortable-preview {
+  font-size: 0.8125rem;
+}
+
+.email-table.density-spacious .comfortable-preview {
+  font-size: 0.875rem;
+}
+
+/* Make sender-col a flex column for comfortable/spacious to stack subject and preview */
+.email-table.density-comfortable .sender-col,
+.email-table.density-spacious .sender-col {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.125rem;
+}
+
+.email-table.density-comfortable .sender-col .comfortable-subject,
+.email-table.density-spacious .sender-col .comfortable-subject {
+  margin-left: 0;
+}
+
+/* Density: Comfortable (default) */
+.email-table.density-comfortable .email-row {
+  grid-template-columns: 36px 36px 48px 1fr 200px;
+  padding: 0.375rem 0.75rem;
+  gap: 0.5rem;
+}
+
+.email-table.density-comfortable .sender-avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 0.75rem;
+}
+
+.email-table.density-comfortable .sender-name {
+  font-size: 0.875rem;
+}
+
+.email-table.density-comfortable .email-subject {
+  font-size: 0.875rem;
+}
+
+.email-table.density-comfortable .email-preview {
+  font-size: 0.8125rem;
+}
+
+.email-table.density-comfortable .email-time {
+  font-size: 0.75rem;
+}
+
+.email-table.density-comfortable .star-btn {
+  font-size: 1rem;
+}
+
+.email-table.density-comfortable .actions-col .icon-btn {
+  padding: 0.25rem;
+  font-size: 0.875rem;
+}
+
+.email-table.density-comfortable .checkbox-col,
+.email-table.density-comfortable .star-col {
+  width: 36px;
+}
+
+/* Density: Spacious (most roomy) */
+.email-table.density-spacious .email-row {
+  padding: 0.625rem 1rem;
+  gap: 0.75rem;
+}
+
+.email-table.density-spacious .sender-avatar {
+  width: 36px;
+  height: 36px;
+  font-size: 0.875rem;
+}
+
+.email-table.density-spacious .sender-name {
+  font-size: 1rem;
+}
+
+.email-table.density-spacious .email-subject {
+  font-size: 1rem;
+}
+
+.email-table.density-spacious .email-preview {
+  font-size: 0.875rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+}
+
+.email-table.density-spacious .email-time {
+  font-size: 0.8125rem;
+}
+
+.email-table.density-spacious .star-btn {
+  font-size: 1.125rem;
+}
+
+.email-table.density-spacious .actions-col .icon-btn {
+  padding: 0.375rem;
+  font-size: 1rem;
+}
+
+.email-table.density-spacious .checkbox-col,
+.email-table.density-spacious .star-col {
+  width: 44px;
+}
+
+.email-row {
+  display: grid;
+  grid-template-columns: 36px 36px 1fr 200px auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  transition: background var(--transition);
+}
+
+/* Dense mode: checkbox, star, actions, sender, subject, time */
+.email-table.density-dense .email-row {
+  grid-template-columns: 24px 20px 48px 1fr 160px;
+  padding: 0.1875rem 0.375rem;
+  gap: 0.125rem;
+}
+
+.email-row:last-child {
+  border-bottom: none;
+}
+
+.email-row:hover {
+  background: var(--color-bg);
+}
+
+.email-row.unread {
+  background: var(--color-accent-soft, rgba(37, 99, 235, 0.05));
+}
+
+.email-row.unread .sender-name,
+.email-row.unread .email-subject {
+  font-weight: 600;
+}
+
+.email-row.flagged .star-btn {
+  color: var(--color-flagged);
+}
+
+.email-row-link {
+  display: contents;
+  text-decoration: none;
+  color: inherit;
+}
+
+.email-col {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.checkbox-col {
+  width: 36px;
+  justify-content: center;
+}
+
+.row-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+.star-col {
+  width: 36px;
+  justify-content: center;
+}
+
+.star-btn {
+  background: none;
+  border: none;
+  padding: 0.125rem;
+  font-size: 1rem;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  transition: color var(--transition), background var(--transition);
+}
+
+.star-btn:hover {
+  background: var(--color-bg);
+  color: var(--color-flagged);
+}
+
+.sender-col {
+  gap: 0.5rem;
+  padding-left: 0.5rem;
+}
+
+.sender-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 0.75rem;
+  flex-shrink: 0;
+}
+
+.sender-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text);
+}
+
+.subject-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.email-subject {
+  font-size: 0.875rem;
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text);
+}
+
+.email-preview {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.time-col {
+  width: 200px;
+  justify-content: flex-end;
+  padding-right: 1rem;
+}
+
+.email-time {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.actions-col {
+  display: flex;
+  gap: 0.25rem;
+  justify-content: flex-end;
+  width: 80px;
+}
+
+.actions-col .icon-btn {
+  padding: 0.25rem;
+  font-size: 0.875rem;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 2rem;
+  color: var(--color-text-muted);
+}
+
+.empty-state .btn {
+  margin-top: 1rem;
+}
+
+/* Spacious view - original card-based layout */
 .email-list-items {
   list-style: none;
 }
@@ -429,14 +913,6 @@ input, textarea {
   text-overflow: ellipsis;
 }
 
-.email-subject {
-  font-size: 0.875rem;
-  color: var(--color-text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .email-meta {
   display: flex;
   align-items: center;
@@ -470,25 +946,61 @@ input, textarea {
   margin-top: 0.5rem;
 }
 
-.icon-btn {
+.email-actions .icon-btn {
   padding: 0.5rem;
   border-radius: var(--radius-sm);
   font-size: 1rem;
   transition: background var(--transition);
 }
 
-.icon-btn:hover {
+.email-actions .icon-btn:hover {
   background: var(--color-bg);
 }
 
-.empty-state {
-  text-align: center;
-  padding: 3rem;
-  color: var(--color-text-muted);
-}
+/* Responsive adjustments for email table */
+@media (max-width: 768px) {
+  .email-row {
+    grid-template-columns: 36px 36px 1fr;
+    grid-template-areas:
+      "checkbox star sender"
+      "checkbox star subject"
+      "checkbox star time";
+    gap: 0.25rem;
+    padding: 0.5rem 0.75rem;
+  }
 
-.empty-state .btn {
-  margin-top: 1rem;
+  .checkbox-col {
+    grid-area: checkbox;
+  }
+
+  .star-col {
+    grid-area: star;
+  }
+
+  .sender-col {
+    grid-area: sender;
+    padding-left: 0;
+  }
+
+  .subject-col {
+    grid-area: subject;
+  }
+
+  .time-col {
+    grid-area: time;
+    width: auto;
+    justify-content: flex-start;
+    padding-right: 0;
+    font-size: 0.75rem;
+  }
+
+  .actions-col {
+    display: none;
+  }
+
+  .email-preview {
+    display: none;
+  }
 }
 
 /* Email View */

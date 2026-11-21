@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { getRawEmail } from '../api.ts';
+import { getEmail, getRawEmail, markRead } from '../api.ts';
 import EmailView from './EmailView.tsx';
 
 const emailID = 'users/alice@example.com/inbox/e1.eml';
@@ -20,7 +20,7 @@ vi.mock('../api.ts', () => ({
     flagged: false,
   })),
   getRawEmail: vi.fn(async () => 'From: alice@example.com\r\nSubject: Hello\r\n\r\nBody\r\n'),
-  markRead: vi.fn(),
+  markRead: vi.fn(async () => {}),
   markFlagged: vi.fn(),
   deleteEmail: vi.fn(),
 }));
@@ -36,6 +36,68 @@ function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
   if (!button) throw new Error(`button "${text}" not found`);
   return button as HTMLButtonElement;
 }
+
+describe('EmailView mark as read on open', () => {
+  let container: HTMLDivElement;
+  let root: Root | null = null;
+
+  const mount = () => {
+    act(() => {
+      root!.render(
+        <MemoryRouter initialEntries={[`/email/${encodeURIComponent(emailID)}`]}>
+          <Routes>
+            <Route path="/email/:id" element={<EmailView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+  };
+
+  const settle = async () => {
+    await act(async () => {});
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    mount();
+  });
+
+  afterEach(() => {
+    act(() => {
+      root?.unmount();
+    });
+    root = null;
+    container.remove();
+  });
+
+  it('marks an unread email as read when opened', async () => {
+    await settle();
+
+    expect(markRead).toHaveBeenCalledWith(emailID, true);
+    expect(markRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call markRead for an already read email', async () => {
+    vi.mocked(markRead).mockClear();
+    vi.mocked(getEmail).mockResolvedValueOnce({
+      id: emailID,
+      from: 'alice@example.com',
+      to: 'bob@example.com',
+      subject: 'Hello',
+      body: 'Body',
+      timestamp: '2026-11-11T00:00:00Z',
+      read: true,
+      flagged: false,
+    });
+
+    await settle();
+
+    expect(markRead).not.toHaveBeenCalled();
+  });
+});
 
 describe('EmailView raw MIME actions', () => {
   let container: HTMLDivElement;

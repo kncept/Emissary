@@ -3,7 +3,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getEmails } from '../api.ts';
-import EmailList from './EmailList.tsx';
+import { clearEmailRefreshRequest } from '../api/email-checks.ts';
+import EmailList, { resetEmailListCache } from './EmailList.tsx';
 import Layout from './Layout.tsx';
 
 const FIVE_MINUTES = 5 * 60 * 1000;
@@ -47,6 +48,8 @@ describe('inbox update checks', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-11-20T12:00:00Z'));
     window.localStorage.clear();
+    resetEmailListCache();
+    clearEmailRefreshRequest();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
