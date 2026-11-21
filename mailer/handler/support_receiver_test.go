@@ -106,7 +106,7 @@ func TestNewSupportHandlerLoadsCurrentRulesFromStore(t *testing.T) {
 }
 
 func TestSupportReceiverSaveUpdatesCacheAndStore(t *testing.T) {
-	ctx := context.WithValue(context.Background(), claimsContextKey{}, &auth.Claims{SystemManager: true})
+	ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{SystemManager: true})
 	store := receiver.NewMemoryConfigStore()
 	other := receiver.HandlerRules{
 		MailIdentity: "other.example.com",
@@ -155,7 +155,7 @@ func TestSupportReceiverSaveUpdatesCacheAndStore(t *testing.T) {
 }
 
 func TestSupportReceiverUsesInjectedStore(t *testing.T) {
-	ctx := context.WithValue(context.Background(), claimsContextKey{}, &auth.Claims{SystemManager: true})
+	ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{SystemManager: true})
 	dir := t.TempDir()
 	store, err := receiver.NewFileConfigStore(dir)
 	if err != nil {

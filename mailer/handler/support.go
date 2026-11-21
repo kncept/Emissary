@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-faster/errors"
@@ -58,10 +57,14 @@ type supportHandler struct {
 	sender   sender.Sender
 	users    usermanager.UserManager
 
-	// identityConfig is an immutable snapshot. Rule changes publish a new
-	// config through the pointer instead of mutating the shared map, so the
-	// receiver used by ProcessEmail never races with a save.
-	identityConfig atomic.Pointer[receiver.MailIdentityConfig]
+	// stagedProcessor owns S3 reads, dedup and receiver construction for the
+	// support API. It is nil when storage is not S3.
+	stagedProcessor receiver.StagedMessageProcessor
+
+	// identityConfig is an immutable snapshot shared with the staged processor.
+	// Rule changes publish a new config instead of mutating the shared map, so
+	// processing never races with a save.
+	identityConfig *receiver.MutableMailIdentityConfigSource
 	configStore    receiver.ConfigStore
 
 	sesMu         sync.Mutex
@@ -74,6 +77,11 @@ func newSupportHandler(ctx context.Context, cfg *config.Config, b *configvendor.
 	}
 	if b == nil {
 		b = &configvendor.Bundle{}
+	}
+	identityConfig := b.MailIdentityConfigSource
+	if identityConfig == nil {
+		identityConfig = receiver.NewMailIdentityConfigSource(nil)
+		b.MailIdentityConfigSource = identityConfig
 	}
 	h := &supportHandler{
 		cfg: cfg,
@@ -88,8 +96,10 @@ func newSupportHandler(ctx context.Context, cfg *config.Config, b *configvendor.
 		sender:   b.Sender,
 		users:    b.UserManager,
 
-		configStore:   b.ReceiverConfigStore,
-		sesIdentities: opts.SESIdentityLister,
+		stagedProcessor: b.StagedMessageProcessor,
+		identityConfig:  identityConfig,
+		configStore:     b.ReceiverConfigStore,
+		sesIdentities:   opts.SESIdentityLister,
 	}
 
 	// The bundled store is authoritative. A caller may inject a snapshot for
@@ -107,20 +117,17 @@ func newSupportHandler(ctx context.Context, cfg *config.Config, b *configvendor.
 	if config == nil {
 		config = receiver.BaseMailIdentityConfig()
 	}
-	h.identityConfig.Store(&config)
+	h.identityConfig.Store(config)
 	return h
 }
 
 // receiverConfig returns the currently published rules snapshot.
 func (h *supportHandler) receiverConfig() receiver.MailIdentityConfig {
-	return *h.identityConfig.Load()
+	return h.identityConfig.MailIdentityConfig()
 }
 
 func (h *supportHandler) publishReceiverConfig(config receiver.MailIdentityConfig) {
-	if config == nil {
-		return
-	}
-	h.identityConfig.Store(&config)
+	h.identityConfig.Store(config)
 }
 
 // supportSecurityHandler validates the bearer token and makes the claims
@@ -131,11 +138,11 @@ type supportSecurityHandler struct {
 }
 
 func (h supportSecurityHandler) HandleBearerAuth(ctx context.Context, _ supportapi.OperationName, t supportapi.BearerAuth) (context.Context, error) {
-	claims, err := h.authenticator.ValidateClaims(t.Token)
+	claims, err := auth.ClaimsFromBearerToken(h.authenticator, t.Token)
 	if err != nil {
 		return nil, err
 	}
-	return context.WithValue(ctx, claimsContextKey{}, claims), nil
+	return auth.ContextWithClaims(ctx, claims), nil
 }
 
 // supportErrorHandler keeps support responses consistent with the rest of the
@@ -163,7 +170,7 @@ func supportErrorHandler(_ context.Context, w http.ResponseWriter, r *http.Reque
 }
 
 func isSystemManager(ctx context.Context) bool {
-	claims := currentClaimsFromContext(ctx)
+	claims := auth.ClaimsFromContext(ctx)
 	return claims != nil && claims.SystemManager
 }
 
@@ -252,7 +259,7 @@ func (h *supportHandler) ProcessEmail(ctx context.Context, req *supportapi.Proce
 	}
 
 	store, ok := h.storage.(*storage.S3Storage)
-	if !ok {
+	if !ok || h.stagedProcessor == nil {
 		return &supportapi.ProcessEmailNotImplemented{Error: "email processing requires s3 storage"}, nil
 	}
 
@@ -265,24 +272,9 @@ func (h *supportHandler) ProcessEmail(ctx context.Context, req *supportapi.Proce
 		return &supportapi.ProcessEmailNotFound{Error: "staging object not found"}, nil
 	}
 
-	rcvr, err := receiver.NewReceiver(receiver.ReceiverConfig{
-		UserManager: h.users,
-		Sender:      h.sender,
-		Domain:      h.cfg.UserManager.Domain,
-		Storage:     h.storage,
-		Metadata:    h.metadata,
-		Dedup:       receiver.NewS3Dedup(store.Client(), store.BucketName()),
-
-		IdentityConfig: h.receiverConfig().Clone(),
-	})
-	if err != nil {
-		slog.Error("Support: failed to create receiver", "err", err)
-		return &supportapi.ProcessEmailBadGateway{Error: "failed to process email"}, nil
-	}
-
-	// Use the S3Event adapter to process the message via the new ProcessEvent API
-	event := NewRawS3Event(store.Client(), store.BucketName(), id)
-	if err := rcvr.ProcessEvent(ctx, event); err != nil {
+	// The injected service owns S3 reads, dedup and receiver construction. The
+	// handler only supplies the configured bucket and the object key.
+	if err := h.stagedProcessor.ProcessRawKey(ctx, h.cfg.Storage.S3Bucket, id); err != nil {
 		slog.Error("Support: failed to process staging object", "key", id, "err", err)
 		return &supportapi.ProcessEmailBadGateway{Error: "failed to process email"}, nil
 	}

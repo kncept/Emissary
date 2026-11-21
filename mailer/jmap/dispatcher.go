@@ -249,7 +249,7 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 	// Method handlers need the caller's identity and privileges to authorise
 	// operations such as EmailSubmission/set, where the From address must
 	// belong to the caller (or the caller must be allowed to masquerade).
-	ctx = ContextWithClaims(ctx, claims)
+	ctx = auth.ContextWithClaims(ctx, claims)
 	slog.Debug("JMAP request", "calls", len(req.MethodCalls), "account", defaultAccountID)
 
 	// Seed the creation-id map from durable per-session state and from the

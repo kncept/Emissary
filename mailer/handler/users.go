@@ -24,7 +24,7 @@ func NewUsersHandler(manager EmissaryAuthManager, authenticator *auth.Authentica
 }
 
 func (h *usersHandler) ListUsers(ctx context.Context, params usersapi.ListUsersParams) (usersapi.ListUsersRes, error) {
-	claims := currentClaimsFromContext(ctx)
+	claims := auth.ClaimsFromContext(ctx)
 	if claims == nil || !claims.EmissaryUserManagement {
 		return &usersapi.ListUsersForbidden{Error: "insufficient permissions"}, nil
 	}
@@ -73,7 +73,7 @@ func (h *usersHandler) ListUsers(ctx context.Context, params usersapi.ListUsersP
 }
 
 func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserRequest) (usersapi.CreateUserRes, error) {
-	claims := currentClaimsFromContext(ctx)
+	claims := auth.ClaimsFromContext(ctx)
 	if claims == nil || !claims.EmissaryUserManagement {
 		return &usersapi.CreateUserForbidden{Error: "insufficient permissions"}, nil
 	}
@@ -145,7 +145,7 @@ func (h *usersHandler) CreateUser(ctx context.Context, req *usersapi.CreateUserR
 }
 
 func (h *usersHandler) GetUser(ctx context.Context, params usersapi.GetUserParams) (usersapi.GetUserRes, error) {
-	claims := currentClaimsFromContext(ctx)
+	claims := auth.ClaimsFromContext(ctx)
 	if claims == nil || !claims.EmissaryUserManagement {
 		return &usersapi.GetUserForbidden{Error: "insufficient permissions"}, nil
 	}
@@ -171,7 +171,7 @@ func (h *usersHandler) GetUser(ctx context.Context, params usersapi.GetUserParam
 }
 
 func (h *usersHandler) UpdateUser(ctx context.Context, req *usersapi.UpdateUserRequest, params usersapi.UpdateUserParams) (usersapi.UpdateUserRes, error) {
-	claims := currentClaimsFromContext(ctx)
+	claims := auth.ClaimsFromContext(ctx)
 	if claims == nil || !claims.EmissaryUserManagement {
 		return &usersapi.UpdateUserForbidden{Error: "insufficient permissions"}, nil
 	}
@@ -224,7 +224,7 @@ func (h *usersHandler) UpdateUser(ctx context.Context, req *usersapi.UpdateUserR
 }
 
 func (h *usersHandler) DeleteUser(ctx context.Context, params usersapi.DeleteUserParams) (usersapi.DeleteUserRes, error) {
-	claims := currentClaimsFromContext(ctx)
+	claims := auth.ClaimsFromContext(ctx)
 	if claims == nil || !claims.EmissaryUserManagement {
 		return &usersapi.DeleteUserForbidden{Error: "insufficient permissions"}, nil
 	}
@@ -246,7 +246,7 @@ func (h *usersHandler) DeleteUser(ctx context.Context, params usersapi.DeleteUse
 }
 
 func (h *usersHandler) ChangePassword(ctx context.Context, req *usersapi.ChangePasswordRequest, params usersapi.ChangePasswordParams) (usersapi.ChangePasswordRes, error) {
-	claims := currentClaimsFromContext(ctx)
+	claims := auth.ClaimsFromContext(ctx)
 	if claims == nil {
 		return &usersapi.ChangePasswordUnauthorized{Error: "authentication required"}, nil
 	}
@@ -319,7 +319,7 @@ func (h *usersHandler) PasswordChangeSupported(context.Context) (usersapi.Passwo
 // No management claim is needed, but the current password must be supplied:
 // possessing a token alone must not be enough to take over an account.
 func (h *usersHandler) ChangeOwnPassword(ctx context.Context, req *usersapi.ChangeOwnPasswordRequest) (usersapi.ChangeOwnPasswordRes, error) {
-	claims := currentClaimsFromContext(ctx)
+	claims := auth.ClaimsFromContext(ctx)
 	email := ""
 	if claims != nil {
 		email = strings.TrimSpace(claims.Subject)
@@ -380,9 +380,4 @@ func (h *usersHandler) applyPasswordChange(ctx context.Context, email, oldPasswo
 // can administer other accounts.
 func isPrivilegedUser(user *usermanager.EmissaryUser) bool {
 	return user != nil && (user.SystemManager || user.UserManager)
-}
-
-func currentClaimsFromContext(ctx context.Context) *auth.Claims {
-	claims, _ := ctx.Value(claimsContextKey{}).(*auth.Claims)
-	return claims
 }

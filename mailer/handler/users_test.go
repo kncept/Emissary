@@ -27,7 +27,7 @@ func TestCreateUserWithoutPassword(t *testing.T) {
 	}
 	var emissaryManager usermanager.EmissaryAuthManager = manager
 	h := NewUsersHandler(emissaryManager, nil)
-	ctx := context.WithValue(context.Background(), claimsContextKey{}, &auth.Claims{
+	ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{
 		Subject:                "admin",
 		SystemManager:          true,
 		EmissaryUserManagement: true,
@@ -81,7 +81,7 @@ func TestCreateUserInvalidEmail(t *testing.T) {
 		t.Fatalf("NewFile() error = %v", err)
 	}
 	h := NewUsersHandler(manager, nil)
-	ctx := context.WithValue(context.Background(), claimsContextKey{}, &auth.Claims{
+	ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{
 		Subject:                "admin",
 		SystemManager:          true,
 		EmissaryUserManagement: true,
@@ -175,7 +175,7 @@ func TestDeleteUserRejectsSelfDeletion(t *testing.T) {
 		t.Fatalf("NewFile() error = %v", err)
 	}
 	h := NewUsersHandler(manager, nil)
-	ctx := context.WithValue(context.Background(), claimsContextKey{}, &auth.Claims{
+	ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{
 		Subject:                "admin@example.com",
 		EmissaryUserManagement: true,
 	})
@@ -511,7 +511,7 @@ func newPasswordTestHandler(t *testing.T) (*usersHandler, *usermanager.FileManag
 }
 
 func passwordTestContext(subject string, systemManager, userManager bool) context.Context {
-	return context.WithValue(context.Background(), claimsContextKey{}, &auth.Claims{
+	return auth.ContextWithClaims(context.Background(), &auth.Claims{
 		Subject:                subject,
 		SystemManager:          systemManager,
 		EmissaryUserManagement: userManager,

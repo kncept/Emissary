@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/kncept/Emissary/mailer/auth"
-	"github.com/kncept/Emissary/mailer/email"
-	"github.com/kncept/Emissary/mailer/identity"
 	"github.com/kncept/Emissary/mailer/components/metadata"
 	"github.com/kncept/Emissary/mailer/components/sender"
 	"github.com/kncept/Emissary/mailer/components/storage"
 	"github.com/kncept/Emissary/mailer/components/usermanager"
+	"github.com/kncept/Emissary/mailer/email"
+	"github.com/kncept/Emissary/mailer/identity"
 )
 
 func addTestEmail(store *storage.MemoryStorage, id, accountID, mailboxID string, message *email.UserEmail) {
@@ -504,7 +504,7 @@ func TestEmailSubmissionSetForwardsHTMLBody(t *testing.T) {
 		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
 		capture)
 
-	ctx := ContextWithClaims(context.Background(), &auth.Claims{Subject: accountID})
+	ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{Subject: accountID})
 	args := json.RawMessage(fmt.Sprintf(
 		`{"accountId":%q,"create":{"s1":{"identityId":"primary","emailId":"draft1"}}}`,
 		accountID))
@@ -540,7 +540,7 @@ func TestEmailSubmissionSetCarriesThreadHeaders(t *testing.T) {
 		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
 		capture)
 
-	ctx := ContextWithClaims(context.Background(), &auth.Claims{Subject: accountID})
+	ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{Subject: accountID})
 	args := json.RawMessage(fmt.Sprintf(
 		`{"accountId":%q,"create":{"s1":{"identityId":"primary","emailId":"draft1"}}}`,
 		accountID))
@@ -576,7 +576,7 @@ func TestEmailSetCreateLocksFromAndGeneratesMessageID(t *testing.T) {
 		handler := NewHandler(store, metadata.NewMemoryMetadata(),
 			usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
 			sender.NewInMemoryRecording())
-		ctx := ContextWithClaims(context.Background(), &auth.Claims{Subject: caller})
+		ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{Subject: caller})
 		args := json.RawMessage(fmt.Sprintf(
 			`{"accountId":%q,"create":{"c1":{"from":[{"name":"","email":"carol@example.com"}],"to":[{"name":"","email":"dave@example.com"}],"subject":"s","bodyValues":{"text1":{"value":"hi"}},"textBody":[{"partId":"text1","size":2}]}}}`,
 			caller))
@@ -613,7 +613,7 @@ func TestEmailSetCreateLocksFromAndGeneratesMessageID(t *testing.T) {
 		handler := NewHandler(store, metadata.NewMemoryMetadata(),
 			usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
 			sender.NewInMemoryRecording())
-		ctx := ContextWithClaims(context.Background(), &auth.Claims{Subject: caller, EmissaryUserManagement: true})
+		ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{Subject: caller, EmissaryUserManagement: true})
 		args := json.RawMessage(fmt.Sprintf(
 			`{"accountId":%q,"create":{"c1":{"from":[{"name":"","email":%q}],"to":[{"name":"","email":"dave@example.com"}],"subject":"s","bodyValues":{"text1":{"value":"hi"}},"textBody":[{"partId":"text1","size":2}]}}}`,
 			target, caller))
@@ -783,7 +783,7 @@ func TestEmailSubmissionSetLocksFrom(t *testing.T) {
 
 			ctx := context.Background()
 			if tc.claims != nil {
-				ctx = ContextWithClaims(ctx, tc.claims)
+				ctx = auth.ContextWithClaims(ctx, tc.claims)
 			}
 			create := `{"identityId":"primary","emailId":"draft1"}`
 			if tc.mailFrom != "" {
@@ -983,7 +983,7 @@ func TestEmailSubmissionSetEnvelopeValidation(t *testing.T) {
 				usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
 				capture)
 
-			ctx := ContextWithClaims(context.Background(), &auth.Claims{Subject: accountID})
+			ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{Subject: accountID})
 			args := json.RawMessage(fmt.Sprintf(
 				`{"accountId":%q,"create":{"s1":{"identityId":"primary","emailId":"draft1","envelope":{"mailFrom":{"email":%q},"rcptTo":%s}}}}`,
 				accountID, accountID, jsonAddrs(tc.rcptTo)))
@@ -1060,7 +1060,7 @@ func TestEmailSubmissionSetMasqueradeReplyTo(t *testing.T) {
 				usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
 				capture)
 
-			ctx := ContextWithClaims(context.Background(), &auth.Claims{
+			ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{
 				Subject:                caller,
 				EmissaryUserManagement: true,
 			})

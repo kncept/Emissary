@@ -13,13 +13,13 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/kncept/Emissary/mailer/config"
 	"github.com/kncept/Emissary/mailer/components/metadata"
-	"github.com/kncept/Emissary/mailer/receiver"
 	"github.com/kncept/Emissary/mailer/components/sender"
 	"github.com/kncept/Emissary/mailer/components/session"
 	"github.com/kncept/Emissary/mailer/components/storage"
 	"github.com/kncept/Emissary/mailer/components/usermanager"
+	"github.com/kncept/Emissary/mailer/config"
+	"github.com/kncept/Emissary/mailer/receiver"
 )
 
 // StorageOptions carries the settings used by the storage backends.
@@ -168,6 +168,13 @@ type Bundle struct {
 	UserManager         usermanager.UserManager
 	ReceiverConfigStore receiver.ConfigStore
 	ReceiverConfig      receiver.MailIdentityConfig
+
+	// MailIdentityConfigSource is shared by the support rules editor and the
+	// staged-message processor so both see rule saves immediately.
+	MailIdentityConfigSource *receiver.MutableMailIdentityConfigSource
+	// StagedMessageProcessor is present when storage is S3. It is nil for
+	// local backends, where the support API has no staged objects to process.
+	StagedMessageProcessor receiver.StagedMessageProcessor
 }
 
 // FromConfig creates every component from the corresponding subtype of cfg.
@@ -238,6 +245,25 @@ func FromConfig(ctx context.Context, cfg *config.Config) (*Bundle, error) {
 	}
 	if b.ReceiverConfig, err = receiver.LoadMailIdentityConfig(ctx, b.ReceiverConfigStore); err != nil {
 		return nil, fmt.Errorf("receiver config: %w", err)
+	}
+	b.MailIdentityConfigSource = receiver.NewMailIdentityConfigSource(b.ReceiverConfig)
+
+	// Staged messages only exist with S3 storage. Reuse the storage client and
+	// bucket so support processing uses the same object namespace as the mail
+	// store instead of extracting S3 details inside an HTTP handler.
+	if s3Store, ok := b.Storage.(*storage.S3Storage); ok {
+		if b.StagedMessageProcessor, err = receiver.NewStagedMessageProcessor(receiver.StagedMessageProcessorConfig{
+			Client:         s3Store.Client(),
+			Bucket:         s3Store.BucketName(),
+			Domain:         cfg.UserManager.Domain,
+			Storage:        b.Storage,
+			Metadata:       b.Metadata,
+			UserManager:    b.UserManager,
+			Sender:         b.Sender,
+			IdentityConfig: b.MailIdentityConfigSource,
+		}); err != nil {
+			return nil, fmt.Errorf("staged message processor: %w", err)
+		}
 	}
 
 	slog.Debug("Runtime components created",

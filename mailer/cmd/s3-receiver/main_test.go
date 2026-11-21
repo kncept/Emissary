@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/kncept/Emissary/mailer/receiver"
 )
 
 func TestIsInboundEmailKey(t *testing.T) {
@@ -24,26 +26,22 @@ func TestIsInboundEmailKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.key, func(t *testing.T) {
-			if got := isInboundEmailKey(tt.key); got != tt.want {
-				t.Errorf("isInboundEmailKey(%q) = %v, want %v", tt.key, got, tt.want)
+			if got := receiver.IsInboundEmailKey(tt.key); got != tt.want {
+				t.Errorf("receiver.IsInboundEmailKey(%q) = %v, want %v", tt.key, got, tt.want)
 			}
 		})
 	}
 }
 
-// recordingProcessor is a test implementation of receiver.InboundRawEmailEvent
+// recordingProcessor is a test implementation of the narrow receiver seam.
 type recordingProcessor struct {
-	calls []string
-	errs  map[string]error
-	raw   []byte
+	calls int
+	errs  map[int]error
 }
 
-func (p *recordingProcessor) RawEmail(_ context.Context) ([]byte, error) {
-	return p.raw, nil
-}
-
-func (p *recordingProcessor) OnComplete(_ context.Context) error {
-	return p.errs[p.calls[len(p.calls)-1]]
+func (p *recordingProcessor) ProcessEvent(_ context.Context, _ receiver.InboundRawEmailEvent) error {
+	p.calls++
+	return p.errs[p.calls]
 }
 
 func s3EventFor(bucket string, keys ...string) events.S3Event {
@@ -60,32 +58,32 @@ func s3EventFor(bucket string, keys ...string) events.S3Event {
 }
 
 func TestProcessEventReturnsFailuresToLambda(t *testing.T) {
-	raw := []byte("From: sender@example.com\r\nTo: alice@example.com\r\nSubject: hi\r\n\r\nbody\r\n")
 	processor := &recordingProcessor{
-		raw: raw,
-		errs: map[string]error{"bad": errors.New("delivery failed")},
+		errs: map[int]error{2: errors.New("delivery failed")},
 	}
 	event := s3EventFor("bucket", "good", "bad", "receiver/config.json", "other-bucket-key")
 	event.Records[3].S3.Bucket.Name = "other-bucket"
 
-	// Create a mock receiver that uses our recording processor
-	// This test is now more of an integration test since we can't easily mock the receiver
-	// We'll just verify the function signature works
-	_ = processor
-	_ = event
-
-	// The actual processEvent function now takes a *receiver.Receiver
-	// This test would need a full receiver setup, so we skip it for now
-	t.Skip("Requires full receiver setup")
+	err := processEvent(context.Background(), processor, event, "bucket", nil)
+	if err == nil {
+		t.Fatal("processEvent() error = nil, want joined failure")
+	}
+	if !strings.Contains(err.Error(), "process bad: delivery failed") {
+		t.Errorf("processEvent() error = %q, want failure for key bad", err)
+	}
+	if processor.calls != 2 {
+		t.Errorf("ProcessEvent calls = %d, want 2 (only root objects in the configured bucket)", processor.calls)
+	}
 }
 
 func TestProcessEventNilWhenAllRecordsSucceed(t *testing.T) {
 	processor := &recordingProcessor{}
 	event := s3EventFor("bucket", "a", "b")
-	_ = processor
-	_ = event
 
-	// The actual processEvent function now takes a *receiver.Receiver
-	// This test would need a full receiver setup, so we skip it for now
-	t.Skip("Requires full receiver setup")
+	if err := processEvent(context.Background(), processor, event, "bucket", nil); err != nil {
+		t.Fatalf("processEvent() error = %v, want nil", err)
+	}
+	if processor.calls != 2 {
+		t.Errorf("ProcessEvent calls = %d, want 2", processor.calls)
+	}
 }

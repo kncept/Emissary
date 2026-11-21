@@ -9,10 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kncept/Emissary/mailer/auth"
+	"github.com/kncept/Emissary/mailer/components/storage"
 	mailemail "github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/identity"
 	"github.com/kncept/Emissary/mailer/jmap/internal/base"
-	"github.com/kncept/Emissary/mailer/components/storage"
 )
 
 func (h *Handler) EmailSubmissionGet(_ context.Context, _ string, _ json.RawMessage) (json.RawMessage, error) {
@@ -33,7 +34,7 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, json.RawMessage, error) {
 	slog.Debug("JMAP: submitting email", "account", accountID)
 	var req struct {
-		Create    map[string]struct {
+		Create map[string]struct {
 			IdentityID string `json:"identityId"`
 			EmailID    string `json:"emailId"`
 			Envelope   *struct {
@@ -71,7 +72,7 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 
 	// For each submission to create
 	sessionID := ""
-	if claims := base.ClaimsFromContext(ctx); claims != nil {
+	if claims := auth.ClaimsFromContext(ctx); claims != nil {
 		sessionID = claims.SID
 	}
 	for createID, submission := range req.Create {

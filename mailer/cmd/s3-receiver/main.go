@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -26,24 +25,21 @@ func main() {
 	lambda.Start(handler)
 }
 
-// isInboundEmailKey reports whether an S3 object is a raw inbound message.
-// SES writes messages at the bucket root; everything with a slash is a nested
-// object such as a receiver config file under receiver/, and must not be
-// processed or deleted as mail.
-func isInboundEmailKey(key string) bool {
-	return !strings.Contains(key, "/")
+// rawEventProcessor is the narrow receiver seam used by the Lambda adapter.
+type rawEventProcessor interface {
+	ProcessEvent(ctx context.Context, event receiver.InboundRawEmailEvent) error
 }
 
 // processEvent processes every inbound record, then returns all failures so
 // Lambda marks the invocation failed and retries. Failures are joined rather
 // than returned immediately so one bad message cannot hide the others.
-func processEvent(ctx context.Context, rcvr *receiver.Receiver, s3Event events.S3Event, bucket string, s3Client *s3.Client) error {
+func processEvent(ctx context.Context, rcvr rawEventProcessor, s3Event events.S3Event, bucket string, s3Client receiver.S3API) error {
 	var errs []error
 	for _, record := range s3Event.Records {
 		recordBucket := record.S3.Bucket.Name
 		key := record.S3.Object.Key
 
-		if !isInboundEmailKey(key) {
+		if !receiver.IsInboundEmailKey(key) {
 			slog.Debug("Ignoring nested S3 object", "bucket", recordBucket, "key", key)
 			continue
 		}
@@ -54,7 +50,7 @@ func processEvent(ctx context.Context, rcvr *receiver.Receiver, s3Event events.S
 		}
 
 		slog.Debug("Processing S3 object", "bucket", recordBucket, "key", key)
-		event := NewRawS3Event(s3Client, bucket, key)
+		event := receiver.NewRawS3Event(s3Client, bucket, key)
 		if err := rcvr.ProcessEvent(ctx, event); err != nil {
 			slog.Error("Failed to process message", "key", key, "err", err)
 			errs = append(errs, fmt.Errorf("process %s: %w", key, err))

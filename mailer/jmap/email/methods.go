@@ -9,10 +9,11 @@ import (
 	"strings"
 	"time"
 
-	mailemail "github.com/kncept/Emissary/mailer/email"
-	"github.com/kncept/Emissary/mailer/jmap/internal/base"
+	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/components/metadata"
 	"github.com/kncept/Emissary/mailer/components/storage"
+	mailemail "github.com/kncept/Emissary/mailer/email"
+	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 )
 
 func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
@@ -277,7 +278,7 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 
 		// A session draft is stored separately (durable across lambda
 		// invocations) and is only valid in drafts mailbox context.
-		if claims := base.ClaimsFromContext(ctx); claims != nil && claims.SID != "" {
+		if claims := auth.ClaimsFromContext(ctx); claims != nil && claims.SID != "" {
 			newID, err := h.deps.Storage.PutDraft(ctx, claims.SID, createID, newEmail)
 			if err != nil {
 				notCreated[createID] = setErr("serverFail", "Failed to create email")
@@ -348,7 +349,7 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 		listed, err := h.deps.Storage.GetEmail(ctx, accountID, id)
 		if err != nil || listed == nil || listed.Ref == nil || !strings.EqualFold(listed.Ref.AccountID, accountID) {
 			// Draft updates are limited to metadata; storage location fixed.
-			if claims := base.ClaimsFromContext(ctx); claims != nil && claims.SID != "" {
+			if claims := auth.ClaimsFromContext(ctx); claims != nil && claims.SID != "" {
 				if _, derr := h.deps.Storage.GetDraft(ctx, claims.SID, id); derr == nil {
 					meta := base.EmailMetadata(ctx, h.deps, accountID, id)
 					patched, ok, errType := ApplyKeywordPatch(meta, updateMap)
@@ -601,12 +602,12 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 		return nil, err
 	}
 	resp := map[string]interface{}{
-		"accountId":     accountID,
-		"queryState":    queryState,
+		"accountId":           accountID,
+		"queryState":          queryState,
 		"canCalculateChanges": true,
-		"position":      start,
-		"ids":           ids,
-		"total":         total,
+		"position":            start,
+		"ids":                 ids,
+		"total":               total,
 	}
 	return json.Marshal(resp)
 }

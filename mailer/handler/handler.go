@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -64,6 +65,10 @@ const (
 	jmapDownloadURLTemplate = "/download/{accountId}/{blobId}/{name}?type={type}"
 	jmapUploadURLTemplate   = "/upload/{accountId}"
 )
+
+// SESIdentityLister is the shared SES identity source from the identity
+// package. The alias keeps existing handler call sites and tests readable.
+type SESIdentityLister = identity.Lister
 
 // Options holds the handler-local settings that are not component seams.
 // Empty scalar values fall back to the corresponding config.Config values so
@@ -172,16 +177,17 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 	mailSender := b.Sender
 	userManager := b.UserManager
 
-	// Outbound From addresses must belong to a verified email identity. SES is
-	// the current identity source; local/test callers that do not use SES can
-	// omit the validator and keep the existing behaviour.
+	// One lister is shared by the From validator and the receiver rules editor.
+	// Remember whether the caller injected one: an injected lister enables the
+	// validator even for a local sender, while the lazy default must not change
+	// local/test behaviour by making SES the identity source.
+	hasListerOverride := opts.SESIdentityLister != nil
+	if !hasListerOverride {
+		opts.SESIdentityLister = identity.NewLazyLister()
+	}
 	var fromValidator jmap.FromValidator
-	if cfg.Sender.IsSES() || (mailSender != nil && mailSender.Name() == "AwsSesSender") || opts.SESIdentityLister != nil {
-		lister := opts.SESIdentityLister
-		if lister == nil {
-			lister = &lazySESIdentityLister{}
-		}
-		fromValidator = identity.NewValidator(lister)
+	if cfg.Sender.IsSES() || (mailSender != nil && mailSender.Name() == "AwsSesSender") || hasListerOverride {
+		fromValidator = identity.NewValidator(opts.SESIdentityLister)
 	}
 	jmapHandler := jmap.NewHandler(emailStore, b.Metadata, userManager, mailSender, fromValidator)
 	dispatcher := jmap.NewDispatcher(jmapHandler, emailStore)
@@ -281,7 +287,7 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 	})))
 
 	mux.Handle("GET /api/user/autocomplete", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims := currentClaims(r)
+		claims := auth.ClaimsFromContext(r.Context())
 		if claims == nil || !claims.EmissaryUserManagement {
 			writeError(w, http.StatusForbidden, "insufficient permissions")
 			return
@@ -374,32 +380,16 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 	})
 }
 
-type claimsContextKey struct{}
-
-func bearerClaims(authenticator *auth.Authenticator, r *http.Request) (*auth.Claims, bool) {
-	const prefix = "Bearer "
-	header := r.Header.Get("Authorization")
-	if !strings.HasPrefix(header, prefix) {
-		return nil, false
-	}
-	token := strings.TrimSpace(strings.TrimPrefix(header, prefix))
-	claims, err := authenticator.ValidateClaims(token)
-	if err != nil {
-		logRequestWarn(r, "validate bearer token", err)
-		return nil, false
-	}
-	return claims, true
-}
-
 func requireAuth(authenticator *auth.Authenticator, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims, ok := bearerClaims(authenticator, r)
-		if !ok {
+		claims, err := auth.ClaimsFromBearerHeader(authenticator, r.Header.Get("Authorization"))
+		if err != nil {
+			logRequestWarn(r, "validate bearer token", err)
 			w.Header().Set("WWW-Authenticate", `Bearer realm="emissary"`)
 			writeError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
-		ctx := context.WithValue(r.Context(), claimsContextKey{}, claims)
+		ctx := auth.ContextWithClaims(r.Context(), claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -414,11 +404,11 @@ type usersSecurityHandler struct {
 // ChangePassword and ChangeOwnPassword allow a user to change their own
 // password. Checking the claim here would make those paths unreachable.
 func (h usersSecurityHandler) HandleBearerAuth(ctx context.Context, _ usersapi.OperationName, t usersapi.BearerAuth) (context.Context, error) {
-	claims, err := h.authenticator.ValidateClaims(t.Token)
+	claims, err := auth.ClaimsFromBearerToken(h.authenticator, t.Token)
 	if err != nil {
 		return nil, err
 	}
-	return context.WithValue(ctx, claimsContextKey{}, claims), nil
+	return auth.ContextWithClaims(ctx, claims), nil
 }
 
 // EmissaryAuthManager and EmissaryUser live in the usermanager package. The
@@ -426,11 +416,6 @@ func (h usersSecurityHandler) HandleBearerAuth(ctx context.Context, _ usersapi.O
 type EmissaryAuthManager = usermanager.EmissaryAuthManager
 
 type EmissaryUser = usermanager.EmissaryUser
-
-func currentClaims(r *http.Request) *auth.Claims {
-	claims, _ := r.Context().Value(claimsContextKey{}).(*auth.Claims)
-	return claims
-}
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
@@ -462,75 +447,62 @@ func logRequestWarn(r *http.Request, operation string, err error) {
 	slog.Warn("Request rejected", "method", r.Method, "path", r.URL.Path, "operation", operation, "err", err)
 }
 
+var frontendFS = func() http.FileSystem {
+	sub, err := fs.Sub(gui.Files, "frontend/dist")
+	if err != nil {
+		panic(err)
+	}
+	return http.FS(sub)
+}()
+
+var frontendFileServer = http.FileServer(frontendFS)
+
 func serveFrontend(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-	if path == "/" || path == "" {
-		path = "/index.html"
+	name := strings.TrimPrefix(r.URL.Path, "/")
+	if name == "" {
+		name = "index.html"
 	}
-
-	file, err := gui.Files.Open("frontend/dist" + path)
-	if err != nil {
-		path = "/index.html"
-		file, err = gui.Files.Open("frontend/dist/index.html")
-		if err != nil {
-			logRequestError(r, "open embedded frontend index", err)
-			http.Error(w, "Frontend not built. Run 'npm run build' in frontend directory.", http.StatusNotFound)
-			return
-		}
+	// FileServer redirects requests for /index.html to "./". Keep the previous
+	// behaviour by asking it for the directory root instead.
+	serve := r
+	if name == "index.html" {
+		serve = r.Clone(r.Context())
+		serve.URL.Path = "/"
+		serve.URL.RawPath = ""
 	}
-	defer file.Close()
-
-	stat, err := file.Stat()
-	if err != nil {
-		logRequestError(r, "stat embedded frontend file "+strconv.Quote(path), err)
-		http.Error(w, "file not found", http.StatusNotFound)
-		return
-	}
-	if stat.IsDir() {
-		http.Error(w, "not found", http.StatusNotFound)
+	if frontendFileExists(name) {
+		frontendFileServer.ServeHTTP(w, serve)
 		return
 	}
 
-	w.Header().Set("Content-Type", getContentType(path))
-	w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
-	w.WriteHeader(http.StatusOK)
-	if r.Method != http.MethodHead {
-		if _, err := io.Copy(w, file); err != nil {
-			logRequestWarn(r, "write embedded frontend file "+strconv.Quote(path), err)
-		}
+	// Unknown routes are client-side routes, not missing assets. Serve the SPA
+	// entry point so the frontend router can render them.
+	if !frontendFileExists("index.html") {
+		logRequestError(r, "open embedded frontend index", errors.New("frontend/dist/index.html not embedded"))
+		http.Error(w, "Frontend not built. Run 'npm run build' in frontend directory.", http.StatusNotFound)
+		return
 	}
+	fallback := r.Clone(r.Context())
+	fallback.URL.Path = "/"
+	fallback.URL.RawPath = ""
+	frontendFileServer.ServeHTTP(w, fallback)
 }
 
-func getContentType(path string) string {
-	if strings.HasSuffix(path, ".html") {
-		return "text/html; charset=utf-8"
+func frontendFileExists(name string) bool {
+	if name == "" || strings.Contains(name, "..") {
+		return false
 	}
-	if strings.HasSuffix(path, ".js") {
-		return "application/javascript; charset=utf-8"
+	file, err := frontendFS.Open(name)
+	if err != nil {
+		return false
 	}
-	if strings.HasSuffix(path, ".css") {
-		return "text/css; charset=utf-8"
-	}
-	if strings.HasSuffix(path, ".json") {
-		return "application/json; charset=utf-8"
-	}
-	if strings.HasSuffix(path, ".svg") {
-		return "image/svg+xml"
-	}
-	if strings.HasSuffix(path, ".png") {
-		return "image/png"
-	}
-	if strings.HasSuffix(path, ".jpg") || strings.HasSuffix(path, ".jpeg") {
-		return "image/jpeg"
-	}
-	if strings.HasSuffix(path, ".ico") {
-		return "image/x-icon"
-	}
-	return "application/octet-stream"
+	defer file.Close()
+	stat, err := file.Stat()
+	return err == nil && !stat.IsDir()
 }
 
 func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64) {
-	claims := currentClaims(r)
+	claims := auth.ClaimsFromContext(r.Context())
 	username := claims.Subject
 
 	// RFC 8620 section 2 requires servers to advertise the limits they
@@ -628,7 +600,7 @@ func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jm
 		return
 	}
 
-	claims := currentClaims(r)
+	claims := auth.ClaimsFromContext(r.Context())
 	if claims == nil {
 		writeJMAPProblem(w, http.StatusUnauthorized, "about:blank", "Unauthorized",
 			"Authentication required", "")
@@ -707,7 +679,7 @@ func handleRawEmail(w http.ResponseWriter, r *http.Request, store storage.Storag
 		return
 	}
 
-	claims := currentClaims(r)
+	claims := auth.ClaimsFromContext(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
@@ -752,7 +724,7 @@ func handleRawEmail(w http.ResponseWriter, r *http.Request, store storage.Storag
 
 func handleLogout(authenticator *auth.Authenticator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		claims := currentClaims(r)
+		claims := auth.ClaimsFromContext(r.Context())
 		if claims == nil || claims.SID == "" {
 			writeError(w, http.StatusUnauthorized, "authentication required")
 			return

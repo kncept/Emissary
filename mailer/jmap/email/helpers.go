@@ -9,10 +9,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/kncept/Emissary/mailer/auth"
+	"github.com/kncept/Emissary/mailer/components/metadata"
 	mailemail "github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 	"github.com/kncept/Emissary/mailer/jmap/internal/model"
-	"github.com/kncept/Emissary/mailer/components/metadata"
 )
 
 func (m *JMAPEmail) setBodyValues(e *mailemail.UserEmail, fetchText, fetchHTML bool, maxBytes int) {
@@ -347,7 +348,7 @@ func (h *Handler) emailInAccount(ctx context.Context, accountID, id string) bool
 	if err == nil && listed != nil && listed.Ref != nil && strings.EqualFold(listed.Ref.AccountID, accountID) {
 		return true
 	}
-	if claims := base.ClaimsFromContext(ctx); claims != nil && claims.SID != "" {
+	if claims := auth.ClaimsFromContext(ctx); claims != nil && claims.SID != "" {
 		draft, err := h.deps.Storage.GetDraft(ctx, claims.SID, id)
 		return err == nil && draft != nil
 	}

@@ -3,7 +3,10 @@ package jmap
 import (
 	"context"
 
-	"github.com/kncept/Emissary/mailer/auth"
+	"github.com/kncept/Emissary/mailer/components/metadata"
+	"github.com/kncept/Emissary/mailer/components/sender"
+	"github.com/kncept/Emissary/mailer/components/storage"
+	"github.com/kncept/Emissary/mailer/components/usermanager"
 	"github.com/kncept/Emissary/mailer/jmap/blob"
 	"github.com/kncept/Emissary/mailer/jmap/core"
 	"github.com/kncept/Emissary/mailer/jmap/email"
@@ -16,10 +19,6 @@ import (
 	"github.com/kncept/Emissary/mailer/jmap/searchsnippet"
 	"github.com/kncept/Emissary/mailer/jmap/thread"
 	"github.com/kncept/Emissary/mailer/jmap/vacationresponse"
-	"github.com/kncept/Emissary/mailer/components/metadata"
-	"github.com/kncept/Emissary/mailer/components/sender"
-	"github.com/kncept/Emissary/mailer/components/storage"
-	"github.com/kncept/Emissary/mailer/components/usermanager"
 )
 
 // Distinct local names let the composition root embed all method handlers
@@ -77,16 +76,6 @@ var _ ImplicitSetHandler = (*Handler)(nil)
 
 // FromValidator is re-exported for callers that supply an identity validator.
 type FromValidator = base.FromValidator
-
-// ContextWithClaims attaches the authenticated caller's claims to ctx.
-func ContextWithClaims(ctx context.Context, claims *auth.Claims) context.Context {
-	return base.ContextWithClaims(ctx, claims)
-}
-
-// ClaimsFromContext returns the authenticated caller's claims, if present.
-func ClaimsFromContext(ctx context.Context) *auth.Claims {
-	return base.ClaimsFromContext(ctx)
-}
 
 // Type aliases keep the root package's published model available to callers
 // while the implementations live in the object-specific subpackages.

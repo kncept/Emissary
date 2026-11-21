@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ses"
 )
 
@@ -23,6 +24,35 @@ var ErrNotAllowed = errors.New("from address is not a verified email identity")
 // it an interface makes the validator testable without AWS credentials.
 type Lister interface {
 	ListIdentities(ctx context.Context, params *ses.ListIdentitiesInput, optFns ...func(*ses.Options)) (*ses.ListIdentitiesOutput, error)
+}
+
+// LazyLister defers AWS configuration and SES client creation until the first
+// ListIdentities call. Programmatic callers and local installations therefore
+// need no SES credentials just to construct a handler.
+type LazyLister struct {
+	mu     sync.Mutex
+	lister Lister
+}
+
+var _ Lister = (*LazyLister)(nil)
+
+// NewLazyLister returns a lazily initialised SES identity lister.
+func NewLazyLister() *LazyLister {
+	return &LazyLister{}
+}
+
+// ListIdentities implements Lister.
+func (l *LazyLister) ListIdentities(ctx context.Context, params *ses.ListIdentitiesInput, optFns ...func(*ses.Options)) (*ses.ListIdentitiesOutput, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.lister == nil {
+		cfg, err := awsconfig.LoadDefaultConfig(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("load AWS config for SES identities: %w", err)
+		}
+		l.lister = ses.NewFromConfig(cfg)
+	}
+	return l.lister.ListIdentities(ctx, params, optFns...)
 }
 
 const defaultTTL = 5 * time.Minute
