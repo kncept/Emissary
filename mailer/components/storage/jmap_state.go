@@ -3,11 +3,12 @@ package storage
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/kncept/Emissary/mailer/email"
 )
 
 // ErrJMAPStateConflict reports that the stored JMAP state changed between a
@@ -44,7 +45,7 @@ func jmapStateKey(accountID string) (string, error) {
 	if strings.TrimSpace(accountID) == "" {
 		return "", errors.New("accountID is required")
 	}
-	encoded := base64.RawURLEncoding.EncodeToString([]byte(accountID))
+	encoded := email.EncodeID(accountID)
 	return jmapStateRoot + "/" + encoded + "/state.json", nil
 }
 

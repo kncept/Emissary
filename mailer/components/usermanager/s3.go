@@ -91,77 +91,17 @@ func isUserRecordKey(key string) bool {
 }
 
 func (m *S3Manager) Authenticate(ctx context.Context, username, password string) (*User, error) {
-	if user, handled, err := m.admin.authenticate(username, password); handled {
-		return user, err
-	}
-
-	address, ok := normalizeAddress(username)
-	if !ok {
-		return nil, ErrInvalidCredentials
-	}
-
-	user, err := m.Get(ctx, address)
-	if err != nil {
-		if errors.Is(err, ErrUserNotFound) {
-			return nil, ErrInvalidCredentials
-		}
-		return nil, err
-	}
-
-	// Verify the password before revealing that the account is disabled, so a
-	// disabled user with a wrong password is indistinguishable from any other
-	// failed login.
-	if !checkPassword(user.Salt, user.SaltedPassword, password) {
-		return nil, ErrInvalidCredentials
-	}
-	if !user.Enabled {
-		return nil, ErrUserDisabled
-	}
-
-	authenticated := user.User
-	return &authenticated, nil
+	return authenticateUser(ctx, m, m.admin, username, password)
 }
 
 func (m *S3Manager) Lookup(ctx context.Context, username string) (*User, error) {
-	if m.admin.isAdmin(username) {
-		return m.admin.user(), nil
-	}
-
-	address, ok := normalizeAddress(username)
-	if !ok {
-		return nil, ErrInvalidCredentials
-	}
-
-	user, err := m.Get(ctx, address)
-	if err != nil {
-		if errors.Is(err, ErrUserNotFound) {
-			return nil, ErrInvalidCredentials
-		}
-		return nil, err
-	}
-	if !user.Enabled {
-		return nil, ErrUserDisabled
-	}
-
-	lookup := user.User
-	return &lookup, nil
+	return lookupUser(ctx, m, m.admin, username)
 }
 
 func (m *S3Manager) List(ctx context.Context, cursor string, pageSize int) ([]*EmissaryUser, string, error) {
-	if pageSize <= 0 {
-		pageSize = defaultUserPageSize
-	}
-	if pageSize > maxUserPageSize {
-		pageSize = maxUserPageSize
-	}
-
-	startAfter := ""
-	if cursor = strings.TrimSpace(cursor); cursor != "" {
-		decoded, err := decodeUserCursor(cursor)
-		if err != nil {
-			return nil, "", err
-		}
-		startAfter = decoded
+	startAfter, pageSize, err := pageParams(cursor, pageSize, true)
+	if err != nil {
+		return nil, "", err
 	}
 
 	client, err := m.getClient(ctx)
@@ -240,67 +180,15 @@ func (m *S3Manager) List(ctx context.Context, cursor string, pageSize int) ([]*E
 }
 
 func (m *S3Manager) Autocomplete(ctx context.Context, q string) ([]string, error) {
-	q = strings.TrimSpace(q)
-	if q == "" {
-		return []string{}, nil
-	}
-
-	qLower := strings.ToLower(q)
-	matches := make([]string, 0, 10)
-	cursor := ""
-
-	for len(matches) < 10 {
-		users, next, err := m.List(ctx, cursor, 100)
-		if err != nil {
-			return nil, err
-		}
-		for _, u := range users {
-			if strings.Contains(strings.ToLower(u.Email), qLower) {
-				matches = append(matches, u.Email)
-				if len(matches) >= 10 {
-					break
-				}
-			}
-		}
-		if next == "" || len(users) == 0 {
-			break
-		}
-		cursor = next
-	}
-
-	return matches, nil
+	return autocompleteFromList(ctx, m, q)
 }
 
 func (m *S3Manager) Create(ctx context.Context, user *EmissaryUser) error {
-	if user == nil {
-		return errors.New("user is required")
+	if err := prepareForCreate(user); err != nil {
+		return err
 	}
-
-	id := normalizeUserID(user.Email)
-	if id == "" {
-		return errors.New("user email is required")
-	}
-	if _, ok := normalizeAddress(id); !ok {
-		return errors.New("user email must be a valid address")
-	}
-	user.Email = id
-
-	if user.SchemaVersion == "" {
-		user.SchemaVersion = "1.0.0"
-	}
-
-	if user.SaltedPassword == "" {
-		// No password: never persist a salt or verifier for this account.
-		user.Salt = ""
-	} else if user.Salt == "" {
-		// Plaintext password provided, hash it with default (bcrypt)
-		salt, hashed, err := hashPassword(user.SaltedPassword)
-		if err != nil {
-			return err
-		}
-		user.Salt = salt
-		user.SaltedPassword = hashed
-	}
+	applyCreateSchemaVersion(user)
+	id := user.Email
 
 	body, err := json.Marshal(user)
 	if err != nil {
@@ -333,19 +221,10 @@ func (m *S3Manager) Create(ctx context.Context, user *EmissaryUser) error {
 }
 
 func (m *S3Manager) Save(ctx context.Context, user *EmissaryUser) error {
-	if user == nil {
-		return errors.New("user is required")
+	if err := prepareForSave(user); err != nil {
+		return err
 	}
-
-	id := normalizeUserID(user.Email)
-	if id == "" {
-		return errors.New("user email is required")
-	}
-	user.Email = id
-	if user.SaltedPassword == "" {
-		// A blank password must never be persisted with a salt.
-		user.Salt = ""
-	}
+	id := user.Email
 
 	body, err := json.Marshal(user)
 	if err != nil {
@@ -452,30 +331,8 @@ func (m *S3Manager) Delete(ctx context.Context, email string) error {
 	return nil
 }
 
-// ChangePassword verifies oldPassword when it is non-empty, then replaces the
-// stored password with a salted hash of newPassword. An empty oldPassword
-// skips verification; callers must have authorized the change themselves (for
-// example a System Manager resetting another user's password).
 func (m *S3Manager) ChangePassword(ctx context.Context, email, oldPassword, newPassword string) error {
-	if strings.TrimSpace(newPassword) == "" {
-		return errors.New("new password is required")
-	}
-
-	user, err := m.Get(ctx, email)
-	if err != nil {
-		return err
-	}
-	if oldPassword != "" && !checkPassword(user.Salt, user.SaltedPassword, oldPassword) {
-		return ErrInvalidCredentials
-	}
-
-	salt, hashed, err := hashPassword(newPassword)
-	if err != nil {
-		return err
-	}
-	user.Salt = salt
-	user.SaltedPassword = hashed
-	return m.Save(ctx, user)
+	return changePassword(ctx, m, email, oldPassword, newPassword)
 }
 
 func (m *S3Manager) getClient(ctx context.Context) (s3Client, error) {

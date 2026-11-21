@@ -6,15 +6,11 @@ package usermanager
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/mail"
 	"strings"
 	"sync"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -220,17 +216,12 @@ func (v *adminVerifier) match(configured, supplied string) bool {
 		return false
 	}
 	v.once.Do(func() {
-		v.hash, v.err = bcrypt.GenerateFromPassword([]byte(adminPasswordDigest(configured)), bcryptCost)
+		v.hash, v.err = bcryptHashBytes(adminPasswordDigest(configured))
 	})
 	if v.err != nil {
 		return false
 	}
-	return bcrypt.CompareHashAndPassword(v.hash, []byte(adminPasswordDigest(supplied))) == nil
-}
-
-func adminPasswordDigest(password string) string {
-	digest := sha256.Sum256([]byte(password))
-	return base64.RawStdEncoding.EncodeToString(digest[:])
+	return verifyBcryptHash(v.hash, adminPasswordDigest(supplied))
 }
 
 func (a adminAuth) isAdmin(username string) bool {
@@ -254,15 +245,15 @@ func NewNone(cfg Config) *NoneManager {
 func (m *NoneManager) Name() string { return "none" }
 
 func (m *NoneManager) Authenticate(_ context.Context, username, password string) (*User, error) {
-	if user, handled, err := m.admin.authenticate(username, password); handled {
+	if user, err, handled := adminAuthResult(m.admin, username, password); handled {
 		return user, err
 	}
 	return nil, ErrInvalidCredentials
 }
 
 func (m *NoneManager) Lookup(_ context.Context, username string) (*User, error) {
-	if m.admin.isAdmin(username) {
-		return m.admin.user(), nil
+	if user, ok := adminLookup(m.admin, username); ok {
+		return user, nil
 	}
 	// Return a stub user for any username (non-admin).
 	return &User{Email: username}, nil
@@ -293,15 +284,15 @@ func NewLdap(cfg Config) *LdapManager {
 func (m *LdapManager) Name() string { return "ldap" }
 
 func (m *LdapManager) Authenticate(_ context.Context, username, password string) (*User, error) {
-	if user, handled, err := m.admin.authenticate(username, password); handled {
+	if user, err, handled := adminAuthResult(m.admin, username, password); handled {
 		return user, err
 	}
 	panic("unimplemented")
 }
 
 func (m *LdapManager) Lookup(_ context.Context, username string) (*User, error) {
-	if m.admin.isAdmin(username) {
-		return m.admin.user(), nil
+	if user, ok := adminLookup(m.admin, username); ok {
+		return user, nil
 	}
 	panic("unimplemented")
 }
