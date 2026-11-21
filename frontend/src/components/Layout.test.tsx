@@ -9,6 +9,11 @@ vi.mock('../masquerade.ts', () => ({
   clearMasquerade: vi.fn(),
 }));
 
+vi.mock('../api.ts', () => ({
+  getVacationResponse: vi.fn(async () => ({ id: 'singleton', isEnabled: false })),
+  setVacationResponse: vi.fn(async () => ({ id: 'singleton', isEnabled: false })),
+}));
+
 describe('mobile navigation', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
@@ -66,5 +71,28 @@ describe('mobile navigation', () => {
     click(toggle());
     click(nav().querySelector('a')!);
     expect(nav().classList.contains('open')).toBe(false);
+  });
+
+  it('opens the vacation response modal from the nav item after Compose', async () => {
+    mount();
+
+    const vacationButton = Array.from(nav().querySelectorAll('button')).find(
+      (item) => item.textContent?.includes('Vacation'),
+    )!;
+    const composeLink = nav().querySelector('a[href="/compose"]')!;
+    const composeItem = composeLink.closest('li');
+    expect(composeItem?.nextElementSibling).toBe(vacationButton.closest('li'));
+
+    await act(async () => {
+      vacationButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(container.textContent).toContain('Vacation Response');
+
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
   });
 });

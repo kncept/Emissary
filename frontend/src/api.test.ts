@@ -649,4 +649,138 @@ describe('auth api', () => {
       }
     });
   });
+
+  describe('vacation response', () => {
+    const VACATION_CAPABILITY = 'urn:ietf:params:jmap:vacationresponse';
+
+    const stubSession = (fetchMock: ReturnType<typeof vi.fn>) => {
+      fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/.well-known/jmap') {
+          return createMockResponse({
+            username: 'test@example.com',
+            apiUrl: '/api/',
+            primaryAccounts: { [VACATION_CAPABILITY]: 'test@example.com' },
+          });
+        }
+        if (url === '/api/') {
+          return createMockResponse({
+            methodResponses: [
+              ['VacationResponse/get', {
+                accountId: 'test@example.com',
+                state: 'v1',
+                list: [{ id: 'singleton', isEnabled: true, subject: 'Away' }],
+                notFound: [],
+              }, 'getVacation'],
+            ],
+            sessionState: '1',
+          });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+    };
+
+    it('loads the singleton using the vacationresponse capability', async () => {
+      const { getVacationResponse } = await importApi();
+      window.localStorage.setItem(TOKEN_KEY, 'abc123');
+      const fetchMock = vi.fn();
+      stubSession(fetchMock);
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await getVacationResponse();
+
+      expect(result).toEqual({ id: 'singleton', isEnabled: true, subject: 'Away' });
+      const apiCall = fetchMock.mock.calls.find((call) => call[0] === '/api/');
+      const body = JSON.parse((apiCall as unknown as [string, RequestInit])[1].body as string);
+      expect(body.using).toContain(VACATION_CAPABILITY);
+      expect(body.methodCalls[0][0]).toBe('VacationResponse/get');
+      expect(body.methodCalls[0][1].accountId).toBe('test@example.com');
+      expect(body.methodCalls[0][1].ids).toContain('singleton');
+    });
+
+    it('sends a VacationResponse/set patch and returns the updated singleton', async () => {
+      const { setVacationResponse } = await importApi();
+      window.localStorage.setItem(TOKEN_KEY, 'abc123');
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/.well-known/jmap') {
+          return createMockResponse({
+            username: 'test@example.com',
+            apiUrl: '/api/',
+            primaryAccounts: { [VACATION_CAPABILITY]: 'test@example.com' },
+          });
+        }
+        if (url === '/api/') {
+          return createMockResponse({
+            methodResponses: [
+              ['VacationResponse/set', {
+                accountId: 'test@example.com',
+                oldState: 'v1',
+                newState: 'v2',
+                created: {},
+                updated: { singleton: { id: 'singleton', isEnabled: true, subject: 'Away' } },
+                destroyed: [],
+                notCreated: {},
+                notUpdated: {},
+                notDestroyed: {},
+              }, 'setVacation'],
+            ],
+            sessionState: '2',
+          });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await setVacationResponse({ isEnabled: true, subject: 'Away', textBody: null });
+
+      expect(result.subject).toBe('Away');
+      const apiCall = fetchMock.mock.calls.find((call) => call[0] === '/api/');
+      const body = JSON.parse((apiCall as unknown as [string, RequestInit])[1].body as string);
+      expect(body.using).toContain(VACATION_CAPABILITY);
+      expect(body.methodCalls[0][0]).toBe('VacationResponse/set');
+      expect(body.methodCalls[0][1].update.singleton).toEqual({
+        isEnabled: true,
+        subject: 'Away',
+        textBody: null,
+      });
+    });
+
+    it('throws the server description when notUpdated reports an error', async () => {
+      const { setVacationResponse } = await importApi();
+      window.localStorage.setItem(TOKEN_KEY, 'abc123');
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/.well-known/jmap') {
+          return createMockResponse({
+            username: 'test@example.com',
+            apiUrl: '/api/',
+            primaryAccounts: { [VACATION_CAPABILITY]: 'test@example.com' },
+          });
+        }
+        if (url === '/api/') {
+          return createMockResponse({
+            methodResponses: [
+              ['VacationResponse/set', {
+                accountId: 'test@example.com',
+                oldState: 'v1',
+                newState: 'v1',
+                created: {},
+                updated: {},
+                destroyed: [],
+                notCreated: {},
+                notUpdated: { singleton: { type: 'invalidProperties', description: 'bad date' } },
+                notDestroyed: {},
+              }, 'setVacation'],
+            ],
+            sessionState: '1',
+          });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(setVacationResponse({ isEnabled: true })).rejects.toThrow('bad date');
+    });
+  });
 });

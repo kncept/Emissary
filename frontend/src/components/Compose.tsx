@@ -1,17 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import Editor, {
-  BtnBold,
-  BtnBulletList,
-  BtnItalic,
-  BtnNumberedList,
-  BtnUnderline,
-  Separator,
-  Toolbar,
-} from 'react-simple-wysiwyg';
 import { getEmail, sendEmail, MASQUERADE_AS_KEY, parseAddressList } from '../api.ts';
 import { htmlToText, isHtmlEmpty } from '../html.ts';
 import type { Email, EmailBodyFormat } from '../types.ts';
+import EmailBodyEditor from './EmailBodyEditor.tsx';
 
 interface ComposeProps {
   /** 'reply' and 'forward' load the original email and prefill the draft. */
@@ -74,17 +66,6 @@ function threadHeaders(original: Email): { inReplyTo: string[]; references: stri
   return { inReplyTo: [messageId], references };
 }
 
-// The library's link button uses window.prompt. Use an in-app field instead so
-// the compose flow never opens a browser dialog.
-function selectedAnchor(): HTMLAnchorElement | null {
-  let node = window.getSelection()?.anchorNode ?? null;
-  while (node && node !== document.body) {
-    if (node instanceof HTMLAnchorElement) return node;
-    node = node.parentNode;
-  }
-  return null;
-}
-
 export default function Compose({ mode, currentUser }: ComposeProps) {
   const { id } = useParams<{ id: string }>();
   // Reply links encode the full delivered object key; decode only when a
@@ -115,10 +96,6 @@ export default function Compose({ mode, currentUser }: ComposeProps) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
-  const [linkOpen, setLinkOpen] = useState(false);
-  const [linkUrl, setLinkUrl] = useState('https://');
-  const [linkError, setLinkError] = useState('');
-  const savedRange = useRef<Range | null>(null);
 
   useEffect(() => {
     if (!emailID) return;
@@ -151,37 +128,6 @@ export default function Compose({ mode, currentUser }: ComposeProps) {
       active = false;
     };
   }, [emailID, mode]);
-
-  const handleLinkClick = (e: React.MouseEvent<HTMLButtonElement>) => {
-    e.preventDefault();
-    if (sending) return;
-    if (selectedAnchor()) {
-      document.execCommand('unlink');
-      return;
-    }
-    const selection = window.getSelection();
-    savedRange.current = selection && selection.rangeCount > 0
-      ? selection.getRangeAt(0).cloneRange()
-      : null;
-    setLinkUrl('https://');
-    setLinkError('');
-    setLinkOpen(true);
-  };
-
-  const applyLink = () => {
-    const url = linkUrl.trim();
-    if (!/^https?:\/\/\S+$/i.test(url)) {
-      setLinkError('Enter a full URL starting with https://');
-      return;
-    }
-    const selection = window.getSelection();
-    if (savedRange.current && selection) {
-      selection.removeAllRanges();
-      selection.addRange(savedRange.current);
-    }
-    document.execCommand('createLink', false, url);
-    setLinkOpen(false);
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -306,97 +252,15 @@ export default function Compose({ mode, currentUser }: ComposeProps) {
               disabled={sending}
             />
           </div>
-          <div className="compose-body">
-            <div className="compose-body-toolbar">
-              <div className="format-toggle" role="group" aria-label="Body format">
-                <button
-                  type="button"
-                  className={format === 'plain' ? 'active' : ''}
-                  aria-pressed={format === 'plain'}
-                  onClick={() => setFormat('plain')}
-                  disabled={sending}
-                >
-                  Plain text
-                </button>
-                <button
-                  type="button"
-                  className={format === 'html' ? 'active' : ''}
-                  aria-pressed={format === 'html'}
-                  onClick={() => setFormat('html')}
-                  disabled={sending}
-                >
-                  HTML
-                </button>
-              </div>
-            </div>
-            {format === 'plain' ? (
-              <textarea
-                id="body"
-                aria-label="Body"
-                value={plainBody}
-                onChange={(e) => setPlainBody(e.target.value)}
-                placeholder="Write your email here..."
-                rows={15}
-                disabled={sending}
-              />
-            ) : (
-              <>
-                <Editor
-                  value={htmlBody}
-                  onChange={(e) => setHtmlBody(e.target.value)}
-                  placeholder="Write your email here..."
-                  aria-label="Body"
-                  disabled={sending}
-                >
-                  <Toolbar>
-                    <BtnBold />
-                    <BtnItalic />
-                    <BtnUnderline />
-                    <Separator />
-                    <BtnBulletList />
-                    <BtnNumberedList />
-                    <Separator />
-                    <button
-                      type="button"
-                      className="rsw-btn"
-                      title="Add or remove link"
-                      onMouseDown={handleLinkClick}
-                      disabled={sending}
-                    >
-                      🔗
-                    </button>
-                  </Toolbar>
-                </Editor>
-                {linkOpen && (
-                  <div className="link-form">
-                    <input
-                      type="url"
-                      aria-label="Link URL"
-                      value={linkUrl}
-                      onChange={(e) => setLinkUrl(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          applyLink();
-                        } else if (e.key === 'Escape') {
-                          setLinkOpen(false);
-                        }
-                      }}
-                      autoFocus
-                      placeholder="https://example.com"
-                    />
-                    <button type="button" className="btn btn-primary" onClick={applyLink}>
-                      Add link
-                    </button>
-                    <button type="button" className="btn btn-secondary" onClick={() => setLinkOpen(false)}>
-                      Cancel
-                    </button>
-                    {linkError && <span className="link-error">{linkError}</span>}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+          <EmailBodyEditor
+            format={format}
+            onFormatChange={setFormat}
+            plainBody={plainBody}
+            onPlainBodyChange={setPlainBody}
+            htmlBody={htmlBody}
+            onHtmlBodyChange={setHtmlBody}
+            disabled={sending}
+          />
           <div className="compose-actions">
             <button type="submit" className="btn btn-primary" disabled={sending}>
               {sending ? 'Sending...' : 'Send'}

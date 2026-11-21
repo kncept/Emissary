@@ -121,6 +121,24 @@ Errors:
 - `404` — User not found
 - `409` — Old password is incorrect
 
+## Vacation Response
+
+The header contains a **Vacation** button next to Compose for every
+authenticated user. It opens a modal that loads and saves the JMAP
+`VacationResponse` singleton with `VacationResponse/get` and
+`VacationResponse/set`, so the same settings are available to any JMAP client.
+An administrator who is masquerading edits the target account's settings.
+
+The form controls `isEnabled`, `fromDate`, `toDate`, `subject`, and the reply
+body. The body uses the same plain-text/HTML editor as Compose, and both
+`textBody` and `htmlBody` are preserved. Dates use the browser's local
+date/time input and are sent to JMAP as UTC timestamps; blank optional values
+clear the corresponding property.
+Replies are only sent while enabled and within the optional date range, and
+follow the RFC 3834 loop-prevention rules described in
+[API.md](API.md). The reply state is stored with the
+account in `user.json` (or the DynamoDB user item).
+
 ## The user
 
 `EmissaryUser` is a superstruct of `User`: it embeds `User` (whose

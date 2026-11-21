@@ -24,6 +24,8 @@ import {
   markFlagged,
   deleteEmail,
   parseAddressList,
+  getVacationResponse,
+  setVacationResponse,
   sendEmail as jmapSendEmail,
 } from './api/jmap-client.ts';
 
@@ -328,5 +330,7 @@ export {
   markFlagged,
   deleteEmail,
   parseAddressList,
+  getVacationResponse,
+  setVacationResponse,
   jmapSendEmail as sendEmail,
 };

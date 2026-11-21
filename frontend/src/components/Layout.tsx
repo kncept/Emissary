@@ -2,6 +2,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 import MasqueradeModal from './MasqueradeModal';
 import MaskIcon from './MaskIcon';
+import VacationSettings from './VacationSettings.tsx';
 import { MASQUERADE_AS_KEY } from '../api/jmap-client';
 import { requestEmailRefresh } from '../api/email-checks.ts';
 import {
@@ -25,6 +26,7 @@ export default function Layout({
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [masqueradeOpen, setMasqueradeOpen] = useState(false);
+  const [vacationOpen, setVacationOpen] = useState(false);
   const [masqueradeAs, setMasqueradeAs] = useState<string | null>(() => {
     try {
       return window.localStorage.getItem(MASQUERADE_AS_KEY);
@@ -33,9 +35,15 @@ export default function Layout({
     }
   });
 
-  const navItems = [
+  const navItems: Array<{
+    path?: string;
+    label: string;
+    icon: string;
+    onClick?: () => void;
+  }> = [
     { path: '/', label: 'Inbox', icon: '📥' },
     { path: '/compose', label: 'Compose', icon: '✏️' },
+    { label: 'Vacation', icon: '🏖️', onClick: () => setVacationOpen(true) },
     { path: '/settings', label: 'Settings', icon: '⚙️' },
     ...(canManageUsers ? [{ path: '/users', label: 'Users', icon: '👥' }] : []),
   ];
@@ -44,11 +52,13 @@ export default function Layout({
     startMasquerade(value);
     setMasqueradeAs(value);
     setMasqueradeOpen(false);
+    setVacationOpen(false);
   };
 
   const stopMasquerading = () => {
     stopMasquerade();
     setMasqueradeAs(null);
+    setVacationOpen(false);
   };
 
   const handleNavClick = (path: string) => {
@@ -70,15 +80,29 @@ export default function Layout({
           >
             <ul>
               {navItems.map((item) => (
-                <li key={item.path}>
-                  <Link
-                    to={item.path}
-                    className={location.pathname === item.path ? 'active' : ''}
-                    onClick={() => handleNavClick(item.path)}
-                  >
-                    <span className="nav-icon">{item.icon}</span>
-                    <span className="nav-label">{item.label}</span>
-                  </Link>
+                <li key={item.path ?? item.label}>
+                  {item.path ? (
+                    <Link
+                      to={item.path}
+                      className={location.pathname === item.path ? 'active' : ''}
+                      onClick={() => handleNavClick(item.path!)}
+                    >
+                      <span className="nav-icon">{item.icon}</span>
+                      <span className="nav-label">{item.label}</span>
+                    </Link>
+                  ) : (
+                    <button
+                      type="button"
+                      className="nav-button"
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        item.onClick?.();
+                      }}
+                    >
+                      <span className="nav-icon">{item.icon}</span>
+                      <span className="nav-label">{item.label}</span>
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -132,6 +156,7 @@ export default function Layout({
         onClose={() => setMasqueradeOpen(false)}
         onSelect={selectMasqueradeTarget}
       />
+      {vacationOpen && <VacationSettings onClose={() => setVacationOpen(false)} />}
     </div>
   );
 }

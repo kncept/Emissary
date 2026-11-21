@@ -3,6 +3,8 @@ import type {
   JmapResponse,
   Session,
   Invocation,
+  VacationResponse,
+  VacationResponseUpdate,
 } from './generated/schemas/jmap';
 import { htmlToText } from '../html.ts';
 import type { SendEmailRequest } from '../types.ts';
@@ -11,6 +13,9 @@ import { recordEmailCheck } from './email-checks.ts';
 
 const SESSION_URL = '/.well-known/jmap';
 export const MASQUERADE_AS_KEY = 'masquerade_as';
+
+const VACATION_CAPABILITY = 'urn:ietf:params:jmap:vacationresponse';
+const VACATION_SINGLETON_ID = 'singleton';
 
 // JMAP method call types
 interface JmapMethodCall {
@@ -465,4 +470,69 @@ export async function sendEmail(data: SendEmailRequest): Promise<{ success: bool
   }
 
   return { success: true, message: 'Email sent' };
+}
+
+/**
+ * Loads the single VacationResponse object for the current account.
+ * accountId (including a masquerade target) is injected by jmapRequest.
+ */
+export async function getVacationResponse(): Promise<VacationResponse> {
+  const responses = await jmapRequest([VACATION_CAPABILITY], [
+    {
+      method: 'VacationResponse/get',
+      args: { ids: [VACATION_SINGLETON_ID] },
+      id: 'getVacation',
+    },
+  ]);
+
+  const response = responses.get('getVacation');
+  if (!response || response.method === 'error') {
+    throw new Error('Failed to load vacation response');
+  }
+
+  const notFound = response.args.notFound as string[] | undefined;
+  if (notFound?.includes(VACATION_SINGLETON_ID)) {
+    throw new Error('Vacation response not found');
+  }
+  const list = response.args.list as VacationResponse[] | undefined;
+  if (!list || list.length === 0) {
+    throw new Error('Vacation response not found');
+  }
+  return list[0];
+}
+
+/**
+ * Applies a JMAP patch to the VacationResponse singleton. The server reports a
+ * per-id error in notUpdated rather than failing the whole method call.
+ */
+export async function setVacationResponse(
+  update: VacationResponseUpdate,
+): Promise<VacationResponse> {
+  const responses = await jmapRequest([VACATION_CAPABILITY], [
+    {
+      method: 'VacationResponse/set',
+      args: { update: { [VACATION_SINGLETON_ID]: update } },
+      id: 'setVacation',
+    },
+  ]);
+
+  const response = responses.get('setVacation');
+  if (!response || response.method === 'error') {
+    throw new Error('Failed to save vacation response');
+  }
+
+  const notUpdated = response.args.notUpdated as
+    | Record<string, { type: string; description?: string }>
+    | undefined;
+  const failure = notUpdated?.[VACATION_SINGLETON_ID];
+  if (failure) {
+    throw new Error(failure.description || `Failed to save vacation response: ${failure.type}`);
+  }
+
+  const updated = response.args.updated as
+    | Record<string, VacationResponse | null>
+    | undefined;
+  const value = updated?.[VACATION_SINGLETON_ID];
+  if (value) return value;
+  return getVacationResponse();
 }
