@@ -139,25 +139,28 @@ func TestJMAPSessionAdvertisesConfiguredLimits(t *testing.T) {
 		t.Errorf("accountCapabilities.submission has unexpected keys: %v", submission)
 	}
 
-	// No capability may be advertised when its methods are not implemented.
-	if session.Capabilities.Vacation != nil {
-		t.Errorf("capabilities includes unimplemented vacationresponse: %v", session.Capabilities.Vacation)
+	// VacationResponse methods are implemented, so the capability is an empty
+	// object in both Session and accountCapabilities (RFC 8621 section 1.3.3).
+	if session.Capabilities.Vacation == nil {
+		t.Error("capabilities is missing vacationresponse")
+	} else if len(session.Capabilities.Vacation) != 0 {
+		t.Errorf("capabilities.vacationresponse = %v, want empty object", session.Capabilities.Vacation)
 	}
-	if session.Accounts["admin"].AccountCapabilities.Vacation != nil {
-		t.Errorf("accountCapabilities includes unimplemented vacationresponse")
+	accountVacation := session.Accounts["admin"].AccountCapabilities.Vacation
+	if accountVacation == nil {
+		t.Error("accountCapabilities is missing vacationresponse")
+	} else if len(accountVacation) != 0 {
+		t.Errorf("accountCapabilities.vacationresponse = %v, want empty object", accountVacation)
 	}
 
 	// RFC 8620: core is server-wide and must not be a primary account.
 	if _, ok := session.PrimaryAccounts["urn:ietf:params:jmap:core"]; ok {
 		t.Errorf("primaryAccounts must not include core: %v", session.PrimaryAccounts)
 	}
-	for _, capability := range []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"} {
+	for _, capability := range []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission", "urn:ietf:params:jmap:vacationresponse"} {
 		if session.PrimaryAccounts[capability] != "admin" {
 			t.Errorf("primaryAccounts[%q] = %q, want admin", capability, session.PrimaryAccounts[capability])
 		}
-	}
-	if _, ok := session.PrimaryAccounts["urn:ietf:params:jmap:vacationresponse"]; ok {
-		t.Errorf("primaryAccounts includes unimplemented vacationresponse: %v", session.PrimaryAccounts)
 	}
 
 	if session.State == "" || session.State == "state123" {

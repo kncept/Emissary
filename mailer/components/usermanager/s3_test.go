@@ -147,7 +147,7 @@ func TestS3Manager_CreateStoresUserJSON(t *testing.T) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		t.Fatalf("stored object is not JSON: %v", err)
 	}
-	wantKeys := []string{"Email", "Enabled", "SaltedPassword", "Salt", "Rules", "UserManager", "SystemManager", "SchemaVersion"}
+	wantKeys := []string{"Email", "Enabled", "SaltedPassword", "Salt", "Rules", "UserManager", "SystemManager", "SchemaVersion", "VacationResponse"}
 	for _, k := range wantKeys {
 		if _, ok := raw[k]; !ok {
 			t.Errorf("stored object missing field %q: %v", k, raw)

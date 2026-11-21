@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -39,15 +40,29 @@ var _ EmissaryAuthManager = (*DdbManager)(nil)
 // ddbUser is the DynamoDB representation of an EmissaryUser. The "id"
 // partition key holds the user's email address; there is no other user id.
 type ddbUser struct {
-	ID             string   `dynamodbav:"id"`
-	Email          string   `dynamodbav:"email"`
-	Enabled        bool     `dynamodbav:"enabled"`
-	SaltedPassword string   `dynamodbav:"saltedPassword"`
-	Salt           string   `dynamodbav:"salt"`
-	Rules          []string `dynamodbav:"rules"`
-	UserManager    bool     `dynamodbav:"userManager"`
-	SystemManager  bool     `dynamodbav:"systemManager"`
-	SchemaVersion  string   `dynamodbav:"schemaVersion"`
+	ID               string               `dynamodbav:"id"`
+	Email            string               `dynamodbav:"email"`
+	Enabled          bool                 `dynamodbav:"enabled"`
+	SaltedPassword   string               `dynamodbav:"saltedPassword"`
+	Salt             string               `dynamodbav:"salt"`
+	Rules            []string             `dynamodbav:"rules"`
+	UserManager      bool                 `dynamodbav:"userManager"`
+	SystemManager    bool                 `dynamodbav:"systemManager"`
+	SchemaVersion    string               `dynamodbav:"schemaVersion"`
+	VacationResponse *ddbVacationResponse `dynamodbav:"vacationResponse,omitempty"`
+}
+
+// ddbVacationResponse is the DynamoDB representation of the vacation settings
+// embedded in the user record. A nil pointer decodes to the default, disabled
+// singleton for legacy users.
+type ddbVacationResponse struct {
+	IsEnabled bool                 `dynamodbav:"isEnabled"`
+	FromDate  *time.Time           `dynamodbav:"fromDate,omitempty"`
+	ToDate    *time.Time           `dynamodbav:"toDate,omitempty"`
+	Subject   *string              `dynamodbav:"subject,omitempty"`
+	TextBody  *string              `dynamodbav:"textBody,omitempty"`
+	HTMLBody  *string              `dynamodbav:"htmlBody,omitempty"`
+	Responded map[string]time.Time `dynamodbav:"responded,omitempty"`
 }
 
 func NewDdb(cfg Config) *DdbManager {
@@ -262,15 +277,48 @@ func ddbUserFrom(user *EmissaryUser) ddbUser {
 		schemaVersion = "1.0.0"
 	}
 	return ddbUser{
-		ID:             user.Email,
-		Email:          user.Email,
-		Enabled:        user.Enabled,
-		SaltedPassword: user.SaltedPassword,
-		Salt:           user.Salt,
-		Rules:          user.Rules,
-		UserManager:    user.UserManager,
-		SystemManager:  user.SystemManager,
-		SchemaVersion:  schemaVersion,
+		ID:               user.Email,
+		Email:            user.Email,
+		Enabled:          user.Enabled,
+		SaltedPassword:   user.SaltedPassword,
+		Salt:             user.Salt,
+		Rules:            user.Rules,
+		UserManager:      user.UserManager,
+		SystemManager:    user.SystemManager,
+		SchemaVersion:    schemaVersion,
+		VacationResponse: ddbVacationResponseFrom(user.VacationResponse),
+	}
+}
+
+func ddbVacationResponseFrom(vacation VacationResponse) *ddbVacationResponse {
+	if !vacation.IsEnabled && vacation.FromDate == nil && vacation.ToDate == nil &&
+		vacation.Subject == nil && vacation.TextBody == nil && vacation.HTMLBody == nil &&
+		len(vacation.Responded) == 0 {
+		return nil
+	}
+	return &ddbVacationResponse{
+		IsEnabled: vacation.IsEnabled,
+		FromDate:  vacation.FromDate,
+		ToDate:    vacation.ToDate,
+		Subject:   vacation.Subject,
+		TextBody:  vacation.TextBody,
+		HTMLBody:  vacation.HTMLBody,
+		Responded: vacation.Responded,
+	}
+}
+
+func (d *ddbVacationResponse) vacationResponse() VacationResponse {
+	if d == nil {
+		return VacationResponse{}
+	}
+	return VacationResponse{
+		IsEnabled: d.IsEnabled,
+		FromDate:  d.FromDate,
+		ToDate:    d.ToDate,
+		Subject:   d.Subject,
+		TextBody:  d.TextBody,
+		HTMLBody:  d.HTMLBody,
+		Responded: d.Responded,
 	}
 }
 
@@ -289,11 +337,12 @@ func (u ddbUser) emissaryUser() *EmissaryUser {
 			Email:         address,
 			SystemManager: u.SystemManager,
 		},
-		Enabled:        u.Enabled,
-		SaltedPassword: u.SaltedPassword,
-		Salt:           u.Salt,
-		Rules:          rules,
-		UserManager:    u.UserManager,
-		SchemaVersion:  u.SchemaVersion,
+		Enabled:          u.Enabled,
+		SaltedPassword:   u.SaltedPassword,
+		Salt:             u.Salt,
+		Rules:            rules,
+		UserManager:      u.UserManager,
+		SchemaVersion:    u.SchemaVersion,
+		VacationResponse: u.VacationResponse.vacationResponse(),
 	}
 }

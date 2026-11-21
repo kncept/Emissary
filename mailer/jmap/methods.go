@@ -159,10 +159,6 @@ func (h *UnimplementedHandler) VacationResponseSet(context.Context, string, json
 	h.panic(vacationresponse.MethodSet)
 	return nil, nil
 }
-func (h *UnimplementedHandler) VacationResponseChanges(context.Context, string, json.RawMessage) (json.RawMessage, error) {
-	h.panic(vacationresponse.MethodChanges)
-	return nil, nil
-}
 
 func (h *UnimplementedHandler) PushSubscriptionGet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
 	h.panic(pushsubscription.MethodGet)

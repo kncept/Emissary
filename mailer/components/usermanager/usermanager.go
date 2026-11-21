@@ -69,6 +69,11 @@ type EmissaryUser struct {
 	// SchemaVersion tracks the data schema version for migrations.
 	// Defaults to "1.0.0" when creating new users. Empty string means legacy (pre-schema versioning).
 	SchemaVersion string
+
+	// VacationResponse is the account's JMAP VacationResponse singleton and its
+	// RFC 3834 reply state. It is written into user.json alongside the other
+	// account fields; a zero value represents the default, disabled response.
+	VacationResponse VacationResponse `json:"VacationResponse,omitempty"`
 }
 
 // IsEnabled reports whether the user may log in.

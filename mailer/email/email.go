@@ -100,6 +100,10 @@ type UserEmail struct {
 	MessageID  string    `json:"messageId,omitempty"`
 	InReplyTo  []string  `json:"inReplyTo,omitempty"`
 	References []string  `json:"references,omitempty"`
+
+	// AutoSubmitted is the RFC 3834 Auto-Submitted header value. "auto-replied"
+	// marks an automatic response so other responders can avoid mail loops.
+	AutoSubmitted string `json:"autoSubmitted,omitempty"`
 }
 
 // GenerateMessageID returns a globally unique RFC 5322 Message-ID value of the

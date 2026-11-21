@@ -51,6 +51,12 @@ type ReceiverConfig struct {
 	// a Lambda retry after a partial failure cannot deliver or bounce them
 	// again. Defaults to a process-local store.
 	Dedup DedupStore
+
+	// VacationStore holds the VacationResponse singleton and RFC 3834 reply
+	// state. It defaults to the user manager's own user.json-backed store;
+	// managers without one get a process-local store so loop prevention still
+	// works within the process.
+	VacationStore usermanager.VacationStore
 }
 
 // Receiver processes inbound messages.
@@ -83,6 +89,9 @@ func NewReceiver(cfg ReceiverConfig) (*Receiver, error) {
 	}
 	if cfg.Dedup == nil {
 		cfg.Dedup = NewMemoryDedup()
+	}
+	if cfg.VacationStore == nil {
+		cfg.VacationStore = usermanager.VacationStoreFor(cfg.UserManager)
 	}
 	return &Receiver{cfg: cfg}, nil
 }
@@ -118,7 +127,7 @@ func ParseRawMessage(key string, rawMessage []byte) *ParsedMessage {
 // parsed email, and raw message bytes.
 // Returns the list of dedup IDs that were recorded, so the caller can clear them
 // after any storage-specific cleanup (e.g., deleting the staging object).
-func (r *Receiver) processMessage(ctx context.Context, key string, recipients []string, parsedEmail *email.UserEmail, rawMessage []byte) ([]string, error) {
+func (r *Receiver) processMessage(ctx context.Context, key string, recipients []string, parsedEmail *email.UserEmail, rawMessage []byte, wireEmail *email.WireFormatEmail) ([]string, error) {
 	if len(recipients) == 0 {
 		slog.Warn("Receiver: no envelope recipients found", "key", key)
 		return nil, nil
@@ -147,7 +156,7 @@ func (r *Receiver) processMessage(ctx context.Context, key string, recipients []
 			continue
 		}
 
-		if err := r.handleRecipient(ctx, key, recipient, parsedEmail, rawMessage, bounceSender); err != nil {
+		if err := r.handleRecipient(ctx, key, recipient, parsedEmail, rawMessage, bounceSender, wireEmail); err != nil {
 			slog.Error("Receiver: failed to handle recipient", "recipient", recipient, "err", err)
 			processingErrors = append(processingErrors, err)
 			continue
@@ -188,7 +197,7 @@ func (r *Receiver) ProcessEvent(ctx context.Context, event InboundRawEmailEvent)
 	parsed := ParseRawMessage(key, rawMessage)
 
 	// Delegate to the common processing function
-	dedupIDs, err := r.processMessage(ctx, key, parsed.Recipients, parsed.ParsedEmail, parsed.RawMessage)
+	dedupIDs, err := r.processMessage(ctx, key, parsed.Recipients, parsed.ParsedEmail, parsed.RawMessage, parsed.WireEmail)
 	if err != nil {
 		return err
 	}
@@ -237,7 +246,7 @@ func (r *Receiver) ProcessParsedEvent(ctx context.Context, event InboundEmailEve
 	}
 
 	// Delegate to the common processing function
-	dedupIDs, err := r.processMessage(ctx, key, recipients, parsedEmail, rawMessage)
+	dedupIDs, err := r.processMessage(ctx, key, recipients, parsedEmail, rawMessage, wireEmail)
 	if err != nil {
 		return err
 	}
@@ -293,7 +302,7 @@ func sha256Sum(data []byte) []byte {
 // it is passed to delivery so the stored message is byte-exact. A returned
 // error means the recipient still needs processing on a retry; callers record
 // a dedup marker only when this returns nil.
-func (r *Receiver) handleRecipient(ctx context.Context, key, recipient string, parsedEmail *email.UserEmail, rawMessage []byte, bounceSender string) error {
+func (r *Receiver) handleRecipient(ctx context.Context, key, recipient string, parsedEmail *email.UserEmail, rawMessage []byte, bounceSender string, wireEmail *email.WireFormatEmail) error {
 	identity := MailIdentityForRecipient(recipient)
 	rules, err := r.cfg.IdentityConfig.GetByIdentity(identity)
 	if err != nil {
@@ -321,6 +330,9 @@ func (r *Receiver) handleRecipient(ctx context.Context, key, recipient string, p
 				slog.Error("Receiver: failed to deliver", "recipient", recipient, "err", err)
 				return fmt.Errorf("delivery to %s failed: %w", recipient, err)
 			}
+			// RFC 8621 section 8: a vacation response is sent when a message is
+			// delivered to the user's mail store, subject to RFC 3834 rules.
+			r.maybeSendVacationReply(ctx, recipient, parsedEmail, wireEmail)
 			applied = true
 		case DeliverToMailIdentity:
 			mailbox := rules.deliveryIdentity(recipient)

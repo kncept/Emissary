@@ -466,8 +466,9 @@ implemented (`maxConcurrentUpload: 0`), mailboxes are persisted but only
 top-level mailboxes are supported (`maxMailboxDepth: 1`), each email is in a
 single mailbox (`maxMailboxesPerEmail: 1`), only `receivedAt` sorting is
 supported, delayed send is not supported, and no RFC 4790 collation
-algorithms are advertised. VacationResponse is omitted because its methods
-are not implemented.
+algorithms are advertised. The VacationResponse capability is advertised and
+its singleton settings are persisted in the account's `user.json` record;
+automatic replies follow RFC 3834 loop-prevention rules.
 
 ## `POST /api/jmap/` (JMAP Batch Request)
 

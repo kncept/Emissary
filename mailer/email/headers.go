@@ -110,6 +110,9 @@ func RenderHeaders(e *UserEmail, policy HeaderPolicy) string {
 	if len(e.References) > 0 {
 		write("References", strings.Join(e.References, " "))
 	}
+	// RFC 3834 section 3.1.7: automatic responses carry Auto-Submitted so
+	// receiving responders can suppress their own reply and break loops.
+	write("Auto-Submitted", e.AutoSubmitted)
 	return b.String()
 }
 

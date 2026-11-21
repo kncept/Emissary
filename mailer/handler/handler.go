@@ -533,12 +533,16 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 		"submissionExtensions": map[string]any{},
 	}
 
-	// VacationResponse is not advertised: its methods are not implemented.
+	// The VacationResponse capability value is an empty object in both the
+	// Session "capabilities" and the account's "accountCapabilities" (RFC 8621
+	// section 1.3.3). Its methods are now implemented, so it is advertised.
+	vacationCapabilities := map[string]any{}
 	session := map[string]any{
 		"capabilities": map[string]any{
-			jmap.CapabilityCore:       coreCapabilities,
-			jmap.CapabilityMail:       map[string]any{},
-			jmap.CapabilitySubmission: map[string]any{},
+			jmap.CapabilityCore:             coreCapabilities,
+			jmap.CapabilityMail:             map[string]any{},
+			jmap.CapabilitySubmission:       map[string]any{},
+			jmap.CapabilityVacationResponse: vacationCapabilities,
 		},
 		"accounts": map[string]any{
 			username: map[string]any{
@@ -546,17 +550,19 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 				"isPersonal": true,
 				"isReadOnly": false,
 				"accountCapabilities": map[string]any{
-					jmap.CapabilityCore:       coreCapabilities,
-					jmap.CapabilityMail:       mailAccountCapabilities,
-					jmap.CapabilitySubmission: submissionAccountCapabilities,
+					jmap.CapabilityCore:             coreCapabilities,
+					jmap.CapabilityMail:             mailAccountCapabilities,
+					jmap.CapabilitySubmission:       submissionAccountCapabilities,
+					jmap.CapabilityVacationResponse: vacationCapabilities,
 				},
 			},
 		},
 		// RFC 8620: core is a server-wide capability and SHOULD NOT appear
 		// in primaryAccounts.
 		"primaryAccounts": map[string]any{
-			jmap.CapabilityMail:       username,
-			jmap.CapabilitySubmission: username,
+			jmap.CapabilityMail:             username,
+			jmap.CapabilitySubmission:       username,
+			jmap.CapabilityVacationResponse: username,
 		},
 		"username":    username,
 		"apiUrl":      jmapAPIPath,

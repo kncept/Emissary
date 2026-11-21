@@ -638,19 +638,47 @@ func parseDate(value string) time.Time {
 func (wfe *WireFormatEmail) ToUserEmail() *UserEmail {
 	text, html := wfe.extractTextAndHTML()
 	return &UserEmail{
-		From:       addressPtrToValue(wfe.From),
-		To:         wfe.To,
-		Cc:         wfe.Cc,
-		Bcc:        wfe.Bcc,
-		ReplyTo:    wfe.ReplyTo,
-		Subject:    wfe.Subject,
-		Date:       wfe.Date,
-		Text:       strings.TrimSpace(text),
-		HTML:       strings.TrimSpace(html),
-		MessageID:  wfe.MessageID,
-		InReplyTo:  wfe.InReplyTo,
-		References: wfe.References,
+		From:          addressPtrToValue(wfe.From),
+		To:            wfe.To,
+		Cc:            wfe.Cc,
+		Bcc:           wfe.Bcc,
+		ReplyTo:       wfe.ReplyTo,
+		Subject:       wfe.Subject,
+		Date:          wfe.Date,
+		Text:          strings.TrimSpace(text),
+		HTML:          strings.TrimSpace(html),
+		MessageID:     wfe.MessageID,
+		InReplyTo:     wfe.InReplyTo,
+		References:    wfe.References,
+		AutoSubmitted: wfe.HeaderValue("Auto-Submitted"),
 	}
+}
+
+// HeaderValue returns the value of the first header with the given name.
+// Header names are compared case-insensitively as RFC 5322 requires.
+func (wfe *WireFormatEmail) HeaderValue(name string) string {
+	if wfe == nil {
+		return ""
+	}
+	for _, header := range wfe.Headers {
+		if strings.EqualFold(header.Name, name) {
+			return strings.TrimSpace(header.Value)
+		}
+	}
+	return ""
+}
+
+// HasHeader reports whether at least one header with the given name is present.
+func (wfe *WireFormatEmail) HasHeader(name string) bool {
+	if wfe == nil {
+		return false
+	}
+	for _, header := range wfe.Headers {
+		if strings.EqualFold(header.Name, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func addressPtrToValue(addr *Address) Address {

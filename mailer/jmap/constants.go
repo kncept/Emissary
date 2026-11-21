@@ -18,9 +18,10 @@ import (
 // with handleJMAPSession: a capability may only be accepted in `using` when
 // the Session advertises it.
 const (
-	CapabilityCore       = "urn:ietf:params:jmap:core"
-	CapabilityMail       = "urn:ietf:params:jmap:mail"
-	CapabilitySubmission = "urn:ietf:params:jmap:submission"
+	CapabilityCore             = "urn:ietf:params:jmap:core"
+	CapabilityMail             = "urn:ietf:params:jmap:mail"
+	CapabilitySubmission       = "urn:ietf:params:jmap:submission"
+	CapabilityVacationResponse = "urn:ietf:params:jmap:vacationresponse"
 )
 
 // MethodName constants are re-exported from the subpackage that owns each
@@ -58,9 +59,8 @@ const (
 	MethodEmailSubmissionQuery        = emailsubmission.MethodQuery
 	MethodEmailSubmissionQueryChanges = emailsubmission.MethodQueryChanges
 
-	MethodVacationResponseGet     = vacationresponse.MethodGet
-	MethodVacationResponseSet     = vacationresponse.MethodSet
-	MethodVacationResponseChanges = vacationresponse.MethodChanges
+	MethodVacationResponseGet = vacationresponse.MethodGet
+	MethodVacationResponseSet = vacationresponse.MethodSet
 
 	MethodPushSubscriptionGet = pushsubscription.MethodGet
 	MethodPushSubscriptionSet = pushsubscription.MethodSet

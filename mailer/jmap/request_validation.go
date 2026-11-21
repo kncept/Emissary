@@ -90,9 +90,10 @@ func limitError(limit string, status int, detail string) *RequestError {
 }
 
 var supportedCapabilities = map[string]struct{}{
-	CapabilityCore:       {},
-	CapabilityMail:       {},
-	CapabilitySubmission: {},
+	CapabilityCore:             {},
+	CapabilityMail:             {},
+	CapabilitySubmission:       {},
+	CapabilityVacationResponse: {},
 }
 
 // IsSupportedCapability reports whether the capability is advertised by the

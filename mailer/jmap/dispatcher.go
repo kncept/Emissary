@@ -464,8 +464,6 @@ func (d *Dispatcher) dispatchCall(ctx context.Context, accountID string, call In
 		result, err = d.handler.VacationResponseGet(ctx, accountID, argsJSON)
 	case MethodVacationResponseSet:
 		result, err = d.handler.VacationResponseSet(ctx, accountID, argsJSON)
-	case MethodVacationResponseChanges:
-		result, err = d.handler.VacationResponseChanges(ctx, accountID, argsJSON)
 
 	// PushSubscription methods are account-less in RFC 8620 section 7.2,
 	// but still receive their full arguments object like every other method.

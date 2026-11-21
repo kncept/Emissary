@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -257,6 +258,43 @@ func TestDdbManager_Management(t *testing.T) {
 	}
 	if _, _, err := m.List(ctx, "not-a-cursor!", 2); err == nil {
 		t.Error("List() with an invalid cursor should fail")
+	}
+}
+
+func TestDdbManager_VacationResponseRoundTrip(t *testing.T) {
+	m, _ := newDdbTestManager()
+	ctx := context.Background()
+	alice := testUser("alice@example.com", "secret", true)
+	if err := m.Create(ctx, alice); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	subject := "Away"
+	text := "Back soon"
+	vacation := VacationResponse{
+		IsEnabled: true,
+		FromDate:  &from,
+		Subject:   &subject,
+		TextBody:  &text,
+		Responded: map[string]time.Time{"sender@example.net": from},
+	}
+	if err := m.SaveVacationResponse(ctx, "alice@example.com", vacation); err != nil {
+		t.Fatalf("SaveVacationResponse() error = %v", err)
+	}
+
+	got, err := m.GetVacationResponse(ctx, "alice@example.com")
+	if err != nil {
+		t.Fatalf("GetVacationResponse() error = %v", err)
+	}
+	if !got.IsEnabled || got.Subject == nil || *got.Subject != subject || got.TextBody == nil || *got.TextBody != text {
+		t.Fatalf("round-tripped vacation settings = %+v", got)
+	}
+	if got.FromDate == nil || !got.FromDate.Equal(from) {
+		t.Errorf("FromDate = %v, want %v", got.FromDate, from)
+	}
+	if len(got.Responded) != 1 || !got.Responded["sender@example.net"].Equal(from) {
+		t.Errorf("Responded = %v, want sender@example.net -> %v", got.Responded, from)
 	}
 }
 

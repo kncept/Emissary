@@ -76,6 +76,12 @@ func (s *MtaSender) Send(ctx context.Context, message *email.UserEmail) error {
 	if envelopeFrom == "" {
 		return errors.New("message has no From address")
 	}
+	// RFC 3834 section 3.3: use a null reverse path for automatic responses so
+	// delivery failures and other responders cannot start a mail loop.
+	if value := strings.TrimSpace(message.AutoSubmitted); value != "" && !strings.EqualFold(value, "no") {
+		slog.Debug("mta: sending automatic response with null envelope sender", "from", message.From.Address, "subject", message.Subject)
+		return s.deliver(ctx, "", helloNameFromAddress(message.From.Address), message)
+	}
 	slog.Debug("mta: sending message", "from", envelopeFrom, "subject", message.Subject)
 	s.checkDMARC(ctx, envelopeFrom, envelopeFrom)
 	return s.deliver(ctx, envelopeFrom, helloNameFromAddress(envelopeFrom), message)
