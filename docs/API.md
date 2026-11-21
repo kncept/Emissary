@@ -487,8 +487,9 @@ the whole request when it is not a single, valid I-JSON `Request`
 object. `using` is checked against the capabilities advertised by the
 Session object, `methodCalls` must contain well-formed three-element
 Invocation tuples with unique `methodCallId` values, and `createdIds`
-must be an object when present. Unknown properties are ignored for
-forward compatibility.
+must be an object when present whose keys and values are valid RFC 8620
+`Id` strings (1-255 URL-safe base64url characters, without padding).
+Unknown properties are ignored for forward compatibility.
 
 | Problem type | Status | Cause |
 | --- | --- | --- |

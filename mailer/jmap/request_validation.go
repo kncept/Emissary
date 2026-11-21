@@ -152,6 +152,11 @@ func DecodeRequest(contentType string, body []byte, limits RequestLimits) (*Requ
 		if err := json.Unmarshal(rawCreatedIDs, &createdIDs); err != nil || createdIDs == nil {
 			return nil, notRequestError("The `createdIds` property must map string creation ids to string ids.")
 		}
+		for creationID, id := range createdIDs {
+			if !validJMAPID(creationID) || !validJMAPID(id) {
+				return nil, notRequestError("The `createdIds` property must map valid RFC 8620 creation ids to valid ids.")
+			}
+		}
 	}
 
 	req := &Request{
@@ -355,6 +360,23 @@ func validMethodName(name string) bool {
 	}
 	for _, r := range name {
 		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// validJMAPID reports whether id satisfies the RFC 8620 Id type: 1-255 octets
+// from the URL and filename safe base64 alphabet, without padding.
+func validJMAPID(id string) bool {
+	if len(id) == 0 || len(id) > 255 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
 			return false
 		}
 	}

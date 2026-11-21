@@ -518,6 +518,31 @@ func TestJMAPRequestLevelErrors(t *testing.T) {
 			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
 		},
 		{
+			name: "createdIds invalid creation id", contentType: "application/json",
+			body:       `{"using":[],"methodCalls":[],"createdIds":{"not/id":"id1"}}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "createdIds invalid assigned id", contentType: "application/json",
+			body:       `{"using":[],"methodCalls":[],"createdIds":{"c1":"not/id"}}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "createdIds empty id", contentType: "application/json",
+			body:       `{"using":[],"methodCalls":[],"createdIds":{"":"id1"}}`,
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "createdIds overlong id", contentType: "application/json",
+			body:       fmt.Sprintf(`{"using":[],"methodCalls":[],"createdIds":{%q:"id1"}}`, strings.Repeat("a", 256)),
+			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+		},
+		{
+			name: "createdIds valid URL-safe ids", contentType: "application/json",
+			body:       `{"using":["urn:ietf:params:jmap:core"],"methodCalls":[],"createdIds":{"create_1":"-valid-id"}}`,
+			wantStatus: 200,
+		},
+		{
 			name: "unknown capability", contentType: "application/json",
 			body:       `{"using":["https://example.com/not-supported"],"methodCalls":[]}`,
 			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:unknownCapability",
