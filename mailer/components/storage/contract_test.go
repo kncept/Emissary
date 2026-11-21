@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"sort"
 	"testing"
 	"time"
@@ -289,6 +290,16 @@ func TestStorageContractBlobs(t *testing.T) {
 				t.Errorf("GetBlob(%q) = %+v, %q", meta.ID, gotMeta, gotData)
 			}
 
+			streamMeta, reader, err := store.OpenBlob(ctx, accountID, meta.ID)
+			if err != nil {
+				t.Fatalf("OpenBlob(%q) error = %v", meta.ID, err)
+			}
+			streamed, err := io.ReadAll(reader)
+			_ = reader.Close()
+			if err != nil || streamMeta.ID != meta.ID || !bytes.Equal(streamed, data) {
+				t.Errorf("OpenBlob(%q) = %+v, %q, %v", meta.ID, streamMeta, streamed, err)
+			}
+
 			if _, _, err := store.GetBlob(ctx, "other@example.com", meta.ID); !errors.Is(err, ErrNotFound) {
 				t.Errorf("GetBlob() from another account error = %v, want ErrNotFound", err)
 			}
@@ -350,6 +361,65 @@ func TestStorageContractBlobs(t *testing.T) {
 			}
 			if !found {
 				t.Errorf("ListMailboxes() dropped the _archive mailbox: %+v", mailboxes)
+			}
+		})
+	}
+}
+
+func TestStorageContractBlobLifecycle(t *testing.T) {
+	ctx := context.Background()
+	accountID := contractAccountID()
+	data := []byte("lifecycle metadata")
+
+	for _, backend := range contractBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			store := backend.open(t)
+			meta, err := store.PutBlob(ctx, accountID, "text/plain", data)
+			if err != nil {
+				t.Fatalf("PutBlob() error = %v", err)
+			}
+
+			gotMeta, err := store.GetBlobMeta(ctx, accountID, meta.ID)
+			if err != nil {
+				t.Fatalf("GetBlobMeta() error = %v", err)
+			}
+			if gotMeta.ID != meta.ID || gotMeta.AccountID != meta.AccountID || gotMeta.Size != int64(len(data)) {
+				t.Errorf("GetBlobMeta() = %+v, want %+v", gotMeta, meta)
+			}
+			if gotMeta.Uploader() != accountID {
+				t.Errorf("legacy blob uploader = %q, want %q", gotMeta.Uploader(), accountID)
+			}
+
+			listed, err := store.ListBlobs(ctx, accountID)
+			if err != nil {
+				t.Fatalf("ListBlobs() error = %v", err)
+			}
+			found := false
+			for _, blob := range listed {
+				if blob.ID == meta.ID {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("ListBlobs() = %+v, missing %q", listed, meta.ID)
+			}
+
+			pinned, err := store.AddBlobRefs(ctx, accountID, meta.ID, 1)
+			if err != nil || pinned.Refs != 1 {
+				t.Fatalf("AddBlobRefs(+1) = %+v, %v", pinned, err)
+			}
+			if err := store.DeleteBlob(ctx, accountID, meta.ID); !errors.Is(err, ErrBlobReferenced) {
+				t.Errorf("DeleteBlob() while referenced error = %v, want ErrBlobReferenced", err)
+			}
+			released, err := store.AddBlobRefs(ctx, accountID, meta.ID, -1)
+			if err != nil || released.Refs != 0 {
+				t.Fatalf("AddBlobRefs(-1) = %+v, %v", released, err)
+			}
+			if err := store.DeleteBlob(ctx, accountID, meta.ID); err != nil {
+				t.Fatalf("DeleteBlob() after release error = %v", err)
+			}
+			if _, err := store.GetBlobMeta(ctx, accountID, meta.ID); !errors.Is(err, ErrNotFound) {
+				t.Errorf("GetBlobMeta() after delete error = %v, want ErrNotFound", err)
 			}
 		})
 	}

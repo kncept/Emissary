@@ -1,18 +1,20 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/fsutil"
@@ -733,7 +735,13 @@ func (s *FileStorage) DeleteDraft(_ context.Context, sessionID, id string) error
 
 // PutBlob implements BlobStore. The body lives at
 // users/<account>/_blobs/<id> with a small JSON metadata sidecar.
-func (s *FileStorage) PutBlob(_ context.Context, accountID, contentType string, data []byte) (Blob, error) {
+func (s *FileStorage) PutBlob(ctx context.Context, accountID, contentType string, data []byte) (Blob, error) {
+	return s.UploadBlob(ctx, accountID, "", contentType, data, time.Now())
+}
+
+// UploadBlob implements BlobStore. The bytes are immutable, so re-uploading
+// the same content only refreshes the metadata sidecar.
+func (s *FileStorage) UploadBlob(_ context.Context, accountID, uploaderID, contentType string, data []byte, now time.Time) (Blob, error) {
 	account, err := canonicalBlobAccount(accountID)
 	if err != nil {
 		return Blob{}, err
@@ -741,7 +749,8 @@ func (s *FileStorage) PutBlob(_ context.Context, accountID, contentType string, 
 	if err := validateBlobData(data); err != nil {
 		return Blob{}, err
 	}
-	key, err := blobObjectKey(account, BlobID(data))
+	id := BlobID(data)
+	key, err := blobObjectKey(account, id)
 	if err != nil {
 		return Blob{}, err
 	}
@@ -753,6 +762,7 @@ func (s *FileStorage) PutBlob(_ context.Context, accountID, contentType string, 
 	if err != nil {
 		return Blob{}, err
 	}
+	meta := newBlobMetadata(account, uploaderID, contentType, data, now)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -760,28 +770,26 @@ func (s *FileStorage) PutBlob(_ context.Context, accountID, contentType string, 
 		return Blob{}, err
 	}
 	if info, err := os.Stat(objectPath); err == nil && !info.IsDir() {
-		if existing, metaErr := s.readBlobMetadata(metaPath); metaErr == nil {
+		existing, metaErr := s.readBlobMetadata(metaPath)
+		if metaErr != nil && !errors.Is(metaErr, ErrNotFound) {
+			return Blob{}, metaErr
+		}
+		if metaErr == nil {
+			existing = refreshBlobUpload(existing, uploaderID, now)
+			if err := writeBlobMetadata(metaPath, existing); err != nil {
+				return Blob{}, err
+			}
 			return existing, nil
 		}
 	} else if err != nil && !os.IsNotExist(err) {
 		return Blob{}, err
 	}
 
-	meta := Blob{
-		ID:        path.Base(key),
-		AccountID: account,
-		Type:      normalizeBlobType(contentType),
-		Size:      int64(len(data)),
-	}
 	if err := fsutil.WriteFileAtomically(objectPath, data, 0644); err != nil {
 		return Blob{}, fmt.Errorf("failed to store blob %q: %w", key, err)
 	}
-	body, err := json.Marshal(meta)
-	if err != nil {
+	if err := writeBlobMetadata(metaPath, meta); err != nil {
 		return Blob{}, err
-	}
-	if err := fsutil.WriteFileAtomically(metaPath, body, 0644); err != nil {
-		return Blob{}, fmt.Errorf("failed to store blob metadata %q: %w", key, err)
 	}
 	return meta, nil
 }
@@ -796,6 +804,111 @@ func (s *FileStorage) readBlobMetadata(path string) (Blob, error) {
 	}
 	var meta Blob
 	if err := json.Unmarshal(body, &meta); err != nil {
+		return Blob{}, err
+	}
+	return meta, nil
+}
+
+func writeBlobMetadata(path string, meta Blob) error {
+	body, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	if err := fsutil.WriteFileAtomically(path, body, 0644); err != nil {
+		return fmt.Errorf("failed to store blob metadata %q: %w", path, err)
+	}
+	return nil
+}
+
+// GetBlobMeta implements BlobStore without reading the body.
+func (s *FileStorage) GetBlobMeta(_ context.Context, accountID, blobID string) (Blob, error) {
+	id, err := normalizeBlobID(blobID)
+	if err != nil {
+		return Blob{}, err
+	}
+	account, err := canonicalBlobAccount(accountID)
+	if err != nil {
+		return Blob{}, err
+	}
+	key, err := blobObjectKey(account, id)
+	if err != nil {
+		return Blob{}, err
+	}
+	metaPath, err := s.objectPath(key + blobMetadataSuffix)
+	if err != nil {
+		return Blob{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.readBlobMetadata(metaPath)
+}
+
+// ListBlobs implements BlobStore. Only metadata sidecars are read, so a stale
+// body without metadata is invisible to the lifecycle manager.
+func (s *FileStorage) ListBlobs(_ context.Context, accountID string) ([]Blob, error) {
+	account, err := canonicalBlobAccount(accountID)
+	if err != nil {
+		return nil, err
+	}
+	dirKey, err := blobDirKey(account)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := s.objectPath(dirKey)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []Blob{}, nil
+		}
+		return nil, err
+	}
+	blobs := make([]Blob, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), blobMetadataSuffix) {
+			continue
+		}
+		meta, err := s.readBlobMetadata(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		blobs = append(blobs, meta)
+	}
+	sortBlobsOldestFirst(blobs)
+	return blobs, nil
+}
+
+// AddBlobRefs implements BlobStore. The filesystem lock keeps metadata
+// updates from losing concurrent pins and releases.
+func (s *FileStorage) AddBlobRefs(_ context.Context, accountID, blobID string, delta int) (Blob, error) {
+	id, err := normalizeBlobID(blobID)
+	if err != nil {
+		return Blob{}, err
+	}
+	account, err := canonicalBlobAccount(accountID)
+	if err != nil {
+		return Blob{}, err
+	}
+	key, err := blobObjectKey(account, id)
+	if err != nil {
+		return Blob{}, err
+	}
+	metaPath, err := s.objectPath(key + blobMetadataSuffix)
+	if err != nil {
+		return Blob{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	meta, err := s.readBlobMetadata(metaPath)
+	if err != nil {
+		return Blob{}, err
+	}
+	meta = adjustBlobRefs(meta, delta)
+	if err := writeBlobMetadata(metaPath, meta); err != nil {
 		return Blob{}, err
 	}
 	return meta, nil
@@ -860,6 +973,60 @@ func (s *FileStorage) GetBlob(ctx context.Context, accountID, blobID string) (Bl
 	}, raw, nil
 }
 
+// OpenBlob implements BlobStore with a file handle instead of buffering the
+// whole blob. The handle is opened while the storage lock is held so a
+// concurrent garbage collection pass cannot remove the file mid-read.
+func (s *FileStorage) OpenBlob(ctx context.Context, accountID, blobID string) (Blob, io.ReadCloser, error) {
+	id, err := normalizeBlobID(blobID)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	account, err := canonicalBlobAccount(accountID)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	key, err := blobObjectKey(account, id)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	objectPath, err := s.objectPath(key)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	metaPath, err := s.objectPath(key + blobMetadataSuffix)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+
+	s.mu.RLock()
+	info, statErr := os.Stat(objectPath)
+	if statErr == nil && !info.IsDir() && info.Size() <= email.MaxPartSize() {
+		meta, metaErr := s.readBlobMetadata(metaPath)
+		file, openErr := os.Open(objectPath)
+		s.mu.RUnlock()
+		if openErr != nil {
+			return Blob{}, nil, openErr
+		}
+		if metaErr != nil {
+			meta = Blob{ID: id, AccountID: account, Type: defaultBlobType, Size: info.Size()}
+		}
+		return meta, file, nil
+	}
+	s.mu.RUnlock()
+	if statErr == nil && !info.IsDir() {
+		return Blob{}, nil, fmt.Errorf("blob %q exceeds maximum size of %d bytes", key, email.MaxPartSize())
+	}
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return Blob{}, nil, statErr
+	}
+
+	meta, data, err := s.GetBlob(ctx, accountID, blobID)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	return meta, io.NopCloser(bytes.NewReader(data)), nil
+}
+
 // DeleteBlob implements BlobStore. Email-backed blobs are deliberately left
 // untouched: destroying a message is an Email/set operation, not Blob/copy.
 func (s *FileStorage) DeleteBlob(_ context.Context, accountID, blobID string) error {
@@ -895,6 +1062,9 @@ func (s *FileStorage) DeleteBlob(_ context.Context, accountID, blobID string) er
 	}
 	if info.IsDir() {
 		return ErrNotFound
+	}
+	if meta, metaErr := s.readBlobMetadata(metaPath); metaErr == nil && meta.IsPinned() {
+		return ErrBlobReferenced
 	}
 	if err := os.Remove(objectPath); err != nil && !os.IsNotExist(err) {
 		return err

@@ -140,8 +140,29 @@ func (h *Handler) BlobCopy(ctx context.Context, accountID string, args json.RawM
 		}
 		seen[blobID] = true
 
+		// Pin the source blob for the duration of this copy. Blob ids are
+		// references held by JMAP objects, and RFC 8620 requires that a blob
+		// not be deleted inside the method call that still references it.
+		// Email-backed blobs are not in the generic blob index, so they need
+		// no pin (and DeleteBlob will not remove them anyway).
+		pinned := false
+		if _, err := h.deps.Storage.AddBlobRefs(ctx, req.FromAccountID, blobID, 1); err == nil {
+			pinned = true
+		} else if !errors.Is(err, storage.ErrNotFound) {
+			notCopied[blobID] = setErrorOf("invalidProperties", "Could not pin blob")
+			continue
+		}
+		releasePin := func() {
+			if !pinned {
+				return
+			}
+			_, _ = h.deps.Storage.AddBlobRefs(ctx, req.FromAccountID, blobID, -1)
+			pinned = false
+		}
+
 		meta, data, err := h.deps.Storage.GetBlob(ctx, req.FromAccountID, blobID)
 		if err != nil {
+			releasePin()
 			if errors.Is(err, storage.ErrNotFound) {
 				notCopied[blobID] = setErrorOf("notFound", "Blob not found")
 			} else {
@@ -156,6 +177,7 @@ func (h *Handler) BlobCopy(ctx context.Context, accountID string, args json.RawM
 
 		newMeta, err := h.deps.Storage.PutBlob(ctx, req.AccountID, meta.Type, data)
 		if err != nil {
+			releasePin()
 			notCopied[blobID] = setErrorOf("invalidProperties", "Could not store blob in destination account")
 			continue
 		}
@@ -170,16 +192,23 @@ func (h *Handler) BlobCopy(ctx context.Context, accountID string, args json.RawM
 				// which is an Email/set operation. Report the skip explicitly
 				// rather than silently claiming the original was destroyed.
 				notDestroyed[blobID] = setErrorOf("forbidden", "email-backed blobs cannot be destroyed by Blob/copy")
-			} else if err := h.deps.Storage.DeleteBlob(ctx, req.FromAccountID, blobID); err != nil {
-				if !existed {
-					_ = h.deps.Storage.DeleteBlob(ctx, req.AccountID, newMeta.ID)
-				}
-				notCopied[blobID] = setErrorOf("invalidProperties", "Could not destroy original blob")
-				continue
 			} else {
-				destroyed = true
+				releasePin()
+				remaining, metaErr := h.deps.Storage.GetBlobMeta(ctx, req.FromAccountID, blobID)
+				if metaErr != nil || remaining.IsPinned() {
+					notDestroyed[blobID] = setErrorOf("forbidden", "blob is still referenced")
+				} else if err := h.deps.Storage.DeleteBlob(ctx, req.FromAccountID, blobID); err != nil {
+					if !existed {
+						_ = h.deps.Storage.DeleteBlob(ctx, req.AccountID, newMeta.ID)
+					}
+					notCopied[blobID] = setErrorOf("invalidProperties", "Could not destroy original blob")
+					continue
+				} else {
+					destroyed = true
+				}
 			}
 		}
+		releasePin()
 
 		if !existed {
 			changes = append(changes, blobChange{req.AccountID, newMeta.ID, base.ChangeCreate})

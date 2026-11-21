@@ -11,7 +11,6 @@ import (
 
 	"github.com/kncept/Emissary/mailer/components/sender"
 	"github.com/kncept/Emissary/mailer/components/storage"
-	"github.com/kncept/Emissary/mailer/email"
 )
 
 // newJMAPLimitHandler builds a real handler with a deliberately small body cap
@@ -202,7 +201,7 @@ func assertCoreCapabilities(t *testing.T, name string, core map[string]any, limi
 	t.Helper()
 	want := map[string]any{
 		"maxSizeUpload":         float64(limit),
-		"maxConcurrentUpload":   float64(0),
+		"maxConcurrentUpload":   float64(jmapMaxConcurrentUpload),
 		"maxSizeRequest":        float64(limit),
 		"maxConcurrentRequests": float64(4),
 		"maxCallsInRequest":     float64(16),
@@ -262,45 +261,48 @@ func TestJMAPSessionURLTemplatesMatchRoutes(t *testing.T) {
 		t.Fatal("session must not advertise eventSourceUrl while EventSource is unsupported")
 	}
 
-	// Expanding each advertised template must reach a registered route. The
-	// handlers are stubs today, but they must return a problem details 501
-	// rather than the SPA catch-all or a 404. Blob ids use the same opaque,
-	// URL-safe format as email ids so they need no escaping in a path segment.
-	opaqueID, err := email.NormalizeEmailID("20261117T120000_ses-id.eml")
-	if err != nil {
-		t.Fatalf("NormalizeEmailID() error = %v", err)
+	// Expanding the advertised templates must upload bytes and download the
+	// same bytes back. Blob ids use the same opaque, URL-safe format as email
+	// ids, so they need no escaping in a path segment.
+	uploadURL := strings.ReplaceAll(session.UploadURL, "{accountId}", "admin")
+	if strings.Contains(uploadURL, "{") {
+		t.Fatalf("unexpanded variable in uploadUrl: %q", uploadURL)
 	}
-	cases := []struct {
-		method   string
-		template string
-		values   map[string]string
-	}{
-		{http.MethodPost, session.UploadURL, map[string]string{"accountId": "admin"}},
-		{http.MethodGet, session.DownloadURL, map[string]string{
-			"accountId": "admin",
-			"blobId":    opaqueID,
-			"name":      "message.eml",
-			"type":      "message%2Frfc822",
-		}},
+	uploaded := request(t, h, http.MethodPost, uploadURL, "template round trip", token)
+	if uploaded.Code != http.StatusOK {
+		t.Fatalf("POST %s status = %d, want 200 (body %s)", uploadURL, uploaded.Code, uploaded.Body.String())
 	}
-	for _, tc := range cases {
-		target := tc.template
-		for name, value := range tc.values {
-			target = strings.ReplaceAll(target, "{"+name+"}", value)
-		}
-		if strings.Contains(target, "{") {
-			t.Fatalf("unexpanded variable in %s: %q", tc.template, target)
-		}
-		w := request(t, h, tc.method, target, "", token)
-		if w.Code != http.StatusNotImplemented {
-			t.Errorf("%s %s status = %d, want 501 (body %s)", tc.method, target, w.Code, w.Body.String())
-		}
-		if got := w.Header().Get("Content-Type"); got != "application/problem+json" {
-			t.Errorf("%s %s Content-Type = %q, want application/problem+json", tc.method, target, got)
-		}
-		if !strings.Contains(w.Body.String(), `"status":501`) {
-			t.Errorf("%s %s body = %s, want problem details", tc.method, target, w.Body.String())
-		}
+	var result struct {
+		BlobID string `json:"blobId"`
+	}
+	if err := json.Unmarshal(uploaded.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode upload response: %v (body %s)", err, uploaded.Body.String())
+	}
+	if result.BlobID == "" {
+		t.Fatalf("upload response has no blobId: %s", uploaded.Body.String())
+	}
+
+	downloadURL := session.DownloadURL
+	for name, value := range map[string]string{
+		"accountId": "admin",
+		"blobId":    result.BlobID,
+		"name":      "message.eml",
+		"type":      "message%2Frfc822",
+	} {
+		downloadURL = strings.ReplaceAll(downloadURL, "{"+name+"}", value)
+	}
+	if strings.Contains(downloadURL, "{") {
+		t.Fatalf("unexpanded variable in downloadUrl: %q", downloadURL)
+	}
+	downloaded := request(t, h, http.MethodGet, downloadURL, "", token)
+	if downloaded.Code != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want 200 (body %s)", downloadURL, downloaded.Code, downloaded.Body.String())
+	}
+	if downloaded.Body.String() != "template round trip" {
+		t.Errorf("downloaded bytes = %q, want %q", downloaded.Body.String(), "template round trip")
+	}
+	if got := downloaded.Header().Get("Content-Type"); got != "message/rfc822" {
+		t.Errorf("download Content-Type = %q, want message/rfc822", got)
 	}
 }
 

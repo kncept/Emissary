@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -43,10 +44,10 @@ const (
 	// every mutable value is reported per account by Foo/get's state token.
 	jmapSessionState = "session-0"
 
-	// RFC 8620 section 2 requires every core limit to be advertised. Binary
-	// upload is not implemented yet, so no concurrent uploads are accepted;
-	// the other values are the RFC's suggested minimums.
-	jmapMaxConcurrentUpload   = 0
+	// RFC 8620 section 2 requires every core limit to be advertised. These
+	// are the limits actually enforced by the upload and API endpoints; the
+	// values match the RFC's suggested minimums.
+	jmapMaxConcurrentUpload   = 4
 	jmapMaxConcurrentRequests = 4
 	jmapMaxCallsInRequest     = 16
 	jmapMaxObjectsInGet       = 500
@@ -69,6 +70,10 @@ const (
 	jmapAPIPath             = "/api/jmap/"
 	jmapDownloadURLTemplate = "/download/{accountId}/{blobId}/{name}?type={type}"
 	jmapUploadURLTemplate   = "/upload/{accountId}"
+
+	// jmapUnreferencedBlobQuotaLimit names the separate quota applied to
+	// blobs that no JMAP object references yet (RFC 8620 section 6).
+	jmapUnreferencedBlobQuotaLimit = "unreferencedBlobQuota"
 )
 
 // SESIdentityLister is the shared SES identity source from the identity
@@ -182,6 +187,13 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 	mailSender := b.Sender
 	userManager := b.UserManager
 
+	// Binary uploads have their own RFC 8620 quota and aging rules layered
+	// over the account-scoped immutable blob store. The configured upload
+	// size is also the maximum attachment total for one message, so it is a
+	// valid (and advertised) unreferenced-blob quota.
+	blobLifecycle := storage.NewBlobLifecycle(emailStore, maxFileSize)
+	uploadSlots := make(chan struct{}, jmapMaxConcurrentUpload)
+
 	// One lister is shared by the From validator and the receiver rules editor.
 	// Remember whether the caller injected one: an injected lister enables the
 	// validator even for a local sender, while the lazy default must not change
@@ -288,8 +300,12 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 	mux.Handle("POST /api/jmap/", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPAPIRequest(w, r, dispatcher, maxFileSize)
 	})))
-	mux.Handle("POST /upload/{accountId}", requireAuth(authenticator, http.HandlerFunc(handleJMAPUpload)))
-	mux.Handle("GET /download/{accountId}/{blobId}/{name}", requireAuth(authenticator, http.HandlerFunc(handleJMAPDownload)))
+	mux.Handle("POST /upload/{accountId}", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleJMAPUpload(w, r, blobLifecycle, userManager, maxFileSize, uploadSlots)
+	})))
+	mux.Handle("GET /download/{accountId}/{blobId}/{name}", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleJMAPDownload(w, r, emailStore, userManager)
+	})))
 
 	mux.Handle("GET /api/email/raw", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleRawEmail(w, r, emailStore)
@@ -672,14 +688,194 @@ func writeJMAPLimitError(w http.ResponseWriter, limit string, maxBytes int64) {
 		fmt.Sprintf("Request exceeds the %s limit of %d bytes", limit, maxBytes), limit)
 }
 
-func handleJMAPUpload(w http.ResponseWriter, r *http.Request) {
-	writeJMAPProblem(w, http.StatusNotImplemented, "about:blank", "Not Implemented",
-		"Binary upload not implemented", "")
+// handleJMAPUpload implements RFC 8620 section 6.1. The raw request body is
+// the blob; its Content-Type becomes the blob's type and is echoed in the
+// response. The account is path-scoped to the authenticated user unless the
+// caller has user-management privileges.
+func handleJMAPUpload(w http.ResponseWriter, r *http.Request, lifecycle *storage.BlobLifecycle, userManager usermanager.UserManager, maxFileSize int64, slots chan struct{}) {
+	claims := auth.ClaimsFromContext(r.Context())
+	accountID := strings.TrimSpace(r.PathValue("accountId"))
+	if status, detail := jmapBinaryAccountError(r.Context(), accountID, claims, userManager); status != 0 {
+		writeJMAPProblem(w, status, "about:blank", http.StatusText(status), detail, "")
+		return
+	}
+
+	select {
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
+	default:
+		writeJMAPProblem(w, http.StatusTooManyRequests, "urn:ietf:params:jmap:error:limit",
+			"Request exceeds server limit",
+			fmt.Sprintf("Too many concurrent uploads (limit %d)", jmapMaxConcurrentUpload),
+			"maxConcurrentUpload")
+		return
+	}
+
+	// Expired unreferenced blobs are pruned opportunistically here, never in
+	// the middle of a JMAP method call: a method may create and destroy
+	// references to the same blob and must not see it disappear.
+	if err := lifecycle.Collect(r.Context(), accountID); err != nil {
+		logRequestWarn(r, "collect expired blobs", err)
+	}
+
+	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJMAPUploadError(w, r, err, maxFileSize)
+		return
+	}
+	// The global MaxBytesReader normally rejects this while reading; keep an
+	// explicit check for callers that supply a body directly (tests, proxies).
+	if int64(len(data)) > maxFileSize {
+		writeJMAPLimitError(w, "maxSizeUpload", maxFileSize)
+		return
+	}
+
+	meta, err := lifecycle.Upload(r.Context(), accountID, claims.Subject, contentType, data)
+	if err != nil {
+		writeJMAPUploadError(w, r, err, maxFileSize)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"accountId": meta.AccountID,
+		"blobId":    meta.ID,
+		"type":      meta.Type,
+		"size":      meta.Size,
+	})
 }
 
-func handleJMAPDownload(w http.ResponseWriter, r *http.Request) {
-	writeJMAPProblem(w, http.StatusNotImplemented, "about:blank", "Not Implemented",
-		"Binary download not implemented", "")
+// handleJMAPDownload implements RFC 8620 section 6.2. The response media type
+// comes from the client-supplied type parameter (or the uploaded type when
+// omitted); name is returned as the Content-Disposition filename.
+func handleJMAPDownload(w http.ResponseWriter, r *http.Request, store storage.BlobStore, userManager usermanager.UserManager) {
+	claims := auth.ClaimsFromContext(r.Context())
+	accountID := strings.TrimSpace(r.PathValue("accountId"))
+	if status, detail := jmapBinaryAccountError(r.Context(), accountID, claims, userManager); status != 0 {
+		writeJMAPProblem(w, status, "about:blank", http.StatusText(status), detail, "")
+		return
+	}
+	blobID := strings.TrimSpace(r.PathValue("blobId"))
+	name := strings.TrimSpace(r.PathValue("name"))
+	if blobID == "" || name == "" {
+		writeJMAPProblem(w, http.StatusBadRequest, "about:blank", "Bad Request",
+			"blobId and name are required", "")
+		return
+	}
+
+	meta, reader, err := store.OpenBlob(r.Context(), accountID, blobID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeJMAPProblem(w, http.StatusNotFound, "about:blank", "Not Found",
+				"Blob not found", "")
+			return
+		}
+		logRequestError(r, "open blob", err)
+		writeJMAPProblem(w, http.StatusInternalServerError, "about:blank", "Internal Server Error",
+			"The blob could not be read.", "")
+		return
+	}
+	defer reader.Close()
+
+	// RFC 8620: an unreferenced blob is only accessible to the user who
+	// uploaded it, even when the account itself is shared.
+	if !meta.EmailBacked && !meta.IsPinned() && meta.Uploader() != strings.ToLower(claims.Subject) {
+		writeJMAPProblem(w, http.StatusForbidden, "about:blank", "Forbidden",
+			"insufficient permissions to access this blob", "")
+		return
+	}
+
+	contentType := jmapDownloadContentType(r.URL.Query().Get("type"), meta.Type)
+	filename := jmapDownloadFilename(name)
+	headers := w.Header()
+	headers.Set("Content-Type", contentType)
+	headers.Set("X-Content-Type-Options", "nosniff")
+	headers.Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	headers.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
+	// Blob bytes are immutable, so the response is safe to cache for a long
+	// time. Keep it private because the URL carries no authentication.
+	headers.Set("Cache-Control", "private, immutable, max-age=31536000")
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, reader); err != nil {
+		logRequestWarn(r, "write blob", err)
+	}
+}
+
+// jmapBinaryAccountError validates the path-scoped account for both binary
+// endpoints. It returns an HTTP status and detail, or (0, "") when allowed.
+func jmapBinaryAccountError(ctx context.Context, accountID string, claims *auth.Claims, userManager usermanager.UserManager) (int, string) {
+	if claims == nil {
+		return http.StatusUnauthorized, "authentication required"
+	}
+	if accountID == "" {
+		return http.StatusBadRequest, "accountId is required"
+	}
+	if !claims.EmissaryUserManagement && !strings.EqualFold(accountID, claims.Subject) {
+		return http.StatusForbidden, "insufficient permissions"
+	}
+	// A privileged caller may masquerade, but only for an existing account.
+	if !strings.EqualFold(accountID, claims.Subject) && userManager != nil {
+		user, err := userManager.Lookup(ctx, accountID)
+		if err != nil || user == nil {
+			return http.StatusNotFound, "account not found"
+		}
+	}
+	return 0, ""
+}
+
+func writeJMAPUploadError(w http.ResponseWriter, r *http.Request, err error, maxFileSize int64) {
+	var maxBytesErr *http.MaxBytesError
+	switch {
+	case errors.As(err, &maxBytesErr):
+		writeJMAPLimitError(w, "maxSizeUpload", maxFileSize)
+	case errors.Is(err, storage.ErrBlobQuota):
+		writeJMAPProblem(w, http.StatusRequestEntityTooLarge, "urn:ietf:params:jmap:error:limit",
+			"Request exceeds server limit",
+			fmt.Sprintf("Upload would exceed the %s quota of %d bytes", jmapUnreferencedBlobQuotaLimit, maxFileSize),
+			jmapUnreferencedBlobQuotaLimit)
+	default:
+		logRequestError(r, "upload blob", err)
+		writeJMAPProblem(w, http.StatusInternalServerError, "about:blank", "Internal Server Error",
+			"The blob could not be stored.", "")
+	}
+}
+
+// jmapDownloadContentType rejects header-injection characters and falls back
+// to the blob's own type (then octet-stream) for missing or malformed values.
+func jmapDownloadContentType(requested, fallback string) string {
+	for _, value := range []string{strings.TrimSpace(requested), strings.TrimSpace(fallback)} {
+		if value == "" {
+			continue
+		}
+		if strings.ContainsAny(value, "\r\n") {
+			break
+		}
+		for _, r := range value {
+			if r < 0x20 || r == 0x7f {
+				return "application/octet-stream"
+			}
+		}
+		return value
+	}
+	return "application/octet-stream"
+}
+
+// jmapDownloadFilename keeps a client-controlled filename from injecting
+// headers while preserving the name the client asked for.
+func jmapDownloadFilename(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(name))
+	if name == "" {
+		return "blob"
+	}
+	return name
 }
 
 // handleRawEmail serves the original RFC 5322 message for a single email. The

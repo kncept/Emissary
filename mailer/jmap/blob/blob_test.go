@@ -93,6 +93,33 @@ func TestBlobCopyCopiesBetweenAccountsAndDestroysOriginal(t *testing.T) {
 	}
 }
 
+func TestBlobCopyDoesNotDestroyReferencedBlob(t *testing.T) {
+	h, _, store, ctx := newBlobTest(t)
+	meta, err := store.PutBlob(ctx, blobAlice, "text/plain", []byte("still referenced"))
+	if err != nil {
+		t.Fatalf("PutBlob() error = %v", err)
+	}
+	if _, err := store.AddBlobRefs(ctx, blobAlice, meta.ID, 1); err != nil {
+		t.Fatalf("AddBlobRefs() error = %v", err)
+	}
+
+	result := callBlobCopy(t, h, ctx, `{"fromAccountId":"alice@example.com","accountId":"bob@example.com","blobIds":["`+meta.ID+`"],"onSuccessDestroyOriginal":true}`)
+	if result.Copied[meta.ID] != meta.ID {
+		t.Fatalf("copy result = %+v, want copied id %q", result, meta.ID)
+	}
+	if err, ok := result.NotDestroyed[meta.ID]; !ok || err.Type != "forbidden" {
+		t.Fatalf("notDestroyed = %+v, want a forbidden error for the pinned blob", result.NotDestroyed)
+	}
+	if _, _, err := store.GetBlob(ctx, blobAlice, meta.ID); err != nil {
+		t.Errorf("referenced blob was destroyed inside Blob/copy: %v", err)
+	}
+	// The method's own temporary pin must be released after the call.
+	got, err := store.GetBlobMeta(ctx, blobAlice, meta.ID)
+	if err != nil || got.Refs != 1 {
+		t.Errorf("blob refs = %+v, %v, want the original single reference", got, err)
+	}
+}
+
 func TestBlobCopyReturnsPerRecordNotFound(t *testing.T) {
 	h, _, _, ctx := newBlobTest(t)
 	result := callBlobCopy(t, h, ctx, `{"fromAccountId":"alice@example.com","accountId":"bob@example.com","blobIds":["missing"]}`)

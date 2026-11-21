@@ -654,8 +654,34 @@ currently stored in.
 
 ## Binary Upload/Download
 
-- `POST /upload/{accountId}` — Upload binary data (e.g., attachments). Returns `{ "accountId": "...", "blobId": "...", "type": "application/pdf", "size": 12345 }`
-- `GET /download/{accountId}/{blobId}/{name}?type=...` — Download binary data
+Both endpoints require the same bearer token as the JMAP API. `accountId` is
+scoped to the authenticated user; only a caller with user-management
+privileges may address another account, and it must exist.
+
+- `POST /upload/{accountId}` — The raw request body is uploaded as a blob. The
+  request `Content-Type` is echoed as the blob's `type`. A successful response
+  is `{ "accountId": "...", "blobId": "...", "type": "application/pdf", "size": 12345 }`.
+  Bodies larger than the advertised `maxSizeUpload` are rejected with an RFC
+  7807 problem response, as are uploads that exceed the per-user unreferenced
+  blob quota. No more than `maxConcurrentUpload` uploads are served at once.
+- `GET /download/{accountId}/{blobId}/{name}?type=...` — Streams the bytes for
+  `blobId`. The optional `type` query parameter overrides the response
+  `Content-Type` (the uploaded type is used when omitted), and `name` is
+  returned as the `Content-Disposition` filename. Successful responses are
+  marked `private, immutable` so they can be cached safely.
+
+Blobs are immutable and content-addressed; re-uploading identical bytes returns
+the same `blobId` and resets its expiry. Metadata (uploader, upload time and
+reference count) lives beside each blob in `users/<account>/_blobs` for every
+storage backend. Unreferenced blobs have a separate per-uploader quota (the
+configured maximum upload size); when an upload would exceed it, the oldest
+unreferenced blobs for that uploader are deleted first. Otherwise an
+unreferenced blob survives for at least one hour. Referenced blobs are pinned:
+they are never evicted for quota or age, and `DeleteBlob` rejects any blob with
+a positive reference count. Blob/copy holds a temporary reference while it
+copies, so a blob cannot be destroyed inside the method call that still uses
+it. Unreferenced blobs are visible only to the user who uploaded them, even in
+a shared account.
 
 ## State changes and polling
 

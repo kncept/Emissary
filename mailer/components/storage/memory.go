@@ -1,12 +1,15 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kncept/Emissary/mailer/email"
 )
@@ -460,7 +463,13 @@ func (s *MemoryStorage) SaveCreatedIDs(_ context.Context, sessionID string, ids 
 
 // PutBlob implements BlobStore. Blobs are content-addressed so repeated puts
 // are idempotent.
-func (s *MemoryStorage) PutBlob(_ context.Context, accountID, contentType string, data []byte) (Blob, error) {
+func (s *MemoryStorage) PutBlob(ctx context.Context, accountID, contentType string, data []byte) (Blob, error) {
+	return s.UploadBlob(ctx, accountID, "", contentType, data, time.Now())
+}
+
+// UploadBlob implements BlobStore. Re-uploading identical bytes keeps the
+// immutable id and the reference count but resets the expiry time.
+func (s *MemoryStorage) UploadBlob(_ context.Context, accountID, uploaderID, contentType string, data []byte, now time.Time) (Blob, error) {
 	account, err := canonicalBlobAccount(accountID)
 	if err != nil {
 		return Blob{}, err
@@ -469,21 +478,77 @@ func (s *MemoryStorage) PutBlob(_ context.Context, accountID, contentType string
 		return Blob{}, err
 	}
 	id := BlobID(data)
-	meta := Blob{
-		ID:        id,
-		AccountID: account,
-		Type:      normalizeBlobType(contentType),
-		Size:      int64(len(data)),
-	}
+	meta := newBlobMetadata(account, uploaderID, contentType, data, now)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	acct := s.accountLocked(account)
 	if existing, ok := acct.blobs[id]; ok {
+		existing.meta = refreshBlobUpload(existing.meta, uploaderID, now)
 		return existing.meta, nil
 	}
 	acct.blobs[id] = &memoryBlob{meta: meta, data: append([]byte(nil), data...)}
 	return meta, nil
+}
+
+// GetBlobMeta implements BlobStore without copying the blob bytes.
+func (s *MemoryStorage) GetBlobMeta(_ context.Context, accountID, blobID string) (Blob, error) {
+	id, err := normalizeBlobID(blobID)
+	if err != nil {
+		return Blob{}, err
+	}
+	account, err := canonicalBlobAccount(accountID)
+	if err != nil {
+		return Blob{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	acct := s.accounts[account]
+	if acct == nil || acct.blobs[id] == nil {
+		return Blob{}, ErrNotFound
+	}
+	return acct.blobs[id].meta, nil
+}
+
+// ListBlobs implements BlobStore.
+func (s *MemoryStorage) ListBlobs(_ context.Context, accountID string) ([]Blob, error) {
+	account, err := canonicalBlobAccount(accountID)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	acct := s.accounts[account]
+	if acct == nil {
+		return []Blob{}, nil
+	}
+	blobs := make([]Blob, 0, len(acct.blobs))
+	for _, blob := range acct.blobs {
+		blobs = append(blobs, blob.meta)
+	}
+	sortBlobsOldestFirst(blobs)
+	return blobs, nil
+}
+
+// AddBlobRefs implements BlobStore. The lock makes concurrent pin/unpin pairs
+// safe for in-process usage.
+func (s *MemoryStorage) AddBlobRefs(_ context.Context, accountID, blobID string, delta int) (Blob, error) {
+	id, err := normalizeBlobID(blobID)
+	if err != nil {
+		return Blob{}, err
+	}
+	account, err := canonicalBlobAccount(accountID)
+	if err != nil {
+		return Blob{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	acct := s.accounts[account]
+	if acct == nil || acct.blobs[id] == nil {
+		return Blob{}, ErrNotFound
+	}
+	acct.blobs[id].meta = adjustBlobRefs(acct.blobs[id].meta, delta)
+	return acct.blobs[id].meta, nil
 }
 
 // GetBlob implements BlobStore. Delivered email bytes are also valid blobs:
@@ -528,6 +593,42 @@ func (s *MemoryStorage) GetBlob(ctx context.Context, accountID, blobID string) (
 	}, raw, nil
 }
 
+// OpenBlob implements BlobStore. Memory blobs are copied under the lock so a
+// caller can stream them after the lock is released.
+func (s *MemoryStorage) OpenBlob(ctx context.Context, accountID, blobID string) (Blob, io.ReadCloser, error) {
+	id, err := normalizeBlobID(blobID)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	account, err := canonicalBlobAccount(accountID)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	s.mu.RLock()
+	acct := s.accounts[account]
+	var blob *memoryBlob
+	if acct != nil {
+		blob = acct.blobs[id]
+	}
+	var meta Blob
+	var data []byte
+	if blob != nil {
+		meta = blob.meta
+		data = append([]byte(nil), blob.data...)
+	}
+	s.mu.RUnlock()
+	if blob != nil {
+		return meta, io.NopCloser(bytes.NewReader(data)), nil
+	}
+
+	// Delivered email bytes are also blobs (JMAP Email.blobId).
+	meta, data, err = s.GetBlob(ctx, accountID, blobID)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	return meta, io.NopCloser(bytes.NewReader(data)), nil
+}
+
 // DeleteBlob implements BlobStore. It only removes generic _blobs entries;
 // deleting an email-backed blob would destroy a message and is not allowed.
 func (s *MemoryStorage) DeleteBlob(_ context.Context, accountID, blobID string) error {
@@ -542,11 +643,11 @@ func (s *MemoryStorage) DeleteBlob(_ context.Context, accountID, blobID string) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	acct := s.accounts[account]
-	if acct == nil {
+	if acct == nil || acct.blobs[id] == nil {
 		return ErrNotFound
 	}
-	if _, ok := acct.blobs[id]; !ok {
-		return ErrNotFound
+	if acct.blobs[id].meta.IsPinned() {
+		return ErrBlobReferenced
 	}
 	delete(acct.blobs, id)
 	return nil
