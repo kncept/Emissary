@@ -30,7 +30,7 @@ func (UnimplementedHandler) DeleteReceiverRules(ctx context.Context, params Dele
 // GetConfiguration implements getConfiguration operation.
 //
 // Returns the full configuration for a section. Names are case insensitive; the canonical names are
-// `server`, `storage`, `sender`, `receiver`, `metadata`, `session`, `user-manager` and `aws`.
+// `server`, `storage`, `sender`, `receiver`, `metadata`, `session`, `user-manager`.
 //
 // Secret values are replaced by booleans or descriptive markers (for example
 // `passwordConfigured: true`); they are never returned.

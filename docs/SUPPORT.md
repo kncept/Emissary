@@ -58,7 +58,6 @@ Every value above is an explicit implementation, not a fallback. If a selector
 and its component are both absent, the support API reports `unconfigured`
 instead of inventing a default; see
 [Backend selection](CONFIGURATION.md#backend-selection-all-pluggable-components).
-| `aws` | `aws-sdk` | AWS region and DynamoDB table naming. |
 
 Example response (`200`):
 

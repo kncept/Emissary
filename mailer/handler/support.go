@@ -35,7 +35,6 @@ const (
 	metadataConfigurationName    = "metadata"
 	sessionConfigurationName     = "session"
 	userManagerConfigurationName = "user-manager"
-	awsConfigurationName         = "aws"
 )
 
 // supportHandler implements the generated support API. All operations are
@@ -334,11 +333,6 @@ func (h *supportHandler) configurationSummaries() []configurationSummary {
 			implementation: userManagerImplementation(h.cfg.UserManager.Type, h.users),
 			description:    "User authentication backend",
 		},
-		{
-			name:           awsConfigurationName,
-			implementation: "aws-sdk",
-			description:    "AWS SDK region and DynamoDB table naming",
-		},
 	}
 }
 
@@ -446,10 +440,6 @@ func (h *supportHandler) configurationSettings(name string) map[string]string {
 		addSetting(settings, "ldapUserFilter", cfg.UserManager.LDAPUserFilter)
 		addSetting(settings, "ldapCacheTTL", cfg.UserManager.LDAPCacheTTL)
 		settings["ldapBindPasswordConfigured"] = boolSetting(cfg.UserManager.LDAPBindPassword != "")
-
-	case awsConfigurationName:
-		addSetting(settings, "region", cfg.AWSRegion)
-		addSetting(settings, "tablePrefix", cfg.DDBTablePrefix)
 	}
 
 	return settings
@@ -463,7 +453,7 @@ func canonicalConfigurationName(name string) string {
 		return userManagerConfigurationName
 	case "receiver", "receiver-config", "receiver-configuration", "routing":
 		return receiverConfigurationName
-	case "server", "storage", "sender", "metadata", "session", "aws":
+	case "server", "storage", "sender", "metadata", "session":
 		return name
 	default:
 		return name

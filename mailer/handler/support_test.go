@@ -167,7 +167,6 @@ func TestSupportListsConfigurations(t *testing.T) {
 		"metadata":     false,
 		"session":      false,
 		"user-manager": false,
-		"aws":          false,
 	}
 	for _, configuration := range response.Configurations {
 		if _, ok := wanted[configuration.Name]; !ok {
