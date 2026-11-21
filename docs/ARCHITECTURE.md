@@ -46,15 +46,21 @@ listens with `net/http` and uses the memory/log implementations.
    resolved from AWS Secrets Manager at this point (`envutil` +
    `awsutil`) — that is how the deployed Lambda receives its JWT
    secret as an ARN.
-2. `handler.New` builds the pluggable components:
+2. `configvendor.FromConfig` selects and constructs every pluggable
+   component from the loaded configuration, returning a `Bundle`
+   containing:
    - a `usermanager.UserManager` (the built-in administrator plus the
      selected backend),
-   - an `auth.Authenticator` (HS256 JWT) over that manager,
-   - a `storage.Storage` (S3 or memory),
-   - a `metadata.MetadataStore` (memory, file or DynamoDB),
-   - a `sender.Sender` (SES or log).
-3. The routes, auth middleware and embedded frontend are wired into
-   one `http.Handler`.
+   - a `storage.Storage` (S3, filesystem, or memory),
+   - a `metadata.MetadataStore` (memory, file, filesystem, or DynamoDB),
+   - a `sender.Sender` (SES, MTA, or log),
+   - a `session.SessionStore` (memory or DynamoDB),
+   - a `receiver.ConfigStore` (S3, filesystem, memory, or DynamoDB),
+   - the loaded receiver mail-identity configuration.
+3. `handler.New` consumes that `Bundle` (along with a few scalar
+   settings), builds the `auth.Authenticator` over the user manager,
+   wires the routes, auth middleware and embedded frontend into one
+   `http.Handler`.
 4. Runtime mode is detected with `awsutil.IsAwsLambda()`:
    - **In Lambda**, the handler is handed to the Lambda runtime via
      `aws-lambda-go-api-proxy`, so API Gateway events are translated
@@ -71,10 +77,11 @@ listens with `net/http` and uses the memory/log implementations.
 | `envutil` | Cached environment lookups; resolves `arn:aws:` values via Secrets Manager. |
 | `awsutil` | Lambda detection and Secrets Manager access. |
 | `auth` | JWT issue/validate (`Claims`: `sub`, `sid`, `systemManager`, `EmissaryUserManagement`, `iat`, `exp`, optional `aud`/`iss`). |
-| `usermanager` | Pluggable login backends; every backend also knows the built-in admin. |
-| `storage` | Mail source: `ListEmails` (scoped by JMAP `accountId`/`mailboxId`), plus `GetEmail`, `AddEmail`, `DeleteEmail`, and support-only bucket operations. |
-| `sender` | Write side of mail: `Send`. |
-| `metadata` | Per-message JMAP keywords (`$seen`, `$flagged`, `$draft`, and the other supported system keywords) plus the server-owned `receivedAt` timestamp, keyed by email id and discarded when a message is deleted. |
+| `components/usermanager` | Pluggable login backends; every backend also knows the built-in admin. |
+| `components/storage` | Mail source: `ListEmails` (scoped by JMAP `accountId`/`mailboxId`), plus `GetEmail`, `AddEmail`, `DeleteEmail`, and support-only bucket operations. |
+| `components/sender` | Write side of mail: `Send`. |
+| `components/metadata` | Per-message JMAP keywords (`$seen`, `$flagged`, `$draft`, and the other supported system keywords) plus the server-owned `receivedAt` timestamp, keyed by email id and discarded when a message is deleted. |
+| `components/session` | Refresh-token store for JWT sessions (`memory` or `ddb`). |
 | `email` | RFC 5322 parsing: `WireFormatEmail` (full structure) and `UserEmail` (simplified). |
 | `handler` | The HTTP API, auth middleware, panic recovery, and the embedded frontend. |
 | `gui` | `//go:embed all:frontend/dist` — the built SPA. |
@@ -82,14 +89,14 @@ listens with `net/http` and uses the memory/log implementations.
 ## Pluggable components
 
 Each seam is a small interface, selected by environment variable and
-instantiated in `handler.New`:
+instantiated in `configvendor.FromConfig`:
 
 | Seam | Interface | Selector | Implementations | Notes |
 | --- | --- | --- | --- | --- |
-| Inbound messages | `storage.Storage` | `STORAGE` | `s3`, `memory` | `s3` needs `S3_BUCKET`. Defaults to `memory`. |
+| Inbound messages | `storage.Storage` | `STORAGE` | `s3`, `filesystem`, `memory` | `s3` needs `S3_BUCKET`; `filesystem` uses `FILESYSTEM_DIR`. Defaults to `memory`. |
 | Outbound mail | `sender.Sender` | `SENDER` | `aws-ses`, `mta`, `log` | Defaults to `log`. The From address comes from the submitting user (or masquerade target), not from configuration. |
-| Message state | `metadata.MetadataStore` | `METADATA` | `memory` (default), `file`, `ddb` | Stores JMAP keywords and the server-owned `receivedAt` timestamp, keyed by email id and owning user id. `ddb` uses `DDB_TABLE` or the `metadata` table derived from `TABLE_PREFIX`; its table has partition key `id`, sort key `userId`, and a `userId-index` GSI for `List`. Both `handler.New` and the `s3-receiver` build this store with `metadata.NewStore`. |
-| Users | `usermanager.Manager` | `USER_MANAGER` | `none`, `ddb`, `s3`, `ldap` | Auto-selects `s3` when storage is S3, else `none`. `ddb` uses `USER_TABLE` or the `users` table derived from `TABLE_PREFIX`; `s3` stores each user as `users/<email>/user.json` in the mail bucket. Both are Emissary-mastered. `ldap` is unimplemented. |
+| Message state | `metadata.MetadataStore` | `METADATA` | `memory` (default), `file`, `filesystem`, `ddb` | Stores JMAP keywords and the server-owned `receivedAt` timestamp, keyed by email id and owning user id. `ddb` uses `DDB_TABLE` or the `metadata` table derived from `TABLE_PREFIX`; its table has partition key `id`, sort key `userId`, and a `userId-index` GSI for `List`. Both `handler.New` and the `s3-receiver` build this store with `metadata.NewStore`. |
+| Users | `usermanager.Manager` | `USER_MANAGER` | `none`, `ddb`, `filesystem`, `s3`, `ldap` | Auto-selects `s3` when storage is S3, else `none`. `ddb` uses `USER_TABLE` or the `users` table derived from `TABLE_PREFIX`; `s3` stores each user as `users/<email>/user.json` in the mail bucket; `filesystem` stores each user under `FILESYSTEM_DIR/users/<email>/user.json`. Both `ddb` and `s3` are Emissary-mastered. `ldap` is unimplemented. |
 
 ## Inbound mail flow
 

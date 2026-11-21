@@ -1,5 +1,4 @@
 
-TODO.md
 .build/
 mailer/cmd/frontend/bootstrap
 mailer/cmd/s3-receiver/bootstrap
@@ -8,4 +7,4 @@ mailer/cmd/s3-receiver/bootstrap
 /mailer/frontend
 
 
-JMAP_*.md
+_*.md
