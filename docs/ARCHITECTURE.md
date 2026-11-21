@@ -80,7 +80,7 @@ listens with `net/http` and uses the memory/log implementations.
 | `components/usermanager` | Pluggable login backends; every backend also knows the built-in admin. |
 | `components/storage` | Mail source: `ListEmails` (scoped by JMAP `accountId`/`mailboxId`), plus `GetEmail`, `AddEmail`, `DeleteEmail`. `RootObject`/`ListRoot` are the one deliberately admin-facing capability, used only by the system-manager support API. |
 | `components/sender` | Write side of mail: `Send`. |
-| `components/metadata` | Per-message JMAP keywords (`$seen`, `$flagged`, `$draft`, and the other supported system keywords) plus the server-owned `receivedAt` timestamp, keyed by email id and discarded when a message is deleted. |
+| `components/metadata` | Per-message JMAP keywords (`$seen`, `$flagged`, `$draft`, and the other supported system keywords) plus the server-owned `receivedAt` timestamp, keyed by email id and discarded when a message is deleted. Every backend normalizes read results from lookup keys and returns `List` sorted by mail id. |
 | `components/session` | Refresh-token store for JWT sessions (`memory` or `ddb`). |
 | `email` | RFC 5322 parsing: `WireFormatEmail` (full structure) and `UserEmail` (simplified). |
 | `handler` | The HTTP API, auth middleware, panic recovery, and the embedded frontend. |
@@ -257,10 +257,13 @@ recipient by the configured rules for its domain.
    omitted); a conflicting Reply-To is rejected with `invalidProperties`.
 4. The message is handed to the configured `sender.Sender` implementation.
    Both wire senders serialize the message once with a shared builder that
-   writes the RFC 5322 headers (including `In-Reply-To` and `References` when
-   the draft carries them, and the message's stored `Message-ID`) and the
-   MIME body. `aws-ses` sends that raw message with the SES v2
-   `SendRawEmail` API, with the envelope recipients passed separately;
+   writes the RFC 5322 headers through `email.RenderHeaders` (including
+   `In-Reply-To` and `References` when the draft carries them, and the
+   message's stored `Message-ID`) and the MIME body. The same header renderer
+   backs `email.RawFromUserEmail` for JMAP-created mail, so address formatting
+   and CRLF sanitization live in one place. `aws-ses` sends that raw message
+   with the SES v2 `SendRawEmail` API, with the envelope recipients passed
+   separately;
    `mta` resolves the recipient domains' MX records and delivers the same
    bytes directly over SMTP on port 25, after a DMARC/SPF alignment warning
    check; `log` writes a line to the process log.

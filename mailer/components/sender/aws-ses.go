@@ -57,7 +57,7 @@ func (s *AwsSesSender) Send(ctx context.Context, message *email.UserEmail) error
 	slog.Debug("SES: sending raw email", "from", source, "recipients", len(envelope), "subject", message.Subject)
 	_, err := s.client.SendRawEmail(ctx, &ses.SendRawEmailInput{
 		Source:       aws.String(source),
-		Destinations: addressStrings(envelope),
+		Destinations: email.BareAddresses(envelope),
 		RawMessage: &types.RawMessage{
 			Data: wire,
 		},
@@ -67,16 +67,6 @@ func (s *AwsSesSender) Send(ctx context.Context, message *email.UserEmail) error
 	}
 	slog.Debug("SES: raw email sent", "from", source, "recipients", len(envelope))
 	return nil
-}
-
-func addressStrings(addresses []email.Address) []string {
-	values := make([]string, 0, len(addresses))
-	for _, address := range addresses {
-		if address.Address != "" {
-			values = append(values, address.Address)
-		}
-	}
-	return values
 }
 
 func (s *AwsSesSender) SendBounce(ctx context.Context, originalMessageID, bounceSender, recipient, bounceType string, originalMessage *email.UserEmail) error {

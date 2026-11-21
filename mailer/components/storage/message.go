@@ -72,7 +72,8 @@ func emailIDCandidates(accountID, id string, objectKey func(string) string, mail
 
 // listedEmailFromRaw parses stored wire bytes into the listed form returned by
 // every storage backend. Using bytes.NewReader avoids copying raw into a
-// string before handing it to the parser.
+// string before handing it to the parser. email.Parse ignores its id argument;
+// the ref below is the only place identity is attached.
 func listedEmailFromRaw(id string, raw []byte) (*email.ListedEmail, error) {
 	parsed, err := email.Parse(id, bytes.NewReader(raw))
 	if err != nil {

@@ -323,12 +323,11 @@ func groupRecipients(message *email.UserEmail) (map[string][]string, error) {
 			if seen[key] {
 				continue
 			}
-			at := strings.LastIndex(recipient, "@")
-			if at <= 0 || at == len(recipient)-1 {
+			domain := domainOfAddress(recipient)
+			if domain == "" {
 				return nil, fmt.Errorf("invalid recipient address %q", address.Address)
 			}
 			seen[key] = true
-			domain := strings.ToLower(strings.TrimSuffix(recipient[at+1:], "."))
 			groups[domain] = append(groups[domain], recipient)
 		}
 	}
@@ -353,38 +352,12 @@ func bareAddress(value string) string {
 // carries a Message-ID reuses it. Bcc appears only in the delivery envelope,
 // never in the headers.
 func BuildWireMessage(message *email.UserEmail, envelopeFrom, helloName string) []byte {
-	from := message.From
-
 	var b strings.Builder
-	fmt.Fprintf(&b, "From: %s\r\n", headerValue(formatAddress(from)))
-	to := formatAddresses(message.To)
-	if to == "" {
-		to = "undisclosed-recipients:;"
-	}
-	fmt.Fprintf(&b, "To: %s\r\n", headerValue(to))
-	if cc := formatAddresses(message.Cc); cc != "" {
-		fmt.Fprintf(&b, "Cc: %s\r\n", headerValue(cc))
-	}
-	if replyTo := formatAddresses(message.ReplyTo); replyTo != "" {
-		fmt.Fprintf(&b, "Reply-To: %s\r\n", headerValue(replyTo))
-	}
-	fmt.Fprintf(&b, "Subject: %s\r\n", headerValue(message.Subject))
-	date := message.Date
-	if date.IsZero() {
-		date = time.Now().UTC()
-	}
-	fmt.Fprintf(&b, "Date: %s\r\n", date.UTC().Format(time.RFC1123Z))
-	if messageID := strings.TrimSpace(message.MessageID); messageID != "" {
-		fmt.Fprintf(&b, "Message-ID: %s\r\n", headerValue(messageID))
-	} else {
-		fmt.Fprintf(&b, "Message-ID: <%s@%s>\r\n", randomToken(16), messageDomain(envelopeFrom, helloName))
-	}
-	if len(message.InReplyTo) > 0 {
-		fmt.Fprintf(&b, "In-Reply-To: %s\r\n", headerValue(strings.Join(message.InReplyTo, " ")))
-	}
-	if len(message.References) > 0 {
-		fmt.Fprintf(&b, "References: %s\r\n", headerValue(strings.Join(message.References, " ")))
-	}
+	b.WriteString(email.RenderHeaders(message, email.HeaderPolicy{
+		EmptyToFallback:          "undisclosed-recipients:;",
+		GenerateDate:             true,
+		GeneratedMessageIDDomain: messageDomain(envelopeFrom, helloName),
+	}))
 	b.WriteString("MIME-Version: 1.0\r\n")
 
 	text := message.Text
@@ -415,48 +388,17 @@ func BuildWireMessage(message *email.UserEmail, envelopeFrom, helloName string) 
 // messageDomain chooses the domain part for a generated Message-ID: the
 // envelope sender's domain, falling back to the EHLO/HELO identity.
 func messageDomain(envelopeFrom, helloName string) string {
-	if _, domain, ok := strings.Cut(envelopeFrom, "@"); ok && domain != "" {
-		return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
+	if domain := domainOfAddress(envelopeFrom); domain != "" {
+		return domain
 	}
 	return helloName
 }
 
-func headerValue(value string) string {
-	value = strings.ReplaceAll(value, "\r", " ")
-	return strings.ReplaceAll(value, "\n", " ")
-}
-
-func formatAddress(address email.Address) string {
-	value := strings.TrimSpace(address.Address)
-	if value == "" {
-		return ""
-	}
-	if address.Name == "" {
-		return value
-	}
-	return (&mail.Address{Name: address.Name, Address: value}).String()
-}
-
-func formatAddresses(addresses []email.Address) string {
-	values := make([]string, 0, len(addresses))
-	for _, address := range addresses {
-		if value := formatAddress(address); value != "" {
-			values = append(values, value)
-		}
-	}
-	return strings.Join(values, ", ")
-}
-
 func helloNameFromAddress(from string) string {
-	at := strings.LastIndex(from, "@")
-	if at <= 0 || at == len(from)-1 {
-		return "localhost"
+	if domain := domainOfAddress(from); domain != "" {
+		return domain
 	}
-	domain := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(from[at+1:])), ".")
-	if domain == "" {
-		return "localhost"
-	}
-	return domain
+	return "localhost"
 }
 
 func writeBase64(b *strings.Builder, body string) {

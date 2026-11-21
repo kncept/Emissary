@@ -94,6 +94,33 @@ func TestCloneIsIndependent(t *testing.T) {
 	}
 }
 
+func TestNormalizeUsesLookupKeysAndCleansKeywords(t *testing.T) {
+	original := EmailMetadata{
+		UserID:     "",
+		ID:         "stored-id",
+		ReceivedAt: "2026-11-18T01:02:03Z",
+		Keywords:   map[string]bool{KeywordSeen: true, KeywordFlagged: false},
+	}
+	got := original.Normalize("alice@example.com", "mail-1")
+	if got.UserID != "alice@example.com" || got.ID != "mail-1" {
+		t.Errorf("Normalize() ids = %q/%q, want alice@example.com/mail-1", got.UserID, got.ID)
+	}
+	if got.ReceivedAt != original.ReceivedAt {
+		t.Errorf("Normalize() receivedAt = %q, want %q", got.ReceivedAt, original.ReceivedAt)
+	}
+	if !got.HasKeyword(KeywordSeen) || got.HasKeyword(KeywordFlagged) {
+		t.Errorf("Normalize() keywords = %+v, want only $seen", got.Keywords)
+	}
+	got.Keywords[KeywordDraft] = true
+	if original.Keywords[KeywordDraft] {
+		t.Error("Normalize() returned a map shared with the original")
+	}
+	blank := EmailMetadata{}.Normalize("bob@example.com", "")
+	if blank.UserID != "bob@example.com" || blank.Keywords == nil {
+		t.Errorf("Normalize() of empty record = %+v, want user id and keyword map", blank)
+	}
+}
+
 func TestNewEmailMetadataStampsReceivedAt(t *testing.T) {
 	before := time.Now().UTC().Add(-time.Second)
 	m := NewEmailMetadata("alice@example.com", "email-1")

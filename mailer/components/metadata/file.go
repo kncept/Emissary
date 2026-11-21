@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 
@@ -25,8 +24,8 @@ import (
 type FileMetadata struct {
 	path      string
 	directory bool
-	mu        sync.RWMutex
-	data      map[string]map[string]EmailMetadata // legacy file mode only: userID -> mailID -> metadata
+	mu        sync.RWMutex // guards directory-mode record files
+	core      *memoryStore // legacy file mode only
 }
 
 func NewFileMetadata(path string) (*FileMetadata, error) {
@@ -40,7 +39,7 @@ func NewFileMetadata(path string) (*FileMetadata, error) {
 
 	fm := &FileMetadata{
 		path: expanded,
-		data: make(map[string]map[string]EmailMetadata),
+		core: newMemoryStore(),
 	}
 	info, err := os.Stat(expanded)
 	switch {
@@ -82,11 +81,7 @@ func (f *FileMetadata) load() error {
 		return fmt.Errorf("failed to unmarshal metadata: %w", err)
 	}
 	for _, entry := range entries {
-		m := entry.Clone()
-		if f.data[m.UserID] == nil {
-			f.data[m.UserID] = make(map[string]EmailMetadata)
-		}
-		f.data[m.UserID][m.ID] = m
+		f.core.save(entry)
 	}
 	return nil
 }
@@ -94,22 +89,7 @@ func (f *FileMetadata) load() error {
 // saveLocked persists the legacy whole-file layout. The caller must hold the
 // lock (read or write).
 func (f *FileMetadata) saveLocked() error {
-	var entries []EmailMetadata
-	users := make([]string, 0, len(f.data))
-	for u := range f.data {
-		users = append(users, u)
-	}
-	sort.Strings(users)
-	for _, u := range users {
-		ids := make([]string, 0, len(f.data[u]))
-		for id := range f.data[u] {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		for _, id := range ids {
-			entries = append(entries, f.data[u][id])
-		}
-	}
+	entries := f.core.snapshotAll()
 	if entries == nil {
 		entries = []EmailMetadata{}
 	}
@@ -133,14 +113,10 @@ func (f *FileMetadata) legacyRecordPath(mailID string) (string, error) {
 
 func (f *FileMetadata) Name() string { return "file" }
 
-func (f *FileMetadata) Get(ctx context.Context, userID, mailID string) (EmailMetadata, error) {
+func (f *FileMetadata) Get(_ context.Context, userID, mailID string) (EmailMetadata, error) {
 	if !f.directory {
-		f.mu.RLock()
-		defer f.mu.RUnlock()
-		if byUser, ok := f.data[userID]; ok {
-			if m, ok := byUser[mailID]; ok {
-				return m.Clone(), nil
-			}
+		if m, ok := f.core.get(userID, mailID); ok {
+			return m, nil
 		}
 		return EmptyEmailMetadata(userID, mailID), nil
 	}
@@ -175,21 +151,14 @@ func (f *FileMetadata) Get(ctx context.Context, userID, mailID string) (EmailMet
 	if err := json.Unmarshal(body, &m); err != nil {
 		return EmptyEmailMetadata(userID, mailID), fmt.Errorf("failed to unmarshal metadata for %q/%q: %w", userID, mailID, err)
 	}
-	if m.UserID == "" {
-		m.UserID = userID
-	}
-	m.ID = mailID
-	return m.Clone(), nil
+	return m.Normalize(userID, mailID), nil
 }
 
-func (f *FileMetadata) Save(ctx context.Context, metadata EmailMetadata) error {
+func (f *FileMetadata) Save(_ context.Context, metadata EmailMetadata) error {
 	if !f.directory {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if f.data[metadata.UserID] == nil {
-			f.data[metadata.UserID] = make(map[string]EmailMetadata)
-		}
-		f.data[metadata.UserID][metadata.ID] = metadata.Clone()
+		f.core.save(metadata)
 		return f.saveLocked()
 	}
 
@@ -206,16 +175,11 @@ func (f *FileMetadata) Save(ctx context.Context, metadata EmailMetadata) error {
 	return fsutil.WriteFileAtomically(path, body, 0644)
 }
 
-func (f *FileMetadata) Delete(ctx context.Context, userID, mailID string) error {
+func (f *FileMetadata) Delete(_ context.Context, userID, mailID string) error {
 	if !f.directory {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if byUser, ok := f.data[userID]; ok {
-			delete(byUser, mailID)
-			if len(byUser) == 0 {
-				delete(f.data, userID)
-			}
-		}
+		f.core.delete(userID, mailID)
 		return f.saveLocked()
 	}
 
@@ -237,17 +201,9 @@ func (f *FileMetadata) Delete(ctx context.Context, userID, mailID string) error 
 	return nil
 }
 
-func (f *FileMetadata) List(ctx context.Context, userID string) ([]EmailMetadata, error) {
+func (f *FileMetadata) List(_ context.Context, userID string) ([]EmailMetadata, error) {
 	if !f.directory {
-		f.mu.RLock()
-		defer f.mu.RUnlock()
-		byUser := f.data[userID]
-		result := make([]EmailMetadata, 0, len(byUser))
-		for _, v := range byUser {
-			result = append(result, v.Clone())
-		}
-		sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
-		return result, nil
+		return f.core.list(userID), nil
 	}
 
 	var result []EmailMetadata
@@ -275,17 +231,13 @@ func (f *FileMetadata) List(ctx context.Context, userID string) ([]EmailMetadata
 		if err := json.Unmarshal(body, &m); err != nil {
 			return fmt.Errorf("failed to unmarshal metadata for %q/%q: %w", userID, mailID, err)
 		}
-		if m.UserID == "" {
-			m.UserID = userID
-		}
-		m.ID = mailID
-		result = append(result, m.Clone())
+		result = append(result, m.Normalize(userID, mailID))
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	sortMetadata(result)
 	if result == nil {
 		result = []EmailMetadata{}
 	}

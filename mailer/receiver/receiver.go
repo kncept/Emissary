@@ -12,11 +12,11 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/components/metadata"
 	"github.com/kncept/Emissary/mailer/components/sender"
 	"github.com/kncept/Emissary/mailer/components/storage"
 	"github.com/kncept/Emissary/mailer/components/usermanager"
+	"github.com/kncept/Emissary/mailer/email"
 )
 
 // ErrNoValidRecipients is returned when a message has no valid recipients.
@@ -89,16 +89,18 @@ func NewReceiver(cfg ReceiverConfig) (*Receiver, error) {
 
 // ParsedMessage holds the parsed email and its envelope recipients.
 type ParsedMessage struct {
-	WireEmail  *email.WireFormatEmail
+	WireEmail   *email.WireFormatEmail
 	ParsedEmail *email.UserEmail
-	RawMessage []byte
-	Recipients []string
+	RawMessage  []byte
+	Recipients  []string
 }
 
 // ParseRawMessage parses raw email bytes into a ParsedMessage.
 // It extracts envelope recipients from the Received headers and converts
 // to UserEmail for delivery logic.
 func ParseRawMessage(key string, rawMessage []byte) *ParsedMessage {
+	// ParseWireFormat ignores key; it is kept in the signature for callers that
+	// already have a storage key, but message identity is never parsed from it.
 	wireEmail := email.ParseWireFormat(key, bytes.NewReader(rawMessage))
 	parsedEmail := wireEmail.ToUserEmail()
 	recipients := email.EnvelopeRecipients(wireEmail)

@@ -75,13 +75,7 @@ func (d *DdbMetadata) Get(ctx context.Context, userID, mailID string) (EmailMeta
 	if err := attributevalue.UnmarshalMap(output.Item, &metadata); err != nil {
 		return EmailMetadata{}, fmt.Errorf("failed to unmarshal: %w", err)
 	}
-	if metadata.UserID == "" {
-		metadata.UserID = userID
-	}
-	if metadata.ID == "" {
-		metadata.ID = mailID
-	}
-	return metadata.Clone(), nil
+	return metadata.Normalize(userID, mailID), nil
 }
 
 func (d *DdbMetadata) Save(ctx context.Context, metadata EmailMetadata) error {
@@ -150,9 +144,7 @@ func (d *DdbMetadata) List(ctx context.Context, userID string) ([]EmailMetadata,
 			return nil, fmt.Errorf("failed to unmarshal list: %w", err)
 		}
 		for i := range page {
-			if page[i].UserID == "" {
-				page[i].UserID = userID
-			}
+			page[i] = page[i].Normalize(userID, page[i].ID)
 		}
 		result = append(result, page...)
 
@@ -162,6 +154,7 @@ func (d *DdbMetadata) List(ctx context.Context, userID string) ([]EmailMetadata,
 		input.ExclusiveStartKey = output.LastEvaluatedKey
 	}
 
+	sortMetadata(result)
 	return result, nil
 }
 

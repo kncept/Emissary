@@ -7,6 +7,7 @@ package metadata
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"time"
 )
@@ -135,6 +136,27 @@ func (m EmailMetadata) Clone() EmailMetadata {
 		}
 	}
 	return copy
+}
+
+// Normalize returns a read result with identity fields derived from the lookup
+// keys. Backends differ in whether an on-disk record repeats the user and mail
+// ids; callers always see the id they asked for, with an independent keyword
+// map and no false-valued keywords. An empty mailID keeps a stored id.
+func (m EmailMetadata) Normalize(userID, mailID string) EmailMetadata {
+	normalized := m.Clone()
+	if normalized.UserID == "" {
+		normalized.UserID = userID
+	}
+	if mailID != "" {
+		normalized.ID = mailID
+	}
+	return normalized
+}
+
+// sortMetadata orders records by mail id, the single ordering every
+// MetadataStore.List implementation returns.
+func sortMetadata(entries []EmailMetadata) {
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
 }
 
 // MetadataStore stores JMAP-mappable per-email state. Records are keyed by

@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+	"github.com/kncept/Emissary/mailer/readlimit"
 )
 
 // LoadJMAPState implements JMAPStateStore. S3's ETag is used as the revision
@@ -31,12 +31,12 @@ func (s *S3Storage) LoadJMAPState(ctx context.Context, accountID string) ([]byte
 	}
 	defer output.Body.Close()
 
-	data, err := io.ReadAll(io.LimitReader(output.Body, maxStateBytes+1))
+	data, err := readlimit.ReadAll(output.Body, maxStateBytes)
+	if errors.Is(err, readlimit.ErrTooLarge) {
+		return nil, "", fmt.Errorf("JMAP state %q exceeds %d bytes", key, maxStateBytes)
+	}
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to read JMAP state %q: %w", key, err)
-	}
-	if len(data) > maxStateBytes {
-		return nil, "", fmt.Errorf("JMAP state %q exceeds %d bytes", key, maxStateBytes)
 	}
 	revision := ""
 	if output.ETag != nil {

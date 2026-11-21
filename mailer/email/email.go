@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/mail"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/kncept/Emissary/mailer/readlimit"
 )
 
 // DefaultMaxPartSize is the default cap for a whole MIME message and for an
@@ -242,42 +245,8 @@ func RawFromUserEmail(e *UserEmail) []byte {
 	}
 
 	var buf bytes.Buffer
-	buf.WriteString("From: ")
-	buf.WriteString(addressString(e.From))
-	buf.WriteString("\r\nTo: ")
-	recipients := make([]string, 0, len(e.To))
-	for _, addr := range e.To {
-		recipients = append(recipients, addressString(addr))
-	}
-	buf.WriteString(strings.Join(recipients, ", "))
-	buf.WriteString("\r\nSubject: ")
-	buf.WriteString(e.Subject)
-	if !e.Date.IsZero() {
-		buf.WriteString("\r\nDate: ")
-		buf.WriteString(e.Date.UTC().Format(time.RFC1123Z))
-	}
-	if cc := addressListString(e.Cc); cc != "" {
-		buf.WriteString("\r\nCc: ")
-		buf.WriteString(cc)
-	}
-	if replyTo := addressListString(e.ReplyTo); replyTo != "" {
-		buf.WriteString("\r\nReply-To: ")
-		buf.WriteString(replyTo)
-	}
-	// Bcc is envelope-only and never written into the rendered headers.
-	if messageID := strings.TrimSpace(e.MessageID); messageID != "" {
-		buf.WriteString("\r\nMessage-ID: ")
-		buf.WriteString(messageID)
-	}
-	if len(e.InReplyTo) > 0 {
-		buf.WriteString("\r\nIn-Reply-To: ")
-		buf.WriteString(strings.Join(e.InReplyTo, " "))
-	}
-	if len(e.References) > 0 {
-		buf.WriteString("\r\nReferences: ")
-		buf.WriteString(strings.Join(e.References, " "))
-	}
-	buf.WriteString("\r\n\r\n")
+	buf.WriteString(RenderHeaders(e, HeaderPolicy{}))
+	buf.WriteString("\r\n")
 	buf.WriteString(e.Text)
 	if !strings.HasSuffix(e.Text, "\r\n") {
 		buf.WriteString("\r\n")
@@ -285,28 +254,13 @@ func RawFromUserEmail(e *UserEmail) []byte {
 	return buf.Bytes()
 }
 
-func addressString(a Address) string {
-	if strings.TrimSpace(a.Name) == "" {
-		return a.Address
-	}
-	return (&mail.Address{Name: a.Name, Address: a.Address}).String()
-}
-
-func addressListString(addresses []Address) string {
-	values := make([]string, 0, len(addresses))
-	for _, addr := range addresses {
-		if value := addressString(addr); value != "" {
-			values = append(values, value)
-		}
-	}
-	return strings.Join(values, ", ")
-}
-
 // Parse reads a raw RFC 5322 message and returns its content as a UserEmail.
 // This is a convenience function that combines ParseWireFormat and ToUserEmail.
-// Attachments and other non-text parts are intentionally ignored. The id is
-// accepted for compatibility with delivered object keys; use EmailRefFromID
-// when the account/mailbox metadata is needed.
+// Attachments and other non-text parts are intentionally ignored. The id
+// argument is ignored: identity is not part of the wire format. Storage
+// callers pass a delivered object key for compatibility, but must derive
+// account/mailbox metadata with EmailRefFromID instead of expecting the parser
+// to use it.
 func Parse(_ string, r io.Reader) (*UserEmail, error) {
 	wfe := ParseWireFormat("", r)
 	if wfe.TooLarge {
@@ -319,11 +273,14 @@ func Parse(_ string, r io.Reader) (*UserEmail, error) {
 // preserving the complete message structure. All parse errors are collected
 // in the returned WireFormatEmail.Errs slice; the function never returns an error.
 //
+// The id argument is ignored: callers may pass a storage key for context, but
+// the parser never assigns identity from it. Use EmailRefFromID for that.
+//
 // This is the primary parsing function for applications that need full access
 // to the wire format (all headers, MIME structure, encodings, etc.).
-func ParseWireFormat(id string, r io.Reader) *WireFormatEmail {
-	data, err := readAllLimited(r, MaxPartSize())
-	wfe := parseWireFormatBytes(id, data)
+func ParseWireFormat(_ string, r io.Reader) *WireFormatEmail {
+	data, err := readlimit.ReadAll(r, MaxPartSize())
+	wfe := parseWireFormatBytes("", data)
 	if err != nil {
 		wfe.TooLarge = true
 		wfe.Errs = append([]ParseError{{Section: "message", Message: err.Error()}}, wfe.Errs...)
@@ -335,37 +292,11 @@ func ParseWireFormat(id string, r io.Reader) *WireFormatEmail {
 // Callers that read wire bytes before handing them to ParseWireFormat should
 // use this so the cap is enforced at the earliest possible point.
 func ReadLimited(r io.Reader) ([]byte, error) {
-	return readAllLimited(r, MaxPartSize())
-}
-
-// readAllLimited reads at most limit bytes plus one byte of lookahead, so an
-// oversized body is detected without ever materialising it in memory. Reader
-// errors are returned rather than being silently treated as an empty message.
-func readAllLimited(r io.Reader, limit int64) ([]byte, error) {
-	if r == nil {
-		return nil, nil
+	data, err := readlimit.ReadAll(r, MaxPartSize())
+	if errors.Is(err, readlimit.ErrTooLarge) {
+		return nil, fmt.Errorf("message exceeds maximum size of %d bytes", MaxPartSize())
 	}
-	data, err := io.ReadAll(io.LimitReader(r, limit+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("message exceeds maximum size of %d bytes", limit)
-	}
-	return data, nil
-}
-
-// parseAddress parses a single address from a header value.
-func parseAddress(value string) Address {
-	value = decodeHeader(value)
-	if value == "" {
-		return Address{}
-	}
-	parsed, err := mail.ParseAddress(value)
-	if err != nil {
-		return Address{Address: strings.TrimSpace(value)}
-	}
-	return Address{Name: parsed.Name, Address: parsed.Address}
+	return data, err
 }
 
 // parseAddressList parses a comma-separated list of addresses.

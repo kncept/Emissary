@@ -26,8 +26,8 @@ func (s *LogSender) Send(_ context.Context, message *email.UserEmail) error {
 	// message itself is the Info record rather than a diagnostic trace.
 	slog.Info("LogSender: outbound email",
 		"from", message.From.Address,
-		"reply_to", addressStrings(message.ReplyTo),
-		"to", addressStrings(message.To),
+		"reply_to", email.BareAddresses(message.ReplyTo),
+		"to", email.BareAddresses(message.To),
 		"subject", message.Subject)
 	return nil
 }

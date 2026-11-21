@@ -23,6 +23,7 @@ type fakeDdb struct {
 
 	items    map[string]map[string]types.AttributeValue
 	pageSize int
+	unsorted bool // return raw map order so stores must impose their own order
 
 	gets        []map[string]types.AttributeValue
 	deletes     []map[string]types.AttributeValue
@@ -97,9 +98,11 @@ func (f *fakeDdb) Query(_ context.Context, params *dynamodb.QueryInput, _ ...fun
 			matches = append(matches, item)
 		}
 	}
-	sort.Slice(matches, func(i, j int) bool {
-		return attrString(matches[i], "id") < attrString(matches[j], "id")
-	})
+	if !f.unsorted {
+		sort.Slice(matches, func(i, j int) bool {
+			return attrString(matches[i], "id") < attrString(matches[j], "id")
+		})
+	}
 
 	// Resume after the supplied exclusive start key, which carries the id.
 	start := 0
