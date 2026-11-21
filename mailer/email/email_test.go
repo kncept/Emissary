@@ -109,16 +109,53 @@ func TestIsDeliveredMessageKey(t *testing.T) {
 
 func TestEmailRefFromID_DerivesAccountAndMailboxFromDeliveredKey(t *testing.T) {
 	const key = "users/alice@example.com/inbox/20261117T120000_ses-id.eml"
+	const token = "20261117T120000_ses-id.eml"
+	wantID, err := NormalizeEmailID(token)
+	if err != nil {
+		t.Fatalf("NormalizeEmailID() error = %v", err)
+	}
 
 	ref := EmailRefFromID(key)
-	if ref.ID != "20261117T120000_ses-id.eml" {
-		t.Errorf("ID = %q, want stable token %q", ref.ID, "20261117T120000_ses-id.eml")
+	if ref.ID != wantID {
+		t.Errorf("ID = %q, want opaque id %q", ref.ID, wantID)
 	}
 	if ref.AccountID != "alice@example.com" {
 		t.Errorf("AccountID = %q, want alice@example.com", ref.AccountID)
 	}
 	if ref.MailboxID != "inbox" {
 		t.Errorf("MailboxID = %q, want inbox", ref.MailboxID)
+	}
+}
+
+func TestNormalizeEmailID(t *testing.T) {
+	const token = "20261117T120000_ses-id.eml"
+	const fullKey = "users/alice@example.com/inbox/" + token
+
+	canonical, err := NormalizeEmailID(token)
+	if err != nil {
+		t.Fatalf("NormalizeEmailID(token) error = %v", err)
+	}
+	if strings.ContainsAny(canonical, "/+=") || strings.Contains(canonical, ".") {
+		t.Errorf("opaque id %q is not URL-safe base64url", canonical)
+	}
+	for _, input := range []string{token, fullKey, "/" + fullKey, canonical} {
+		got, err := NormalizeEmailID(input)
+		if err != nil {
+			t.Fatalf("NormalizeEmailID(%q) error = %v", input, err)
+		}
+		if got != canonical {
+			t.Errorf("NormalizeEmailID(%q) = %q, want %q", input, got, canonical)
+		}
+		back, err := EmailStorageToken(got)
+		if err != nil {
+			t.Fatalf("EmailStorageToken(%q) error = %v", got, err)
+		}
+		if back != token {
+			t.Errorf("EmailStorageToken(%q) = %q, want %q", got, back, token)
+		}
+	}
+	if _, err := NormalizeEmailID("  "); err == nil {
+		t.Error("NormalizeEmailID should reject an empty id")
 	}
 }
 

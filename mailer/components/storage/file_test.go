@@ -43,10 +43,14 @@ func TestFileStorageAddListGetDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
-	if !strings.HasSuffix(id, ".eml") {
-		t.Errorf("AddEmail() id = %q, want token ending with .eml", id)
+	if strings.ContainsAny(id, "/+=") || strings.Contains(id, ".") {
+		t.Errorf("AddEmail() id = %q, want URL-safe opaque id", id)
 	}
-	path := filepath.Join(root, "users", "alice@example.com", "inbox", id)
+	token, err := email.EmailStorageToken(id)
+	if err != nil {
+		t.Fatalf("EmailStorageToken(%q) error = %v", id, err)
+	}
+	path := filepath.Join(root, "users", "alice@example.com", "inbox", token)
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("message file %q missing: %v", path, err)
 	}

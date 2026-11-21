@@ -6,59 +6,82 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/kncept/Emissary/mailer/email"
 )
 
 // emailIDCandidateSet is the pure result of expanding a caller-supplied email
 // identifier into the forms a backend may probe. Keys are physical delivered
-// object keys (used by the filesystem and S3 stores); tokens are stable ids
-// (used by the in-memory store). objectKey, when supplied, applies a
-// backend-specific physical-key transformation such as the S3 bucket prefix.
+// object keys (used by the filesystem and S3 stores); Tokens are ids used by
+// the in-memory store. objectKey, when supplied, applies a backend-specific
+// physical-key transformation such as the S3 bucket prefix.
 type emailIDCandidateSet struct {
 	AccountID string
+	Canonical string
 	Keys      []string
 	Tokens    []string
 }
 
-// emailIDCandidates expands accountID/id into every candidate the backends
-// historically accepted: an unprefixed full delivered key, the same key under
-// the store prefix, or a stable token searched through the supplied mailboxes.
+// emailIDCandidates expands accountID/id into every identifier and physical key
+// a backend may use. The canonical opaque id is always included first so the
+// in-memory store can resolve ids returned by ListEmails. Legacy tokens and
+// full delivered object keys are also accepted, with the physical token
+// recovered from the canonical id so existing data remains addressable.
 // mailboxes must already be in the backend's preferred (deterministic) order.
 func emailIDCandidates(accountID, id string, objectKey func(string) string, mailboxes []string) (emailIDCandidateSet, error) {
 	accountID = strings.ToLower(strings.TrimSpace(accountID))
 	if accountID == "" {
 		return emailIDCandidateSet{}, ErrNotFound
 	}
-	id = strings.TrimPrefix(strings.TrimSpace(id), "/")
-	if id == "" {
+
+	canonical, err := email.NormalizeEmailID(id)
+	if err != nil {
+		return emailIDCandidateSet{}, ErrNotFound
+	}
+	storageToken, err := email.EmailStorageToken(canonical)
+	if err != nil {
 		return emailIDCandidateSet{}, ErrNotFound
 	}
 
-	candidates := emailIDCandidateSet{AccountID: accountID}
-	if email.IsDeliveredMessageKey(id) {
-		owner, _, ok := email.MailboxFromID(id)
+	candidates := emailIDCandidateSet{AccountID: accountID, Canonical: canonical}
+	seenTokens := make(map[string]struct{})
+	addToken := func(token string) {
+		token = strings.Trim(token, "/")
+		if token == "" {
+			return
+		}
+		if _, ok := seenTokens[token]; ok {
+			return
+		}
+		seenTokens[token] = struct{}{}
+		candidates.Tokens = append(candidates.Tokens, token)
+	}
+	addToken(canonical)
+	addToken(storageToken)
+	// Local development and tests may register ids directly with MemoryStorage
+	// using their own (already URL-safe) identifiers.
+	addToken(strings.Trim(strings.TrimSpace(id), "/"))
+
+	// A full delivered key is a direct physical key and must belong to the
+	// requested account. Canonical ids encode only the filename token, so the
+	// mailbox scan below is used for those.
+	original := strings.Trim(strings.TrimSpace(id), "/")
+	if email.IsDeliveredMessageKey(original) {
+		owner, _, ok := email.MailboxFromID(original)
 		if !ok || !strings.EqualFold(owner, accountID) {
 			return emailIDCandidateSet{}, ErrNotFound
 		}
-		candidates.Keys = append(candidates.Keys, id)
+		candidates.Keys = append(candidates.Keys, original)
 		if objectKey != nil {
-			if prefixed := objectKey(id); prefixed != id {
+			if prefixed := objectKey(original); prefixed != original {
 				candidates.Keys = append(candidates.Keys, prefixed)
 			}
-		}
-		if token, ok := email.DeliveredMessageToken(id); ok && token != "" {
-			candidates.Tokens = append(candidates.Tokens, token)
 		}
 		return candidates, nil
 	}
 
-	// A stable token is always a valid in-memory key, even when it does not
-	// follow the delivered-message naming scheme.
-	candidates.Tokens = append(candidates.Tokens, id)
 	for _, mailboxID := range mailboxes {
-		key := email.DeliveredMessageKey(accountID, mailboxID, id)
+		key := email.DeliveredMessageKey(accountID, mailboxID, storageToken)
 		if key == "" {
 			continue
 		}
@@ -83,25 +106,25 @@ func listedEmailFromRaw(id string, raw []byte) (*email.ListedEmail, error) {
 	return &email.ListedEmail{Ref: &ref, Email: parsed}, nil
 }
 
-// newDeliveredToken builds the stable token used by filesystem and S3
-// deliveries and returns the bytes that should be stored for the message.
+// newDeliveredToken builds the stable physical token used by filesystem and S3
+// deliveries and returns the bytes that should be stored for the message. The
+// token includes its .eml suffix but is encoded to an opaque id before it is
+// returned to callers; nothing about the storage layout reaches clients.
 func newDeliveredToken(message *email.UserEmail, raw []byte) (string, []byte, error) {
-	idToken, err := newMessageToken()
+	token, err := newMessageToken()
 	if err != nil {
 		return "", nil, err
 	}
-	timestamp := message.Date
-	if timestamp.IsZero() {
-		timestamp = time.Now().UTC()
-	}
-	token := fmt.Sprintf("%s_%s", email.FormatDeliveredTimestamp(timestamp), idToken)
 	if raw == nil {
 		raw = email.RawFromUserEmail(message)
 	}
 	return token, raw, nil
 }
 
-// newMessageToken returns a stable id token for a stored message.
+// newMessageToken returns a stable physical token for a stored message. It is
+// a plain string (not yet an opaque id) so EncodeID/DecodeID can reversibly map
+// it to the URL-safe id exposed to clients. The .eml suffix is part of the
+// physical filename and never appears in a JMAP id.
 func newMessageToken() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {

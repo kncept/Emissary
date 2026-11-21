@@ -52,6 +52,15 @@ func NormalizeMailboxID(id string) string {
 	return strings.ToLower(strings.TrimSpace(id))
 }
 
+// NormalizeEmailID canonicalizes an email identifier into the stable, opaque,
+// URL-safe id exposed by the Storage API and to JMAP clients. It is the email
+// counterpart of NormalizeMailboxID: callers may pass an opaque id, a legacy
+// delivery token or a full delivered object key and always receive the
+// canonical opaque id. Physical object keys remain an internal storage detail.
+func NormalizeEmailID(id string) (string, error) {
+	return email.NormalizeEmailID(id)
+}
+
 // SortMailboxes orders mailboxes by sortOrder then name then id for stable
 // responses.
 func SortMailboxes(mailboxes []Mailbox) {
@@ -109,8 +118,10 @@ type Storage interface {
 	// belonging to the account. Implementations must never read outside the
 	// account's own storage.
 	ListEmails(ctx context.Context, accountID, mailboxID string) ([]*email.ListedEmail, error)
-	// GetEmail returns a message by its stable id within the account, together
-	// with the ref describing the mailbox that currently owns it.
+	// GetEmail returns a message by its stable, opaque id within the account,
+	// together with the ref describing the mailbox that currently owns it.
+	// Legacy delivery tokens and full object keys are accepted for backwards
+	// compatibility; the returned ref always carries the canonical opaque id.
 	GetEmail(ctx context.Context, accountID, id string) (*email.ListedEmail, error)
 	// GetEmailRaw returns the original RFC 5322 message bytes for a message,
 	// without parsing them. It returns ErrNotFound when no such message exists.
@@ -118,7 +129,7 @@ type Storage interface {
 	// rendering.
 	GetEmailRaw(ctx context.Context, accountID, id string) ([]byte, error)
 	// AddEmail stores a new message in the specified mailbox (default inbox)
-	// and returns the stable message id. The caller uses the returned id to
+	// and returns the stable, opaque message id. The caller uses the returned id to
 	// create its metadata. raw is the original RFC 5322 bytes read from the
 	// wire (for example the SES staging object). When non-nil it must be
 	// stored verbatim so that GetEmailRaw returns every header, MIME part and

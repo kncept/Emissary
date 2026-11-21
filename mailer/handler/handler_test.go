@@ -1459,6 +1459,30 @@ func TestRawEmailEndpoint(t *testing.T) {
 	})
 }
 
+func TestRawEmailEndpointAcceptsOpaqueID(t *testing.T) {
+	h, store, _ := newHandlerForTest(t, "secret")
+	const raw = "From: sender@example.com\r\nTo: alice@example.com\r\nSubject: opaque raw\r\n\r\nbody"
+	id, err := store.AddEmail(context.Background(), "alice@example.com", "inbox", &email.UserEmail{
+		From:    email.Address{Address: "sender@example.com"},
+		To:      []email.Address{{Address: "alice@example.com"}},
+		Subject: "opaque raw",
+	}, []byte(raw))
+	if err != nil {
+		t.Fatalf("AddEmail() error = %v", err)
+	}
+	if strings.ContainsAny(id, "/+=") || strings.Contains(id, ".") {
+		t.Fatalf("AddEmail() id = %q, want URL-safe opaque id", id)
+	}
+	_, token, _ := login(t, h, "alice@example.com", "")
+	w := request(t, h, http.MethodGet, "/api/email/raw?id="+url.QueryEscape(id), "", token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	if got := w.Body.String(); got != raw {
+		t.Errorf("raw body = %q, want %q", got, raw)
+	}
+}
+
 // newHandlerWithClockForTest builds the real handler with an authenticator
 // whose clock can be advanced, for tests of token lifetimes.
 func newHandlerWithClockForTest(t *testing.T, adminPassword string, now func() time.Time) (http.Handler, *auth.Authenticator) {

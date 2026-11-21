@@ -209,6 +209,10 @@ func (s *MemoryStorage) AddEmail(_ context.Context, accountID, mailboxID string,
 	if err != nil {
 		return "", err
 	}
+	id, err := email.NormalizeEmailID(token)
+	if err != nil {
+		return "", err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -218,17 +222,17 @@ func (s *MemoryStorage) AddEmail(_ context.Context, accountID, mailboxID string,
 		// Require destination mailbox to exist; default mailboxes are ensured.
 		return "", ErrNotFound
 	}
-	if _, ok := acct.emails[token]; ok {
+	if _, ok := acct.emails[id]; ok {
 		return "", errors.New("email already exists")
 	}
-	acct.emails[token] = &email.ListedEmail{
-		Ref:   &email.EmailRef{ID: token, AccountID: accountID, MailboxID: mailboxID},
+	acct.emails[id] = &email.ListedEmail{
+		Ref:   &email.EmailRef{ID: id, AccountID: accountID, MailboxID: mailboxID},
 		Email: cloneMessage(message),
 	}
 	if raw != nil {
-		acct.raw[token] = append([]byte(nil), raw...)
+		acct.raw[id] = append([]byte(nil), raw...)
 	}
-	return token, nil
+	return id, nil
 }
 
 // Add inserts a listed email. It is not part of Storage and exists for local

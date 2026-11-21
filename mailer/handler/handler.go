@@ -674,10 +674,10 @@ func handleJMAPDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRawEmail serves the original RFC 5322 message for a single email. The
-// id is passed as a query parameter because delivered ids contain slashes and
-// would otherwise be ambiguous in a URL path. accountId may be provided; when
-// omitted it is derived from a delivered key or defaults to the authenticated
-// user for stable token ids.
+// id is passed as a query parameter for compatibility with legacy delivered
+// object keys; current opaque ids are also safe as URL path segments.
+// accountId may be provided; when omitted it is derived from a legacy delivered
+// key or defaults to the authenticated user for opaque ids.
 func handleRawEmail(w http.ResponseWriter, r *http.Request, store storage.Storage) {
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
 	if id == "" {

@@ -382,6 +382,74 @@ func TestEmailSetStoresReplyTo(t *testing.T) {
 	}
 }
 
+func TestEmailSetAndGetRoundTripOpaqueID(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewMemoryStorage()
+	handler := NewHandler(store, metadata.NewMemoryMetadata(),
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+
+	createArgs := json.RawMessage(`{"accountId":"alice@example.com","create":{"c1":{
+		"mailboxIds":{"inbox":true},
+		"from":[{"email":"alice@example.com"}],
+		"to":[{"email":"bob@example.com"}],
+		"subject":"opaque id"}}}`)
+	createResult, err := handler.EmailSet(ctx, "alice@example.com", createArgs)
+	if err != nil {
+		t.Fatalf("EmailSet(create) error = %v", err)
+	}
+	var createdResp struct {
+		Created map[string]struct {
+			ID string `json:"id"`
+		} `json:"created"`
+	}
+	if err := json.Unmarshal(createResult, &createdResp); err != nil {
+		t.Fatalf("unmarshal create response: %v", err)
+	}
+	id := createdResp.Created["c1"].ID
+	if id == "" {
+		t.Fatal("EmailSet(create) returned no id")
+	}
+	if strings.ContainsAny(id, "/+=") || strings.Contains(id, ".") {
+		t.Errorf("created id %q is not URL-safe base64url", id)
+	}
+	canonical, err := storage.NormalizeEmailID(id)
+	if err != nil || canonical != id {
+		t.Errorf("NormalizeEmailID(%q) = %q, %v; want unchanged", id, canonical, err)
+	}
+
+	getArgs := json.RawMessage(fmt.Sprintf(`{"accountId":"alice@example.com","ids":[%q]}`, id))
+	getResult, err := handler.EmailGet(ctx, "alice@example.com", getArgs)
+	if err != nil {
+		t.Fatalf("EmailGet() error = %v", err)
+	}
+	var getResp struct {
+		List     []JMAPEmail `json:"list"`
+		NotFound []string    `json:"notFound"`
+	}
+	if err := json.Unmarshal(getResult, &getResp); err != nil {
+		t.Fatalf("unmarshal get response: %v", err)
+	}
+	if len(getResp.List) != 1 || getResp.List[0].ID != id || len(getResp.NotFound) != 0 {
+		t.Fatalf("Email/get response = %+v, want one email with id %q", getResp, id)
+	}
+
+	destroyArgs := json.RawMessage(fmt.Sprintf(`{"accountId":"alice@example.com","destroy":[%q]}`, id))
+	destroyResult, err := handler.EmailSet(ctx, "alice@example.com", destroyArgs)
+	if err != nil {
+		t.Fatalf("EmailSet(destroy) error = %v", err)
+	}
+	var destroyResp struct {
+		Destroyed []string `json:"destroyed"`
+	}
+	if err := json.Unmarshal(destroyResult, &destroyResp); err != nil {
+		t.Fatalf("unmarshal destroy response: %v", err)
+	}
+	if len(destroyResp.Destroyed) != 1 || destroyResp.Destroyed[0] != id {
+		t.Fatalf("Email/set response = %+v, want destroyed id %q", destroyResp, id)
+	}
+}
+
 func TestEmailSetCreateIgnoresClientReceivedAt(t *testing.T) {
 	ctx := context.Background()
 	metaStore := metadata.NewMemoryMetadata()

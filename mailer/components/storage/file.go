@@ -562,7 +562,7 @@ func (s *FileStorage) AddEmail(_ context.Context, accountID, mailboxID string, m
 		slog.Error("Filesystem: failed to store email", "key", key, "err", err)
 		return "", fmt.Errorf("failed to add email %q: %w", key, err)
 	}
-	return token, nil
+	return email.NormalizeEmailID(token)
 }
 
 func (s *FileStorage) MoveEmail(_ context.Context, accountID, id, destMailboxID string) (*email.ListedEmail, error) {

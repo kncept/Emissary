@@ -218,11 +218,11 @@ point in the delivery pipeline.
 message (all headers, MIME parts and transfer encodings) with a
 `message/rfc822` content type. The JMAP `Email/get` representation is parsed
 and intentionally drops non-text parts, so it cannot be used to reconstruct
-the wire format. Delivered ids contain slashes, which is why the id is passed
-as a query parameter instead of a URL path segment.
+the wire format. The id is passed as a query parameter for compatibility with
+legacy delivered object keys; current opaque ids are safe in either location.
 
-The account that owns the message is derived from its delivered object key (or
-from the parsed record for storage backends with opaque ids). Users may only
+The account that owns the message is derived from a legacy delivered object key
+or from the authenticated account for opaque ids. Users may only
 read raw messages from their own account; callers with `EmissaryUserManagement`
 may read any account, matching JMAP masquerade behavior. Missing messages
 return `404`, and malformed or unauthorized ids return `400`/`403`.
@@ -528,8 +528,8 @@ Example response:
       "accountId": "user@example.com",
       "queryState": "state123",
       "ids": [
-        "users/user@example.com/inbox/20240308T143000_01000192a3b4c5d6.eml",
-        "users/user@example.com/inbox/20240308T091200_01000192abcdef.eml"
+        "MjAyNDAzMDhUMTQzMDAwXzAxMDAwMTkyYTNiNGM1ZDYuZW1s",
+        "MjAyNDAzMDhUMDkxMjAwXzAxMDAwMTkyYWJjZGVmLmVtbA"
       ],
       "total": 2
     }, "query1"],
@@ -609,13 +609,13 @@ a JWT `sid`, the map is also persisted under
 `_storage/<sid>/created-ids.json`, so a later Lambda invocation can resolve
 earlier references without the client echoing the map.
 
-Email IDs for delivered messages are stable tokens (the delivered message
-filename, including the received timestamp and `.eml` suffix). Moving a
-message between mailboxes changes its physical storage location but keeps the
-same JMAP id. Some legacy or non-delivered identifiers may still be returned
-as full object keys; they can contain `/`, so clients must URL-encode ids when
-placing them in a route. The `mailboxIds` returned by `Email/get` reflect the
-mailbox the message is currently stored in.
+Email IDs are stable, URL-safe base64url strings. The physical delivered
+message filename and object key are internal storage details and are never
+returned as JMAP ids. Moving a message between mailboxes changes its physical
+storage location but keeps the same JMAP id. Legacy tokens and full object keys
+are still accepted on input so older stored messages remain addressable. The
+`mailboxIds` returned by `Email/get` reflect the mailbox the message is
+currently stored in.
 
 ## Binary Upload/Download
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -131,11 +130,14 @@ func TestS3StorageAddEmailStoresInInboxAndReturnsToken(t *testing.T) {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
 
-	pattern := regexp.MustCompile(`^20261109T100000_[0-9a-f]{32}\.eml$`)
-	if !pattern.MatchString(id) {
-		t.Fatalf("AddEmail() id = %q, want stable delivered token", id)
+	token, err := email.EmailStorageToken(id)
+	if err != nil {
+		t.Fatalf("EmailStorageToken(%q) error = %v", id, err)
 	}
-	storedKey := "users/bob@example.com/inbox/" + id
+	if strings.ContainsAny(id, "/+=") || strings.Contains(id, ".") {
+		t.Fatalf("AddEmail() id = %q, want URL-safe opaque id", id)
+	}
+	storedKey := "users/bob@example.com/inbox/" + token
 	raw, ok := fake.objects[storedKey]
 	if !ok {
 		t.Fatalf("AddEmail() did not store object %q; keys = %v", storedKey, fake.objects)
@@ -162,10 +164,11 @@ func TestS3StorageAddEmailHonorsConfiguredPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
-	if !strings.HasSuffix(id, ".eml") {
-		t.Fatalf("AddEmail() id = %q, want token", id)
+	token, err := email.EmailStorageToken(id)
+	if err != nil {
+		t.Fatalf("EmailStorageToken(%q) error = %v", id, err)
 	}
-	storedKey := "emails/users/bob@example.com/inbox/" + id
+	storedKey := "emails/users/bob@example.com/inbox/" + token
 	if _, ok := fake.objects[storedKey]; !ok {
 		t.Fatalf("AddEmail() did not store object %q; keys=%v", storedKey, fake.objects)
 	}
@@ -184,8 +187,8 @@ func TestS3StorageAddEmailValidatesInput(t *testing.T) {
 
 func TestS3StorageListRootReturnsObjectsAndPrefixes(t *testing.T) {
 	fake := newFakeS3(map[string]string{
-		"staging-one":             testMessage,
-		"staging-two":             testMessage,
+		"staging-one":                         testMessage,
+		"staging-two":                         testMessage,
 		"users/alice@example.com/inbox/a.eml": testMessage,
 		"users/bob@example.com/inbox/b.eml":   testMessage,
 	})
@@ -247,8 +250,12 @@ func TestS3StorageListEmailsUsesMailboxPrefixAndFullKey(t *testing.T) {
 	if len(emails) != 1 {
 		t.Fatalf("ListEmails() returned %d emails, want 1", len(emails))
 	}
-	if emails[0].Ref.ID != "20261117T120000_ses-id.eml" {
-		t.Errorf("ID = %q, want stable token %q", emails[0].Ref.ID, "20261117T120000_ses-id.eml")
+	wantID, err := email.NormalizeEmailID("20261117T120000_ses-id.eml")
+	if err != nil {
+		t.Fatalf("NormalizeEmailID() error = %v", err)
+	}
+	if emails[0].Ref.ID != wantID {
+		t.Errorf("ID = %q, want opaque id %q", emails[0].Ref.ID, wantID)
 	}
 	if emails[0].Ref.AccountID != "alice@example.com" || emails[0].Ref.MailboxID != "inbox" {
 		t.Errorf("account/mailbox = %q/%q, want alice@example.com/inbox", emails[0].Ref.AccountID, emails[0].Ref.MailboxID)
@@ -270,8 +277,12 @@ func TestS3StorageListEmailsHonorsConfiguredPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListEmails() error = %v", err)
 	}
-	if len(emails) != 1 || emails[0].Ref.ID != "20261117_ses-id.eml" {
-		t.Fatalf("ListEmails() = %v, want token 20261117_ses-id.eml", emails)
+	wantID, err := email.NormalizeEmailID("20261117_ses-id.eml")
+	if err != nil {
+		t.Fatalf("NormalizeEmailID() error = %v", err)
+	}
+	if len(emails) != 1 || emails[0].Ref.ID != wantID {
+		t.Fatalf("ListEmails() = %v, want opaque id %q", emails, wantID)
 	}
 }
 
@@ -299,8 +310,12 @@ func TestS3StorageListEmailsSkipsSystemFilesAndNonEmlObjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListEmails() error = %v", err)
 	}
-	if len(emails) != 1 || emails[0].Ref.ID != "20261117T120000_ses-id.eml" {
-		t.Fatalf("ListEmails() = %v, want stable token 20261117T120000_ses-id.eml", emails)
+	wantID, err := email.NormalizeEmailID("20261117T120000_ses-id.eml")
+	if err != nil {
+		t.Fatalf("NormalizeEmailID() error = %v", err)
+	}
+	if len(emails) != 1 || emails[0].Ref.ID != wantID {
+		t.Fatalf("ListEmails() = %v, want opaque id %q", emails, wantID)
 	}
 	for _, key := range fake.requested {
 		if key != aliceKey {
@@ -318,8 +333,12 @@ func TestS3StorageGetEmailReadsDeliveredKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEmail() error = %v", err)
 	}
-	if got.Ref.ID != "4s5k9q1abc-amazon-ses-message-id.eml" || got.Ref.MailboxID != "inbox" {
-		t.Errorf("Ref = %+v, want token in inbox", got.Ref)
+	wantID, err := email.NormalizeEmailID("4s5k9q1abc-amazon-ses-message-id.eml")
+	if err != nil {
+		t.Fatalf("NormalizeEmailID() error = %v", err)
+	}
+	if got.Ref.ID != wantID || got.Ref.MailboxID != "inbox" {
+		t.Errorf("Ref = %+v, want opaque id %q in inbox", got.Ref, wantID)
 	}
 	if got.Email.Subject != "Hello" {
 		t.Errorf("Subject = %q, want %q", got.Email.Subject, "Hello")
@@ -338,8 +357,12 @@ func TestS3StorageGetEmailHonorsPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEmail() error = %v", err)
 	}
-	if got.Ref.ID != "one.eml" || got.Ref.MailboxID != "inbox" {
-		t.Fatalf("GetEmail().Ref = %+v, want token one.eml in inbox", got.Ref)
+	wantID, err := email.NormalizeEmailID("one.eml")
+	if err != nil {
+		t.Fatalf("NormalizeEmailID() error = %v", err)
+	}
+	if got.Ref.ID != wantID || got.Ref.MailboxID != "inbox" {
+		t.Fatalf("GetEmail().Ref = %+v, want opaque id %q in inbox", got.Ref, wantID)
 	}
 }
 

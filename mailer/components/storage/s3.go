@@ -644,7 +644,7 @@ func (s *S3Storage) AddEmail(ctx context.Context, accountID, mailboxID string, m
 		return "", fmt.Errorf("failed to add email %q: %w", key, err)
 	}
 
-	return token, nil
+	return email.NormalizeEmailID(token)
 }
 
 func (s *S3Storage) MoveEmail(ctx context.Context, accountID, id, destMailboxID string) (*email.ListedEmail, error) {

@@ -158,7 +158,9 @@ func IsDeliveredMessageKey(key string) bool {
 
 // DeliveredMessageToken returns the stable message token for a delivered
 // object key. The token is the filename component (including the .eml suffix)
-// and stays the same when a message is moved between mailbox folders.
+// and stays the same when a message is moved between mailbox folders. It is an
+// internal storage detail and is encoded as an opaque id before it reaches
+// JMAP clients; see NormalizeEmailID.
 func DeliveredMessageToken(key string) (string, bool) {
 	if !IsDeliveredMessageKey(key) {
 		return "", false
@@ -176,13 +178,85 @@ func DeliveredMessageToken(key string) (string, bool) {
 }
 
 // DeliveredMessageKey builds the physical object key for a delivered message
-// from its stable token.
+// from its storage token. The token already carries its .eml suffix; neither
+// it nor the account/mailbox path is exposed as part of a JMAP id.
 func DeliveredMessageKey(accountID, mailboxID, token string) string {
 	token = strings.Trim(strings.TrimSpace(token), "/")
 	if token == "" {
 		return ""
 	}
+	// Accept a canonical opaque id as a convenience; callers normally pass the
+	// physical token returned by EmailStorageToken.
+	if isCanonicalEmailID(token) {
+		if decoded, err := DecodeID(token); err == nil {
+			token = string(decoded)
+		}
+	}
 	return MailboxKeyPrefix(accountID, mailboxID) + token
+}
+
+// isCanonicalEmailID reports whether id is an opaque email id produced by
+// EncodeID. Every physical message token ends in .eml, so decoding a canonical
+// id yields a string with that suffix. Raw tokens and object keys never decode
+// to such a string, which keeps normalization unambiguous and idempotent.
+func isCanonicalEmailID(id string) bool {
+	decoded, err := DecodeID(id)
+	if err != nil || len(decoded) <= len(".eml") {
+		return false
+	}
+	return strings.EqualFold(decoded[len(decoded)-len(".eml"):], ".eml")
+}
+
+// NormalizeEmailID returns the canonical opaque, URL-safe identifier for an
+// email. Canonical ids are base64url strings that decode to a physical message
+// token; they are passed through unchanged. Legacy stable tokens and full
+// delivered object keys are encoded so data written before the opaque-id change
+// keeps a stable JMAP identity. Backends call this at the storage boundary, so
+// JMAP handlers never see a physical key.
+func NormalizeEmailID(id string) (string, error) {
+	id = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(id), "/"))
+	if id == "" {
+		return "", errors.New("empty email id")
+	}
+	if isCanonicalEmailID(id) {
+		return id, nil
+	}
+
+	token := id
+	if IsDeliveredMessageKey(token) {
+		derived, ok := DeliveredMessageToken(token)
+		if !ok {
+			return "", errors.New("invalid delivered message id")
+		}
+		token = derived
+	}
+	token = strings.Trim(token, "/")
+	if token == "" {
+		return "", errors.New("invalid email id")
+	}
+	return EncodeID(token), nil
+}
+
+// EmailStorageToken returns the physical filename token encoded in a canonical
+// email id. Legacy tokens and full delivered keys are accepted so older stored
+// messages remain addressable after the opaque-id change.
+func EmailStorageToken(id string) (string, error) {
+	canonical, err := NormalizeEmailID(id)
+	if err != nil {
+		return "", err
+	}
+	raw, err := DecodeID(canonical)
+	if err != nil {
+		return "", err
+	}
+	if IsDeliveredMessageKey(raw) {
+		token, ok := DeliveredMessageToken(raw)
+		if !ok {
+			return "", errors.New("invalid delivered message id")
+		}
+		return token, nil
+	}
+	return strings.Trim(raw, "/"), nil
 }
 
 // MailboxFromID extracts the account and mailbox from a delivered message
@@ -211,17 +285,16 @@ func MailboxFromID(id string) (accountID, mailboxID string, ok bool) {
 }
 
 // EmailRefFromID builds the metadata ref for a message from its identifier.
-// For a full delivered object key it derives the account/mailbox and uses the
-// stable filename token as the message ID so moves between folders do not
-// change the JMAP identity. Other identifiers keep only the id itself.
+// For a full delivered object key it derives the account/mailbox and stores the
+// opaque form of the stable token as the message ID so moves between folders do
+// not change the JMAP identity. Other identifiers are normalized the same way.
 func EmailRefFromID(id string) EmailRef {
-	accountID, mailboxID, ok := MailboxFromID(id)
-	if ok {
-		if token, ok := DeliveredMessageToken(id); ok {
-			return EmailRef{ID: token, AccountID: accountID, MailboxID: mailboxID}
-		}
+	accountID, mailboxID, _ := MailboxFromID(id)
+	opaque, err := NormalizeEmailID(id)
+	if err != nil {
+		opaque = id
 	}
-	return EmailRef{ID: id, AccountID: accountID, MailboxID: mailboxID}
+	return EmailRef{ID: opaque, AccountID: accountID, MailboxID: mailboxID}
 }
 
 // EncodeID turns a storage key into an opaque, URL-safe identifier.

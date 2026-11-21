@@ -11,6 +11,7 @@ import (
 
 	"github.com/kncept/Emissary/mailer/components/sender"
 	"github.com/kncept/Emissary/mailer/components/storage"
+	"github.com/kncept/Emissary/mailer/email"
 )
 
 // newJMAPLimitHandler builds a real handler with a deliberately small body cap
@@ -237,7 +238,12 @@ func TestJMAPSessionURLTemplatesMatchRoutes(t *testing.T) {
 
 	// Expanding each advertised template must reach a registered route. The
 	// handlers are stubs today, but they must return a problem details 501
-	// rather than the SPA catch-all or a 404.
+	// rather than the SPA catch-all or a 404. Blob ids use the same opaque,
+	// URL-safe format as email ids so they need no escaping in a path segment.
+	opaqueID, err := email.NormalizeEmailID("20261117T120000_ses-id.eml")
+	if err != nil {
+		t.Fatalf("NormalizeEmailID() error = %v", err)
+	}
 	cases := []struct {
 		method   string
 		template string
@@ -246,7 +252,7 @@ func TestJMAPSessionURLTemplatesMatchRoutes(t *testing.T) {
 		{http.MethodPost, session.UploadURL, map[string]string{"accountId": "admin"}},
 		{http.MethodGet, session.DownloadURL, map[string]string{
 			"accountId": "admin",
-			"blobId":    "blob",
+			"blobId":    opaqueID,
 			"name":      "message.eml",
 			"type":      "message%2Frfc822",
 		}},
