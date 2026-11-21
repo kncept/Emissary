@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,15 +12,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/fsutil"
 )
 
 var _ Storage = (*FileStorage)(nil)
-
-const mailboxRecordName = "mailbox.json"
 
 // FileStorage is the local-filesystem implementation of Storage. It uses the
 // same logical keys as S3Storage (users/<account>/<mailbox>/<token>.eml for
@@ -239,14 +235,9 @@ func (s *FileStorage) GetMailbox(_ context.Context, accountID, mailboxID string)
 }
 
 func (s *FileStorage) CreateMailbox(_ context.Context, accountID string, mailbox Mailbox) (Mailbox, error) {
-	mailbox.ID = NormalizeMailboxID(mailbox.ID)
-	mailbox.Name = strings.TrimSpace(mailbox.Name)
-	if mailbox.ParentID != nil {
-		p := NormalizeMailboxID(*mailbox.ParentID)
-		mailbox.ParentID = &p
-	}
-	if mailbox.ID == "" || mailbox.Name == "" {
-		return Mailbox{}, errors.New("invalid mailbox")
+	mailbox, err := NormalizeMailbox(mailbox)
+	if err != nil {
+		return Mailbox{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -264,10 +255,11 @@ func (s *FileStorage) CreateMailbox(_ context.Context, accountID string, mailbox
 	if _, err := os.Stat(path); err == nil {
 		return Mailbox{}, ErrMailboxExists
 	}
-	if mailbox.ParentID != nil && *mailbox.ParentID != "" {
-		if _, err := s.readMailboxRecord(accountID, *mailbox.ParentID); err != nil {
-			return Mailbox{}, ErrNotFound
-		}
+	if err := ValidateMailboxParent(mailbox, func(parentID string) bool {
+		_, err := s.readMailboxRecord(accountID, parentID)
+		return err == nil
+	}); err != nil {
+		return Mailbox{}, err
 	}
 	if err := os.MkdirAll(path, 0755); err != nil {
 		return Mailbox{}, err
@@ -279,14 +271,9 @@ func (s *FileStorage) CreateMailbox(_ context.Context, accountID string, mailbox
 }
 
 func (s *FileStorage) UpdateMailbox(_ context.Context, accountID string, mailbox Mailbox) (Mailbox, error) {
-	mailbox.ID = NormalizeMailboxID(mailbox.ID)
-	mailbox.Name = strings.TrimSpace(mailbox.Name)
-	if mailbox.ParentID != nil {
-		p := NormalizeMailboxID(*mailbox.ParentID)
-		mailbox.ParentID = &p
-	}
-	if mailbox.ID == "" || mailbox.Name == "" {
-		return Mailbox{}, errors.New("invalid mailbox")
+	mailbox, err := NormalizeMailbox(mailbox)
+	if err != nil {
+		return Mailbox{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -296,13 +283,11 @@ func (s *FileStorage) UpdateMailbox(_ context.Context, accountID string, mailbox
 	if _, err := s.readMailboxRecord(accountID, mailbox.ID); err != nil {
 		return Mailbox{}, ErrNotFound
 	}
-	if mailbox.ParentID != nil && *mailbox.ParentID != "" {
-		if *mailbox.ParentID == mailbox.ID {
-			return Mailbox{}, errors.New("mailbox cannot be its own parent")
-		}
-		if _, err := s.readMailboxRecord(accountID, *mailbox.ParentID); err != nil {
-			return Mailbox{}, ErrNotFound
-		}
+	if err := ValidateMailboxParent(mailbox, func(parentID string) bool {
+		_, err := s.readMailboxRecord(accountID, parentID)
+		return err == nil
+	}); err != nil {
+		return Mailbox{}, err
 	}
 	if err := s.writeMailboxRecord(accountID, mailbox); err != nil {
 		return Mailbox{}, err
@@ -395,8 +380,6 @@ func (s *FileStorage) ListEmails(_ context.Context, accountID, mailboxID string)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list messages under %q: %w", prefix, err)
 	}
-	sort.Strings(keys)
-
 	emails := make([]*email.ListedEmail, 0, len(keys))
 	for _, key := range keys {
 		message, err := s.getEmailByKey(key)
@@ -408,6 +391,7 @@ func (s *FileStorage) ListEmails(_ context.Context, accountID, mailboxID string)
 		}
 		emails = append(emails, message)
 	}
+	SortListedEmails(emails)
 	return emails, nil
 }
 
@@ -416,12 +400,7 @@ func (s *FileStorage) getEmailByKey(key string) (*email.ListedEmail, error) {
 	if err != nil {
 		return nil, err
 	}
-	parsed, err := email.Parse(key, bytes.NewReader(raw))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse email %q: %w", key, err)
-	}
-	ref := email.EmailRefFromID(key)
-	return &email.ListedEmail{Ref: &ref, Email: parsed}, nil
+	return listedEmailFromRaw(key, raw)
 }
 
 func (s *FileStorage) getRawByKey(key string) ([]byte, error) {
@@ -491,33 +470,24 @@ func (s *FileStorage) listMailboxIDsLocked(accountID string) ([]string, error) {
 }
 
 func (s *FileStorage) resolveEmailKeyLocked(accountID, id string) (string, error) {
-	accountID = strings.ToLower(strings.TrimSpace(accountID))
-	if accountID == "" {
-		return "", ErrNotFound
-	}
-	id = strings.TrimPrefix(strings.TrimSpace(id), "/")
-	if id == "" {
-		return "", ErrNotFound
-	}
-	// Full physical key (possibly legacy prefix form).
-	if email.IsDeliveredMessageKey(id) {
-		acct, _, ok := email.MailboxFromID(id)
-		if !ok || !strings.EqualFold(acct, accountID) {
-			return "", ErrNotFound
-		}
-		return id, nil
-	}
-	// Stable token: locate in account mailboxes.
-	token := id
-	mailboxIDs, err := s.listMailboxIDsLocked(accountID)
+	candidates, err := emailIDCandidates(accountID, id, nil, nil)
 	if err != nil {
 		return "", err
 	}
-	for _, mailboxID := range mailboxIDs {
-		key := email.DeliveredMessageKey(accountID, mailboxID, token)
-		if key == "" {
-			continue
-		}
+	// Full delivered keys keep the historical direct-read behavior.
+	if len(candidates.Keys) > 0 {
+		return candidates.Keys[0], nil
+	}
+
+	mailboxIDs, err := s.listMailboxIDsLocked(candidates.AccountID)
+	if err != nil {
+		return "", err
+	}
+	candidates, err = emailIDCandidates(accountID, id, nil, mailboxIDs)
+	if err != nil {
+		return "", err
+	}
+	for _, key := range candidates.Keys {
 		path, err := s.objectPath(key)
 		if err != nil {
 			continue
@@ -577,24 +547,15 @@ func (s *FileStorage) AddEmail(_ context.Context, accountID, mailboxID string, m
 		return "", ErrNotFound
 	}
 
-	idToken, err := newMessageToken()
+	token, stored, err := newDeliveredToken(message, raw)
 	if err != nil {
 		return "", err
 	}
-	timestamp := message.Date
-	if timestamp.IsZero() {
-		timestamp = time.Now().UTC()
-	}
-	token := fmt.Sprintf("%s_%s", email.FormatDeliveredTimestamp(timestamp), idToken)
 	key := email.DeliveredMessageKey(accountID, mailboxID, token)
 
 	objectPath, err := s.objectPath(key)
 	if err != nil {
 		return "", err
-	}
-	stored := raw
-	if stored == nil {
-		stored = email.RawFromUserEmail(message)
 	}
 	slog.Debug("Filesystem: storing email", "key", key, "root", s.root, "rawBytes", len(stored))
 	if err := fsutil.WriteFileAtomically(objectPath, stored, 0644); err != nil {
@@ -815,4 +776,3 @@ func (s *FileStorage) SaveCreatedIDs(_ context.Context, sessionID string, ids ma
 	}
 	return nil
 }
-

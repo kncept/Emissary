@@ -78,7 +78,7 @@ listens with `net/http` and uses the memory/log implementations.
 | `awsutil` | Lambda detection and Secrets Manager access. |
 | `auth` | JWT issue/validate (`Claims`: `sub`, `sid`, `systemManager`, `EmissaryUserManagement`, `iat`, `exp`, optional `aud`/`iss`). |
 | `components/usermanager` | Pluggable login backends; every backend also knows the built-in admin. |
-| `components/storage` | Mail source: `ListEmails` (scoped by JMAP `accountId`/`mailboxId`), plus `GetEmail`, `AddEmail`, `DeleteEmail`, and support-only bucket operations. |
+| `components/storage` | Mail source: `ListEmails` (scoped by JMAP `accountId`/`mailboxId`), plus `GetEmail`, `AddEmail`, `DeleteEmail`. `RootObject`/`ListRoot` are the one deliberately admin-facing capability, used only by the system-manager support API. |
 | `components/sender` | Write side of mail: `Send`. |
 | `components/metadata` | Per-message JMAP keywords (`$seen`, `$flagged`, `$draft`, and the other supported system keywords) plus the server-owned `receivedAt` timestamp, keyed by email id and discarded when a message is deleted. |
 | `components/session` | Refresh-token store for JWT sessions (`memory` or `ddb`). |
@@ -110,7 +110,7 @@ instantiated in `configvendor.FromConfig`:
 4. A consumer process (Lambda or scheduled job) reads from the staging area,
    validates recipients, and delivers each message to the appropriate user mailboxes:
    - For each valid recipient, the receiver calls
-     `storage.Storage.AddEmail(ctx, recipient, parsedEmail, raw)` on the **configured**
+     `storage.Storage.AddEmail(ctx, recipient, mailboxID, parsedEmail, raw)` on the **configured**
      store (S3 in production, memory for local runs), passing the original
      staging bytes as `raw`. Delivery no longer writes an S3 key directly
      from the receiver.
@@ -124,7 +124,8 @@ instantiated in `configvendor.FromConfig`:
      encoding (including attachments). JMAP-created mail has no wire bytes and
      is rendered from the parsed fields instead.
    - The receiver creates a metadata record in the metadata store keyed by the
-     **id returned from `AddEmail`** (the full S3 object key for `S3Storage`).
+     **id returned from `AddEmail`** (the stable delivered token; the full
+     S3 key is derived from the account, mailbox and token).
      The record starts with an empty keyword set and a server-stamped
      `receivedAt` (RFC 3339 UTC): the message is unread and unflagged until a
      JMAP client sets `keywords/$seen` or `keywords/$flagged`. `receivedAt`
@@ -139,6 +140,10 @@ instantiated in `configvendor.FromConfig`:
    mailbox; without it every mailbox in the account is searched.
    `GetObject`s each message, and parses it with `email.Parse`.
    Unparseable objects are logged and skipped, not fatal.
+   All three backends return `ListEmails` through `SortListedEmails`:
+   `Email.Date` descending, with `Ref.ID` descending as the tie-breaker.
+   This standardizes S3 and memory behavior and is an intentional change for
+   the filesystem backend, which previously returned object-key order.
 6. `handler` merges the full keyword map and `receivedAt` from the metadata
    store into each JMAP `Email/get` response, and sorts `Email/query` by that
    receive time. A missing metadata record is not an error: the email is
@@ -146,11 +151,13 @@ instantiated in `configvendor.FromConfig`:
    message `Date` header. Listing is always scoped to one account; there is no
    cross-account email listing API.
 
-The email ID used throughout the JMAP API is the full delivered S3 object key
-(e.g., `users/alice@example.com/inbox/20240308T143000_9f1c...eml`), including
-the timestamp and `.eml` suffix. It encodes the account, JMAP mailbox, received
-time and the storage-generated message id. Older deliveries that used the SES
-message id as the suffix remain valid ids.
+The email ID used throughout the JMAP API is the stable delivered token
+(e.g., `20240308T143000_9f1c...eml`) returned by `AddEmail`, including the
+timestamp and `.eml` suffix. `S3Storage` stores it as
+`users/<accountId>/<mailboxId>/<token>` (under the configured bucket prefix
+when present); the account and mailbox come from the JMAP context, so a move
+does not change the id. Older deliveries that used the SES message id as the
+suffix remain valid ids.
 
 Durable per-session scratch state lives separately at `_storage/<sid>/`. JMAP
 drafts are JSON objects under `_storage/<sid>/drafts/`, and the creation-id map
@@ -202,10 +209,10 @@ validation and delivery process applies:
 
 3. **Deliver to selected recipients** — For each recipient whose rule
    selected delivery:
-   - Call `Storage.AddEmail(ctx, recipient, parsedEmail, raw)` on the
-     configured store, passing the original staging bytes. The store assigns
-     the id, writes the bytes verbatim to the recipient's `inbox`, and the
-     receiver does not construct mailbox keys.
+   - Call `Storage.AddEmail(ctx, recipient, mailboxID, parsedEmail, raw)` on
+     the configured store, passing the original staging bytes. The store
+     assigns the stable id, writes the bytes verbatim to the recipient's
+     `inbox`, and the receiver does not construct mailbox keys.
    - For `S3Storage`, the key is `users/<recipient-email>/inbox/<timestamp>_<generated-id>.eml`,
      with the timestamp derived from the `Date` header (or the current time)
      in ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`).

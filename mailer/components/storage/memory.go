@@ -2,11 +2,9 @@ package storage
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 
@@ -115,14 +113,12 @@ func (s *MemoryStorage) GetMailbox(_ context.Context, accountID, mailboxID strin
 
 func (s *MemoryStorage) CreateMailbox(_ context.Context, accountID string, mailbox Mailbox) (Mailbox, error) {
 	accountID = strings.ToLower(strings.TrimSpace(accountID))
-	mailbox.ID = NormalizeMailboxID(mailbox.ID)
-	mailbox.Name = strings.TrimSpace(mailbox.Name)
-	if mailbox.ParentID != nil {
-		p := NormalizeMailboxID(*mailbox.ParentID)
-		mailbox.ParentID = &p
-	}
-	if accountID == "" || mailbox.ID == "" || mailbox.Name == "" {
+	if accountID == "" {
 		return Mailbox{}, errors.New("invalid mailbox")
+	}
+	mailbox, err := NormalizeMailbox(mailbox)
+	if err != nil {
+		return Mailbox{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -131,10 +127,11 @@ func (s *MemoryStorage) CreateMailbox(_ context.Context, accountID string, mailb
 	if _, ok := acct.mailboxes[mailbox.ID]; ok {
 		return Mailbox{}, ErrMailboxExists
 	}
-	if mailbox.ParentID != nil && *mailbox.ParentID != "" {
-		if _, ok := acct.mailboxes[*mailbox.ParentID]; !ok {
-			return Mailbox{}, ErrNotFound
-		}
+	if err := ValidateMailboxParent(mailbox, func(parentID string) bool {
+		_, ok := acct.mailboxes[parentID]
+		return ok
+	}); err != nil {
+		return Mailbox{}, err
 	}
 	acct.mailboxes[mailbox.ID] = mailbox
 	return mailbox, nil
@@ -142,14 +139,12 @@ func (s *MemoryStorage) CreateMailbox(_ context.Context, accountID string, mailb
 
 func (s *MemoryStorage) UpdateMailbox(_ context.Context, accountID string, mailbox Mailbox) (Mailbox, error) {
 	accountID = strings.ToLower(strings.TrimSpace(accountID))
-	mailbox.ID = NormalizeMailboxID(mailbox.ID)
-	mailbox.Name = strings.TrimSpace(mailbox.Name)
-	if mailbox.ParentID != nil {
-		p := NormalizeMailboxID(*mailbox.ParentID)
-		mailbox.ParentID = &p
-	}
-	if accountID == "" || mailbox.ID == "" || mailbox.Name == "" {
+	if accountID == "" {
 		return Mailbox{}, errors.New("invalid mailbox")
+	}
+	mailbox, err := NormalizeMailbox(mailbox)
+	if err != nil {
+		return Mailbox{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -158,13 +153,11 @@ func (s *MemoryStorage) UpdateMailbox(_ context.Context, accountID string, mailb
 	if _, ok := acct.mailboxes[mailbox.ID]; !ok {
 		return Mailbox{}, ErrNotFound
 	}
-	if mailbox.ParentID != nil && *mailbox.ParentID != "" {
-		if _, ok := acct.mailboxes[*mailbox.ParentID]; !ok {
-			return Mailbox{}, ErrNotFound
-		}
-		if *mailbox.ParentID == mailbox.ID {
-			return Mailbox{}, errors.New("mailbox cannot be its own parent")
-		}
+	if err := ValidateMailboxParent(mailbox, func(parentID string) bool {
+		_, ok := acct.mailboxes[parentID]
+		return ok
+	}); err != nil {
+		return Mailbox{}, err
 	}
 	acct.mailboxes[mailbox.ID] = mailbox
 	return mailbox, nil
@@ -297,26 +290,21 @@ func (s *MemoryStorage) ListEmails(_ context.Context, accountID, mailboxID strin
 		}
 		emails = append(emails, clone(e))
 	}
-	sort.Slice(emails, func(i, j int) bool {
-		if emails[i].Email.Date.Equal(emails[j].Email.Date) {
-			return emails[i].Ref.ID > emails[j].Ref.ID
-		}
-		return emails[i].Email.Date.After(emails[j].Email.Date)
-	})
+	SortListedEmails(emails)
 	return emails, nil
 }
 
 func (s *MemoryStorage) resolveEmailLocked(accountID, id string) (*memoryAccount, string, *email.ListedEmail, bool) {
-	accountID = strings.ToLower(strings.TrimSpace(accountID))
-	acct := s.accounts[accountID]
+	candidates, err := emailIDCandidates(accountID, id, nil, nil)
+	if err != nil {
+		return nil, "", nil, false
+	}
+	acct := s.accounts[candidates.AccountID]
 	if acct == nil {
 		return nil, "", nil, false
 	}
-	// Accept stable token or legacy full key token.
-	if e, ok := acct.emails[id]; ok {
-		return acct, id, e, true
-	}
-	if token, ok := email.DeliveredMessageToken(id); ok {
+	// Accept a stable token or the token from a legacy full delivered key.
+	for _, token := range candidates.Tokens {
 		if e, ok := acct.emails[token]; ok {
 			return acct, token, e, true
 		}
@@ -511,13 +499,4 @@ func cloneMessage(e *email.UserEmail) *email.UserEmail {
 	copied.Cc = append([]email.Address(nil), e.Cc...)
 	copied.Bcc = append([]email.Address(nil), e.Bcc...)
 	return &copied
-}
-
-// newMessageToken returns a stable id token for a stored message.
-func newMessageToken() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generate email id: %w", err)
-	}
-	return fmt.Sprintf("%x.eml", b), nil
 }

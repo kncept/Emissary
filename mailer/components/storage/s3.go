@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
-	"sort"
 	"strings"
 	"time"
 
@@ -32,8 +31,6 @@ type S3API interface {
 	CopyObject(ctx context.Context, params *s3.CopyObjectInput, optFns ...func(*s3.Options)) (*s3.CopyObjectOutput, error)
 }
 
-
-const s3MailboxRecordName = "mailbox.json"
 type S3Storage struct {
 	client S3API
 	bucket string
@@ -41,7 +38,8 @@ type S3Storage struct {
 }
 
 // RootObject is one object directly under the bucket root. The support API
-// reports these as unprocessed staging messages.
+// reports these as unprocessed staging messages. RootObject/ListRoot are the
+// one deliberately admin-facing capability on the storage interface.
 type RootObject struct {
 	Key          string
 	Size         int64
@@ -137,7 +135,7 @@ func (s *S3Storage) accountS3Prefix(accountID string) (string, error) {
 	if accountID == "" {
 		return "", fmt.Errorf("accountID is required")
 	}
-	return s.listPrefix() + email.MailboxKeyRoot + accountID + "/", nil
+	return s.objectKey(email.MailboxKeyRoot + accountID + "/"), nil
 }
 
 func (s *S3Storage) mailboxDirS3Prefix(accountID, mailboxID string) (string, error) {
@@ -157,7 +155,7 @@ func (s *S3Storage) mailboxRecordKey(accountID, mailboxID string) (string, error
 	if err != nil {
 		return "", err
 	}
-	return dir + s3MailboxRecordName, nil
+	return dir + mailboxRecordName, nil
 }
 
 func (s *S3Storage) ensureDefaultMailboxes(ctx context.Context, accountID string) error {
@@ -315,14 +313,9 @@ func (s *S3Storage) GetMailbox(ctx context.Context, accountID, mailboxID string)
 }
 
 func (s *S3Storage) CreateMailbox(ctx context.Context, accountID string, mailbox Mailbox) (Mailbox, error) {
-	mailbox.ID = NormalizeMailboxID(mailbox.ID)
-	mailbox.Name = strings.TrimSpace(mailbox.Name)
-	if mailbox.ParentID != nil {
-		p := NormalizeMailboxID(*mailbox.ParentID)
-		mailbox.ParentID = &p
-	}
-	if mailbox.ID == "" || mailbox.Name == "" {
-		return Mailbox{}, errors.New("invalid mailbox")
+	mailbox, err := NormalizeMailbox(mailbox)
+	if err != nil {
+		return Mailbox{}, err
 	}
 	if err := s.ensureDefaultMailboxes(ctx, accountID); err != nil {
 		return Mailbox{}, err
@@ -330,10 +323,11 @@ func (s *S3Storage) CreateMailbox(ctx context.Context, accountID string, mailbox
 	if _, err := s.readMailboxRecord(ctx, accountID, mailbox.ID); err == nil {
 		return Mailbox{}, ErrMailboxExists
 	}
-	if mailbox.ParentID != nil && *mailbox.ParentID != "" {
-		if _, err := s.readMailboxRecord(ctx, accountID, *mailbox.ParentID); err != nil {
-			return Mailbox{}, ErrNotFound
-		}
+	if err := ValidateMailboxParent(mailbox, func(parentID string) bool {
+		_, err := s.readMailboxRecord(ctx, accountID, parentID)
+		return err == nil
+	}); err != nil {
+		return Mailbox{}, err
 	}
 	dir, err := s.mailboxDirS3Prefix(accountID, mailbox.ID)
 	if err != nil {
@@ -349,14 +343,9 @@ func (s *S3Storage) CreateMailbox(ctx context.Context, accountID string, mailbox
 }
 
 func (s *S3Storage) UpdateMailbox(ctx context.Context, accountID string, mailbox Mailbox) (Mailbox, error) {
-	mailbox.ID = NormalizeMailboxID(mailbox.ID)
-	mailbox.Name = strings.TrimSpace(mailbox.Name)
-	if mailbox.ParentID != nil {
-		p := NormalizeMailboxID(*mailbox.ParentID)
-		mailbox.ParentID = &p
-	}
-	if mailbox.ID == "" || mailbox.Name == "" {
-		return Mailbox{}, errors.New("invalid mailbox")
+	mailbox, err := NormalizeMailbox(mailbox)
+	if err != nil {
+		return Mailbox{}, err
 	}
 	if err := s.ensureDefaultMailboxes(ctx, accountID); err != nil {
 		return Mailbox{}, err
@@ -364,13 +353,11 @@ func (s *S3Storage) UpdateMailbox(ctx context.Context, accountID string, mailbox
 	if _, err := s.readMailboxRecord(ctx, accountID, mailbox.ID); err != nil {
 		return Mailbox{}, ErrNotFound
 	}
-	if mailbox.ParentID != nil && *mailbox.ParentID != "" {
-		if *mailbox.ParentID == mailbox.ID {
-			return Mailbox{}, errors.New("mailbox cannot be its own parent")
-		}
-		if _, err := s.readMailboxRecord(ctx, accountID, *mailbox.ParentID); err != nil {
-			return Mailbox{}, ErrNotFound
-		}
+	if err := ValidateMailboxParent(mailbox, func(parentID string) bool {
+		_, err := s.readMailboxRecord(ctx, accountID, parentID)
+		return err == nil
+	}); err != nil {
+		return Mailbox{}, err
 	}
 	if err := s.writeMailboxRecord(ctx, accountID, mailbox); err != nil {
 		return Mailbox{}, err
@@ -424,7 +411,7 @@ func (s *S3Storage) DeleteMailbox(ctx context.Context, accountID, mailboxID stri
 				return ErrMailboxNotEmpty
 			}
 			base := path.Base(key)
-			if base == s3MailboxRecordName || strings.HasSuffix(key, "/") {
+			if base == mailboxRecordName || strings.HasSuffix(key, "/") {
 				toDelete = append(toDelete, types.ObjectIdentifier{Key: obj.Key})
 			}
 		}
@@ -485,12 +472,7 @@ func (s *S3Storage) ListEmails(ctx context.Context, accountID, mailboxID string)
 			emails = append(emails, message)
 		}
 	}
-	sort.Slice(emails, func(i, j int) bool {
-		if emails[i].Email.Date.Equal(emails[j].Email.Date) {
-			return emails[i].Ref.ID > emails[j].Ref.ID
-		}
-		return emails[i].Email.Date.After(emails[j].Email.Date)
-	})
+	SortListedEmails(emails)
 	slog.Debug("S3: listed mail", "prefix", prefix, "count", len(emails))
 	return emails, nil
 }
@@ -500,6 +482,12 @@ func (s *S3Storage) listPrefix() string {
 		return ""
 	}
 	return s.prefix + "/"
+}
+
+// objectKey maps a logical storage key to the physical key in the configured
+// bucket prefix. All S3 message operations go through this one place.
+func (s *S3Storage) objectKey(logicalKey string) string {
+	return s.listPrefix() + logicalKey
 }
 
 func (s *S3Storage) getRawByExactKey(ctx context.Context, key string) ([]byte, error) {
@@ -523,55 +511,44 @@ func (s *S3Storage) getEmailByKey(ctx context.Context, key string) (*email.Liste
 	if err != nil {
 		return nil, err
 	}
-	parsedEmail, err := email.Parse(key, strings.NewReader(string(body)))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse email %q: %w", key, err)
-	}
-	ref := email.EmailRefFromID(key)
-	return &email.ListedEmail{Ref: &ref, Email: parsedEmail}, nil
+	return listedEmailFromRaw(key, body)
 }
 
 func (s *S3Storage) resolveEmailKey(ctx context.Context, accountID, id string) (string, error) {
-	accountID = strings.ToLower(strings.TrimSpace(accountID))
-	if accountID == "" {
-		return "", ErrNotFound
-	}
-	id = strings.TrimPrefix(strings.TrimSpace(id), "/")
-	if id == "" {
-		return "", ErrNotFound
-	}
-	// Full delivered key.
-	if email.IsDeliveredMessageKey(id) {
-		acct, _, ok := email.MailboxFromID(id)
-		if !ok || !strings.EqualFold(acct, accountID) {
-			return "", ErrNotFound
-		}
-		// Try as-is and with storage prefix.
-		for _, key := range []string{id, s.listPrefix() + id} {
-			if key == "" {
-				continue
-			}
-			_, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
-			if err == nil {
-				return key, nil
-			}
-			if !isObjectNotFound(err) {
-				return "", err
-			}
-		}
-		return "", ErrNotFound
-	}
-	// Stable token: search across account mailboxes.
-	mailboxes, err := s.ListMailboxes(ctx, accountID)
+	candidates, err := emailIDCandidates(accountID, id, s.objectKey, nil)
 	if err != nil {
 		return "", err
 	}
+	// A full delivered key needs no mailbox scan.
+	if len(candidates.Keys) > 0 {
+		return s.probeEmailKeys(ctx, candidates.Keys)
+	}
+
+	mailboxes, err := s.ListMailboxes(ctx, candidates.AccountID)
+	if err != nil {
+		return "", err
+	}
+	mailboxIDs := make([]string, 0, len(mailboxes))
 	for _, mb := range mailboxes {
-		key := email.DeliveredMessageKey(accountID, mb.ID, id)
-		full := s.listPrefix() + key
-		_, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(full)})
+		mailboxIDs = append(mailboxIDs, mb.ID)
+	}
+	candidates, err = emailIDCandidates(accountID, id, s.objectKey, mailboxIDs)
+	if err != nil {
+		return "", err
+	}
+	return s.probeEmailKeys(ctx, candidates.Keys)
+}
+
+// probeEmailKeys checks each candidate in order. A genuine backend error
+// aborts the lookup; only a missing object moves on to the next candidate.
+func (s *S3Storage) probeEmailKeys(ctx context.Context, keys []string) (string, error) {
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		_, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
 		if err == nil {
-			return full, nil
+			return key, nil
 		}
 		if !isObjectNotFound(err) {
 			return "", err
@@ -650,22 +627,13 @@ func (s *S3Storage) AddEmail(ctx context.Context, accountID, mailboxID string, m
 		return "", ErrNotFound
 	}
 
-	tokenBase, err := newMessageToken()
+	token, stored, err := newDeliveredToken(message, raw)
 	if err != nil {
 		return "", err
 	}
-	timestamp := message.Date
-	if timestamp.IsZero() {
-		timestamp = time.Now().UTC()
-	}
-	token := fmt.Sprintf("%s_%s", email.FormatDeliveredTimestamp(timestamp), tokenBase)
 	logicalKey := email.DeliveredMessageKey(accountID, mailboxID, token)
-	key := s.listPrefix() + logicalKey
+	key := s.objectKey(logicalKey)
 
-	stored := raw
-	if stored == nil {
-		stored = email.RawFromUserEmail(message)
-	}
 	slog.Debug("S3: storing email", "key", key, "account", accountID, "mailbox", mailboxID, "rawBytes", len(stored))
 	if _, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(s.bucket),
@@ -699,7 +667,7 @@ func (s *S3Storage) MoveEmail(ctx context.Context, accountID, id, destMailboxID 
 		return nil, ErrNotFound
 	}
 	destLogical := email.DeliveredMessageKey(accountID, destMailboxID, token)
-	destKey := s.listPrefix() + destLogical
+	destKey := s.objectKey(destLogical)
 	if destKey == srcKey {
 		return s.getEmailByKey(ctx, srcKey)
 	}
@@ -735,21 +703,4 @@ func (s *S3Storage) DeleteEmail(ctx context.Context, accountID, id string) error
 		return fmt.Errorf("failed to delete object %q: %w", key, err)
 	}
 	return nil
-}
-
-
-type SESClient struct {
-	client *s3.Client
-}
-
-func NewSESClient(region string) (*SESClient, error) {
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(region))
-	if err != nil {
-		return nil, fmt.Errorf("failed to load AWS config: %w", err)
-	}
-	return &SESClient{client: s3.NewFromConfig(cfg)}, nil
-}
-
-func (s *SESClient) SendEmail(ctx context.Context, from, to, subject, body string) error {
-	return fmt.Errorf("SES sending not fully implemented - use AWS SES v2 SDK")
 }
