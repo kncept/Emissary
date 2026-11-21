@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -71,8 +72,8 @@ func mailboxDirKey(accountID, mailboxID string) (string, error) {
 		return "", err
 	}
 	mailboxID = NormalizeMailboxID(mailboxID)
-	if mailboxID == "" {
-		return "", errors.New("mailboxID is required")
+	if !IsMailboxDirectory(mailboxID) {
+		return "", errors.New("invalid mailboxID")
 	}
 	return prefix + mailboxID + "/", nil
 }
@@ -207,7 +208,7 @@ func (s *FileStorage) ListMailboxes(_ context.Context, accountID string) ([]Mail
 			continue
 		}
 		id := NormalizeMailboxID(entry.Name())
-		if id == "" || seen[id] {
+		if !IsMailboxDirectory(id) || seen[id] {
 			continue
 		}
 		mb, err := s.readMailboxRecord(accountID, id)
@@ -454,7 +455,7 @@ func (s *FileStorage) listMailboxIDsLocked(accountID string) ([]string, error) {
 			continue
 		}
 		id := NormalizeMailboxID(entry.Name())
-		if id == "" || seen[id] {
+		if !IsMailboxDirectory(id) || seen[id] {
 			continue
 		}
 		seen[id] = true
@@ -726,6 +727,251 @@ func (s *FileStorage) DeleteDraft(_ context.Context, sessionID, id string) error
 	defer s.mu.Unlock()
 	if err := os.Remove(objectPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete draft %q: %w", key, err)
+	}
+	return nil
+}
+
+// PutBlob implements BlobStore. The body lives at
+// users/<account>/_blobs/<id> with a small JSON metadata sidecar.
+func (s *FileStorage) PutBlob(_ context.Context, accountID, contentType string, data []byte) (Blob, error) {
+	account, err := canonicalBlobAccount(accountID)
+	if err != nil {
+		return Blob{}, err
+	}
+	if err := validateBlobData(data); err != nil {
+		return Blob{}, err
+	}
+	key, err := blobObjectKey(account, BlobID(data))
+	if err != nil {
+		return Blob{}, err
+	}
+	objectPath, err := s.objectPath(key)
+	if err != nil {
+		return Blob{}, err
+	}
+	metaPath, err := s.objectPath(key + blobMetadataSuffix)
+	if err != nil {
+		return Blob{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(objectPath), 0755); err != nil {
+		return Blob{}, err
+	}
+	if info, err := os.Stat(objectPath); err == nil && !info.IsDir() {
+		if existing, metaErr := s.readBlobMetadata(metaPath); metaErr == nil {
+			return existing, nil
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return Blob{}, err
+	}
+
+	meta := Blob{
+		ID:        path.Base(key),
+		AccountID: account,
+		Type:      normalizeBlobType(contentType),
+		Size:      int64(len(data)),
+	}
+	if err := fsutil.WriteFileAtomically(objectPath, data, 0644); err != nil {
+		return Blob{}, fmt.Errorf("failed to store blob %q: %w", key, err)
+	}
+	body, err := json.Marshal(meta)
+	if err != nil {
+		return Blob{}, err
+	}
+	if err := fsutil.WriteFileAtomically(metaPath, body, 0644); err != nil {
+		return Blob{}, fmt.Errorf("failed to store blob metadata %q: %w", key, err)
+	}
+	return meta, nil
+}
+
+func (s *FileStorage) readBlobMetadata(path string) (Blob, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Blob{}, ErrNotFound
+		}
+		return Blob{}, err
+	}
+	var meta Blob
+	if err := json.Unmarshal(body, &meta); err != nil {
+		return Blob{}, err
+	}
+	return meta, nil
+}
+
+// GetBlob implements BlobStore, falling back to delivered email bytes because
+// JMAP Email objects expose their raw message as a blobId.
+func (s *FileStorage) GetBlob(ctx context.Context, accountID, blobID string) (Blob, []byte, error) {
+	id, err := normalizeBlobID(blobID)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	account, err := canonicalBlobAccount(accountID)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	key, err := blobObjectKey(account, id)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	objectPath, err := s.objectPath(key)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	metaPath, err := s.objectPath(key + blobMetadataSuffix)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+
+	s.mu.RLock()
+	info, statErr := os.Stat(objectPath)
+	var data []byte
+	if statErr == nil && !info.IsDir() {
+		if int64(info.Size()) > email.MaxPartSize() {
+			s.mu.RUnlock()
+			return Blob{}, nil, fmt.Errorf("blob %q exceeds maximum size of %d bytes", key, email.MaxPartSize())
+		}
+		data, statErr = os.ReadFile(objectPath)
+	}
+	s.mu.RUnlock()
+	if statErr == nil {
+		meta, metaErr := s.readBlobMetadata(metaPath)
+		if metaErr != nil {
+			meta = Blob{ID: id, AccountID: account, Type: defaultBlobType, Size: int64(len(data))}
+		}
+		return meta, data, nil
+	}
+	if !os.IsNotExist(statErr) {
+		return Blob{}, nil, statErr
+	}
+
+	raw, err := s.GetEmailRaw(ctx, account, id)
+	if err != nil {
+		return Blob{}, nil, ErrNotFound
+	}
+	return Blob{
+		ID:          id,
+		AccountID:   account,
+		Type:        emailBlobType,
+		Size:        int64(len(raw)),
+		EmailBacked: true,
+	}, raw, nil
+}
+
+// DeleteBlob implements BlobStore. Email-backed blobs are deliberately left
+// untouched: destroying a message is an Email/set operation, not Blob/copy.
+func (s *FileStorage) DeleteBlob(_ context.Context, accountID, blobID string) error {
+	id, err := normalizeBlobID(blobID)
+	if err != nil {
+		return err
+	}
+	account, err := canonicalBlobAccount(accountID)
+	if err != nil {
+		return err
+	}
+	key, err := blobObjectKey(account, id)
+	if err != nil {
+		return err
+	}
+	objectPath, err := s.objectPath(key)
+	if err != nil {
+		return err
+	}
+	metaPath, err := s.objectPath(key + blobMetadataSuffix)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	info, err := os.Stat(objectPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if info.IsDir() {
+		return ErrNotFound
+	}
+	if err := os.Remove(objectPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Remove(metaPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func (s *FileStorage) pushSubscriptionsKey(credentialID string) (string, error) {
+	if err := validateSessionID(credentialID); err != nil {
+		return "", err
+	}
+	return sessionObjectKey(credentialID, "push-subscriptions.json")
+}
+
+// LoadPushSubscriptions implements PushSubscriptionStore.
+func (s *FileStorage) LoadPushSubscriptions(_ context.Context, credentialID string) ([]PushSubscription, error) {
+	key, err := s.pushSubscriptionsKey(credentialID)
+	if err != nil {
+		return nil, err
+	}
+	objectPath, err := s.objectPath(key)
+	if err != nil {
+		return nil, err
+	}
+	body, err := os.ReadFile(objectPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []PushSubscription{}, nil
+		}
+		return nil, err
+	}
+	var subscriptions []PushSubscription
+	if err := json.Unmarshal(body, &subscriptions); err != nil {
+		return nil, fmt.Errorf("failed to parse push subscriptions %q: %w", key, err)
+	}
+	return subscriptions, nil
+}
+
+// SavePushSubscriptions implements PushSubscriptionStore.
+func (s *FileStorage) SavePushSubscriptions(_ context.Context, credentialID string, subscriptions []PushSubscription) error {
+	key, err := s.pushSubscriptionsKey(credentialID)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(subscriptions)
+	if err != nil {
+		return fmt.Errorf("marshal push subscriptions: %w", err)
+	}
+	objectPath, err := s.objectPath(key)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(objectPath), 0700); err != nil {
+		return err
+	}
+	return fsutil.WriteFileAtomically(objectPath, body, 0600)
+}
+
+// DeletePushSubscriptions implements PushSubscriptionStore.
+func (s *FileStorage) DeletePushSubscriptions(_ context.Context, credentialID string) error {
+	key, err := s.pushSubscriptionsKey(credentialID)
+	if err != nil {
+		return err
+	}
+	objectPath, err := s.objectPath(key)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := os.Remove(objectPath); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }

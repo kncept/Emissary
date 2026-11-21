@@ -18,6 +18,12 @@ type memoryAccount struct {
 	// emails keyed by stable message id within the account.
 	emails map[string]*email.ListedEmail
 	raw    map[string][]byte
+	blobs  map[string]*memoryBlob
+}
+
+type memoryBlob struct {
+	meta Blob
+	data []byte
 }
 
 // MemoryStorage is a small in-memory store. It is useful for local
@@ -28,6 +34,7 @@ type MemoryStorage struct {
 	drafts            map[string]map[string][]byte
 	sessionIDs        map[string]map[string]string
 	jmapStates        map[string]jmapStateRecord
+	pushSubscriptions map[string][]PushSubscription
 	jmapStateRevision uint64
 }
 
@@ -39,10 +46,11 @@ type jmapStateRecord struct {
 
 func NewMemoryStorage() *MemoryStorage {
 	return &MemoryStorage{
-		accounts:   make(map[string]*memoryAccount),
-		drafts:     make(map[string]map[string][]byte),
-		sessionIDs: make(map[string]map[string]string),
-		jmapStates: make(map[string]jmapStateRecord),
+		accounts:          make(map[string]*memoryAccount),
+		drafts:            make(map[string]map[string][]byte),
+		sessionIDs:        make(map[string]map[string]string),
+		jmapStates:        make(map[string]jmapStateRecord),
+		pushSubscriptions: make(map[string][]PushSubscription),
 	}
 }
 
@@ -61,6 +69,7 @@ func (s *MemoryStorage) accountLocked(accountID string) *memoryAccount {
 			mailboxes: make(map[string]Mailbox),
 			emails:    make(map[string]*email.ListedEmail),
 			raw:       make(map[string][]byte),
+			blobs:     make(map[string]*memoryBlob),
 		}
 		s.accounts[accountID] = acct
 	}
@@ -446,6 +455,134 @@ func (s *MemoryStorage) SaveCreatedIDs(_ context.Context, sessionID string, ids 
 		copy[id] = real
 	}
 	s.sessionIDs[sessionID] = copy
+	return nil
+}
+
+// PutBlob implements BlobStore. Blobs are content-addressed so repeated puts
+// are idempotent.
+func (s *MemoryStorage) PutBlob(_ context.Context, accountID, contentType string, data []byte) (Blob, error) {
+	account, err := canonicalBlobAccount(accountID)
+	if err != nil {
+		return Blob{}, err
+	}
+	if err := validateBlobData(data); err != nil {
+		return Blob{}, err
+	}
+	id := BlobID(data)
+	meta := Blob{
+		ID:        id,
+		AccountID: account,
+		Type:      normalizeBlobType(contentType),
+		Size:      int64(len(data)),
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	acct := s.accountLocked(account)
+	if existing, ok := acct.blobs[id]; ok {
+		return existing.meta, nil
+	}
+	acct.blobs[id] = &memoryBlob{meta: meta, data: append([]byte(nil), data...)}
+	return meta, nil
+}
+
+// GetBlob implements BlobStore. Delivered email bytes are also valid blobs:
+// JMAP exposes an Email's blobId, so Blob/copy must be able to read them.
+func (s *MemoryStorage) GetBlob(ctx context.Context, accountID, blobID string) (Blob, []byte, error) {
+	id, err := normalizeBlobID(blobID)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	account, err := canonicalBlobAccount(accountID)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+
+	s.mu.RLock()
+	acct := s.accounts[account]
+	var blob *memoryBlob
+	if acct != nil {
+		blob = acct.blobs[id]
+	}
+	var meta Blob
+	var data []byte
+	if blob != nil {
+		meta = blob.meta
+		data = append([]byte(nil), blob.data...)
+	}
+	s.mu.RUnlock()
+	if blob != nil {
+		return meta, data, nil
+	}
+
+	raw, err := s.GetEmailRaw(ctx, account, id)
+	if err != nil {
+		return Blob{}, nil, ErrNotFound
+	}
+	return Blob{
+		ID:          id,
+		AccountID:   account,
+		Type:        emailBlobType,
+		Size:        int64(len(raw)),
+		EmailBacked: true,
+	}, raw, nil
+}
+
+// DeleteBlob implements BlobStore. It only removes generic _blobs entries;
+// deleting an email-backed blob would destroy a message and is not allowed.
+func (s *MemoryStorage) DeleteBlob(_ context.Context, accountID, blobID string) error {
+	id, err := normalizeBlobID(blobID)
+	if err != nil {
+		return err
+	}
+	account, err := canonicalBlobAccount(accountID)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	acct := s.accounts[account]
+	if acct == nil {
+		return ErrNotFound
+	}
+	if _, ok := acct.blobs[id]; !ok {
+		return ErrNotFound
+	}
+	delete(acct.blobs, id)
+	return nil
+}
+
+// LoadPushSubscriptions implements PushSubscriptionStore.
+func (s *MemoryStorage) LoadPushSubscriptions(_ context.Context, credentialID string) ([]PushSubscription, error) {
+	if err := validateSessionID(credentialID); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return clonePushSubscriptions(s.pushSubscriptions[credentialID]), nil
+}
+
+// SavePushSubscriptions implements PushSubscriptionStore.
+func (s *MemoryStorage) SavePushSubscriptions(_ context.Context, credentialID string, subscriptions []PushSubscription) error {
+	if err := validateSessionID(credentialID); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pushSubscriptions[credentialID] = clonePushSubscriptions(subscriptions)
+	return nil
+}
+
+// DeletePushSubscriptions implements PushSubscriptionStore. It is called when
+// the authenticating credentials are revoked, so no subscription remains for
+// a session that can no longer be used.
+func (s *MemoryStorage) DeletePushSubscriptions(_ context.Context, credentialID string) error {
+	if err := validateSessionID(credentialID); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.pushSubscriptions, credentialID)
 	return nil
 }
 

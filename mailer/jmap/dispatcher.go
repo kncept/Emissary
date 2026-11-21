@@ -505,24 +505,40 @@ func (d *Dispatcher) errorResponse(call Invocation, err error) Invocation {
 	return d.errorResponseFromError(call.Name, call.ClientID, err)
 }
 
+var jmapErrorTypes = map[string]bool{
+	"accountNotFound":             true,
+	"accountNotSupportedByMethod": true,
+	"accountReadOnly":             true,
+	"cannotCalculateChanges":      true,
+	"forbidden":                   true,
+	"fromAccountNotFound":         true,
+	"invalidArguments":            true,
+	"invalidResultReference":      true,
+	"notFound":                    true,
+	"requestTooLarge":             true,
+	"serverFail":                  true,
+	"serverUnavailable":           true,
+	"stateMismatch":               true,
+	"tooLarge":                    true,
+	"unknownMethod":               true,
+}
+
+func jmapErrorType(err error) string {
+	prefix, _, found := strings.Cut(err.Error(), ": ")
+	if found && jmapErrorTypes[prefix] {
+		return prefix
+	}
+	return "unknownMethod"
+}
+
 func (d *Dispatcher) errorResponseFromError(methodName, clientID string, err error) Invocation {
 	// JMAP error response format: ["error", {type: "...", description: "..."}, clientId]
 	description, _ := json.Marshal(err.Error())
 
-	// Determine error type from error message
-	errorType := "unknownMethod"
-	errMsg := err.Error()
-	if strings.HasPrefix(errMsg, "forbidden:") {
-		errorType = "forbidden"
-	} else if strings.HasPrefix(errMsg, "notFound:") {
-		errorType = "notFound"
-	} else if strings.HasPrefix(errMsg, "invalidArguments:") {
-		errorType = "invalidArguments"
-	} else if strings.HasPrefix(errMsg, "cannotCalculateChanges:") {
-		errorType = "cannotCalculateChanges"
-	} else if strings.HasPrefix(errMsg, "invalidResultReference:") {
-		errorType = "invalidResultReference"
-	}
+	// Method errors carry their JMAP type as the prefix before ": ". Keeping
+	// the mapping table here means every subpackage can use base.Errorf
+	// without adding another special case to the dispatcher.
+	errorType := jmapErrorType(err)
 
 	errorArgs := map[string]json.RawMessage{
 		"type":        json.RawMessage(`"` + errorType + `"`),

@@ -40,6 +40,8 @@ type (
 // Each subpackage owns its object types and logic; this package only wires them
 // to the shared dependencies and the dispatcher.
 type Handler struct {
+	deps *base.Deps
+
 	coreMethods
 	mailboxMethods
 	threadMethods
@@ -58,6 +60,7 @@ func NewHandler(store storage.Storage, meta metadata.MetadataStore, userMgr user
 	deps := base.NewDeps(store, meta, userMgr, mailSender, validators...)
 	emails := email.New(deps)
 	return &Handler{
+		deps:                    deps,
 		coreMethods:             core.New(),
 		mailboxMethods:          mailbox.New(deps),
 		threadMethods:           thread.New(deps),
@@ -68,6 +71,15 @@ func NewHandler(store storage.Storage, meta metadata.MetadataStore, userMgr user
 		vacationMethods:         vacationresponse.New(deps),
 		pushSubscriptionMethods: pushsubscription.New(deps),
 		blobMethods:             blob.New(deps),
+	}
+}
+
+// SetSessionChecker wires session-expiry detection into the PushSubscription
+// handlers. The HTTP composition root calls this with the configured session
+// store; unit tests that omit it keep their existing behaviour.
+func (h *Handler) SetSessionChecker(checker base.SessionChecker) {
+	if h != nil && h.deps != nil {
+		h.deps.CheckSession = checker
 	}
 }
 

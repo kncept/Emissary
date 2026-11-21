@@ -259,6 +259,171 @@ func TestStorageContractResolveEmailByID(t *testing.T) {
 	}
 }
 
+func TestStorageContractBlobs(t *testing.T) {
+	ctx := context.Background()
+	accountID := contractAccountID()
+	data := []byte("immutable blob bytes")
+
+	for _, backend := range contractBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			store := backend.open(t)
+
+			meta, err := store.PutBlob(ctx, accountID, "text/plain", data)
+			if err != nil {
+				t.Fatalf("PutBlob() error = %v", err)
+			}
+			if meta.ID != BlobID(data) || meta.Type != "text/plain" || meta.Size != int64(len(data)) {
+				t.Errorf("PutBlob() = %+v, want content id %q", meta, BlobID(data))
+			}
+
+			again, err := store.PutBlob(ctx, accountID, "text/plain", data)
+			if err != nil || again.ID != meta.ID {
+				t.Errorf("second PutBlob() = %+v, %v, want idempotent %q", again, err, meta.ID)
+			}
+
+			gotMeta, gotData, err := store.GetBlob(ctx, accountID, meta.ID)
+			if err != nil {
+				t.Fatalf("GetBlob(%q) error = %v", meta.ID, err)
+			}
+			if gotMeta.ID != meta.ID || !bytes.Equal(gotData, data) {
+				t.Errorf("GetBlob(%q) = %+v, %q", meta.ID, gotMeta, gotData)
+			}
+
+			if _, _, err := store.GetBlob(ctx, "other@example.com", meta.ID); !errors.Is(err, ErrNotFound) {
+				t.Errorf("GetBlob() from another account error = %v, want ErrNotFound", err)
+			}
+			if _, _, err := store.GetBlob(ctx, accountID, "../escape"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("GetBlob() with malformed id error = %v, want ErrNotFound", err)
+			}
+
+			// Delivered email bytes are blobs too: JMAP Email objects expose
+			// their opaque id as a blobId.
+			raw := []byte("From: sender@example.com\r\nSubject: Blob fallback\r\n\r\nbody\r\n")
+			emailID := addContractEmail(t, store, accountID, "inbox", "Blob fallback", time.Now(), raw)
+			emailBlob, emailData, err := store.GetBlob(ctx, accountID, emailID)
+			if err != nil {
+				t.Fatalf("GetBlob(email id) error = %v", err)
+			}
+			if !emailBlob.EmailBacked || !bytes.Equal(emailData, raw) {
+				t.Errorf("GetBlob(email id) = %+v, %q, want raw email bytes", emailBlob, emailData)
+			}
+			if err := store.DeleteBlob(ctx, accountID, emailID); !errors.Is(err, ErrNotFound) {
+				t.Errorf("DeleteBlob(email id) error = %v, want ErrNotFound", err)
+			}
+
+			if err := store.DeleteBlob(ctx, accountID, meta.ID); err != nil {
+				t.Fatalf("DeleteBlob(%q) error = %v", meta.ID, err)
+			}
+			if _, _, err := store.GetBlob(ctx, accountID, meta.ID); !errors.Is(err, ErrNotFound) {
+				t.Errorf("GetBlob() after delete error = %v, want ErrNotFound", err)
+			}
+
+			mailboxes, err := store.ListMailboxes(ctx, accountID)
+			if err != nil {
+				t.Fatalf("ListMailboxes() after PutBlob error = %v", err)
+			}
+			for _, mailbox := range mailboxes {
+				if mailbox.ID == blobDirName {
+					t.Errorf("ListMailboxes() exposed reserved mailbox %q", mailbox.ID)
+				}
+			}
+
+			// Reserving _blobs must not break otherwise valid mailbox names.
+			if _, err := store.CreateMailbox(ctx, accountID, Mailbox{ID: "_archive", Name: "Archive"}); err != nil {
+				t.Fatalf("CreateMailbox(_archive) error = %v", err)
+			}
+			if _, err := store.AddEmail(ctx, accountID, "_archive", &email.UserEmail{
+				From:    email.Address{Address: "sender@example.com"},
+				Subject: "Underscore mailbox",
+			}, []byte("From: sender@example.com\r\nSubject: Underscore mailbox\r\n\r\nbody\r\n")); err != nil {
+				t.Fatalf("AddEmail() to _archive mailbox error = %v", err)
+			}
+			mailboxes, err = store.ListMailboxes(ctx, accountID)
+			if err != nil {
+				t.Fatalf("ListMailboxes() after _archive error = %v", err)
+			}
+			found := false
+			for _, mailbox := range mailboxes {
+				if mailbox.ID == "_archive" {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("ListMailboxes() dropped the _archive mailbox: %+v", mailboxes)
+			}
+		})
+	}
+}
+
+func TestStorageContractPushSubscriptions(t *testing.T) {
+	ctx := context.Background()
+	credentialA, credentialB := "contract-cred-a", "contract-cred-b"
+
+	for _, backend := range contractBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			store := backend.open(t)
+			a := []PushSubscription{{
+				ID:               "sub-a1",
+				CredentialID:     credentialA,
+				DeviceClientID:   "device-a",
+				URL:              "https://push.example/a",
+				VerificationCode: "code-a",
+				Expires:          "2027-01-01T00:00:00Z",
+			}}
+			b := []PushSubscription{{
+				ID:             "sub-b1",
+				CredentialID:   credentialB,
+				DeviceClientID: "device-b",
+				URL:            "https://push.example/b",
+			}}
+			if err := store.SavePushSubscriptions(ctx, credentialA, a); err != nil {
+				t.Fatalf("SavePushSubscriptions(A) error = %v", err)
+			}
+			if err := store.SavePushSubscriptions(ctx, credentialB, b); err != nil {
+				t.Fatalf("SavePushSubscriptions(B) error = %v", err)
+			}
+
+			loadedA, err := store.LoadPushSubscriptions(ctx, credentialA)
+			if err != nil {
+				t.Fatalf("LoadPushSubscriptions(A) error = %v", err)
+			}
+			if len(loadedA) != 1 || loadedA[0].ID != "sub-a1" || loadedA[0].VerificationCode != "code-a" {
+				t.Fatalf("LoadPushSubscriptions(A) = %+v", loadedA)
+			}
+			loadedA[0].Keys = &PushKeys{P256DH: "mutated", Auth: "mutated"}
+			loadedA[0].DeviceClientID = "mutated"
+			reloaded, err := store.LoadPushSubscriptions(ctx, credentialA)
+			if err != nil {
+				t.Fatalf("second LoadPushSubscriptions(A) error = %v", err)
+			}
+			if reloaded[0].Keys != nil || reloaded[0].DeviceClientID != "device-a" {
+				t.Errorf("storage returned aliased subscription state: %+v", reloaded[0])
+			}
+
+			loadedB, err := store.LoadPushSubscriptions(ctx, credentialB)
+			if err != nil || len(loadedB) != 1 || loadedB[0].ID != "sub-b1" {
+				t.Errorf("LoadPushSubscriptions(B) = %+v, %v", loadedB, err)
+			}
+
+			if err := store.DeletePushSubscriptions(ctx, credentialA); err != nil {
+				t.Fatalf("DeletePushSubscriptions(A) error = %v", err)
+			}
+			loadedA, err = store.LoadPushSubscriptions(ctx, credentialA)
+			if err != nil || len(loadedA) != 0 {
+				t.Errorf("LoadPushSubscriptions(A) after delete = %+v, %v", loadedA, err)
+			}
+			loadedB, err = store.LoadPushSubscriptions(ctx, credentialB)
+			if err != nil || len(loadedB) != 1 {
+				t.Errorf("DeletePushSubscriptions(A) affected B: %+v, %v", loadedB, err)
+			}
+
+			if _, err := store.LoadPushSubscriptions(ctx, "bad/credential"); err == nil {
+				t.Error("LoadPushSubscriptions() accepted an invalid credential id")
+			}
+		})
+	}
+}
+
 func TestStorageContractAddAndMoveEmail(t *testing.T) {
 	ctx := context.Background()
 	accountID := contractAccountID()

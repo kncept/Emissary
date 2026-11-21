@@ -194,3 +194,31 @@ func TestFileStorageRejectsTraversal(t *testing.T) {
 		t.Error("PutDraft with traversal session succeeded")
 	}
 }
+
+func TestFileStorageBlobLivesUnderReservedDirectory(t *testing.T) {
+	ctx := context.Background()
+	store, root := newTestFileStorage(t)
+	data := []byte("reserved directory bytes")
+
+	meta, err := store.PutBlob(ctx, "Alice@Example.com", "text/plain", data)
+	if err != nil {
+		t.Fatalf("PutBlob() error = %v", err)
+	}
+	path := filepath.Join(root, "users", "alice@example.com", "_blobs", meta.ID)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("blob file %q missing: %v", path, err)
+	}
+	if _, err := os.Stat(path + blobMetadataSuffix); err != nil {
+		t.Fatalf("blob metadata %q missing: %v", path+blobMetadataSuffix, err)
+	}
+
+	mailboxes, err := store.ListMailboxes(ctx, "alice@example.com")
+	if err != nil {
+		t.Fatalf("ListMailboxes() error = %v", err)
+	}
+	for _, mailbox := range mailboxes {
+		if mailbox.ID == "_blobs" {
+			t.Error("ListMailboxes() exposed _blobs as a mailbox")
+		}
+	}
+}

@@ -3,6 +3,7 @@ package jmap
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -371,6 +372,22 @@ func (s *pushMethodHandler) PushSubscriptionSet(_ context.Context, _ string, arg
 		return nil, err
 	}
 	return json.RawMessage(`{"created":{},"updated":{},"destroyed":[],"notCreated":{},"notUpdated":{},"notDestroyed":{}}`), nil
+}
+
+func TestJMAPErrorTypeMapping(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{errors.New("fromAccountNotFound: no such account"), "fromAccountNotFound"},
+		{errors.New("stateMismatch: stale state"), "stateMismatch"},
+		{errors.New("forbidden: denied"), "forbidden"},
+		{errors.New("wrap: unknown prefix"), "unknownMethod"},
+	} {
+		if got := jmapErrorType(tc.err); got != tc.want {
+			t.Errorf("jmapErrorType(%q) = %q, want %q", tc.err, got, tc.want)
+		}
+	}
 }
 
 func TestPushSubscriptionMethodsReceiveFullArguments(t *testing.T) {

@@ -29,6 +29,7 @@ const (
 	StateIdentity     StateKind = "identity"
 	StateSubmission   StateKind = "submission"
 	StateVacation     StateKind = "vacation"
+	StateBlob         StateKind = "blob"
 
 	// maxChangeEntries bounds the persisted delta log. Callers whose state is
 	// older than the retained window get cannotCalculateChanges, which RFC

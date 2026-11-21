@@ -26,6 +26,7 @@ import (
 	"github.com/kncept/Emissary/mailer/gui"
 	"github.com/kncept/Emissary/mailer/identity"
 	"github.com/kncept/Emissary/mailer/jmap"
+	"github.com/kncept/Emissary/mailer/jmap/pushsubscription"
 	"github.com/kncept/Emissary/mailer/receiver"
 )
 
@@ -194,6 +195,10 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 		fromValidator = identity.NewValidator(opts.SESIdentityLister)
 	}
 	jmapHandler := jmap.NewHandler(emailStore, b.Metadata, userManager, mailSender, fromValidator)
+	jmapHandler.SetSessionChecker(func(ctx context.Context, sid string) bool {
+		_, err := b.Session.Get(ctx, sid)
+		return err == nil
+	})
 	dispatcher := jmap.NewDispatcher(jmapHandler, emailStore)
 
 	mux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, r *http.Request) {
@@ -354,7 +359,7 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 		})))
 	}
 
-	mux.Handle("POST /api/auth/logout", requireAuth(authenticator, handleLogout(authenticator)))
+	mux.Handle("POST /api/auth/logout", requireAuth(authenticator, handleLogout(authenticator, emailStore)))
 
 	notFound := func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
@@ -732,7 +737,7 @@ func handleRawEmail(w http.ResponseWriter, r *http.Request, store storage.Storag
 	}
 }
 
-func handleLogout(authenticator *auth.Authenticator) http.HandlerFunc {
+func handleLogout(authenticator *auth.Authenticator, store storage.PushSubscriptionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
 		if claims == nil || claims.SID == "" {
@@ -743,6 +748,13 @@ func handleLogout(authenticator *auth.Authenticator) http.HandlerFunc {
 			logRequestError(r, "revoke session", err)
 			writeError(w, http.StatusInternalServerError, "failed to log out")
 			return
+		}
+		// RFC 8620 section 7.2 requires subscriptions to be destroyed when
+		// the credentials that created them are revoked. Log an error rather
+		// than failing the logout: the session is already gone, so the
+		// subscriptions are unreachable even if cleanup cannot run.
+		if err := pushsubscription.DestroyForCredential(r.Context(), store); err != nil {
+			logRequestWarn(r, "destroy push subscriptions on logout", err)
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 	}

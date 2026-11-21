@@ -52,6 +52,15 @@ func NormalizeMailboxID(id string) string {
 	return strings.ToLower(strings.TrimSpace(id))
 }
 
+// IsMailboxDirectory reports whether a directory under a user's account root
+// can be a mailbox. The exact name "_blobs" is reserved for generic blob
+// storage; other mailbox names are left untouched so existing mailboxes whose
+// names begin with an underscore keep working.
+func IsMailboxDirectory(name string) bool {
+	name = NormalizeMailboxID(name)
+	return name != "" && name != blobDirName
+}
+
 // NormalizeEmailID canonicalizes an email identifier into the stable, opaque,
 // URL-safe id exposed by the Storage API and to JMAP clients. It is the email
 // counterpart of NormalizeMailboxID: callers may pass an opaque id, a legacy
@@ -148,4 +157,6 @@ type Storage interface {
 	DraftStorage
 	SessionStateStore
 	JMAPStateStore
+	BlobStore
+	PushSubscriptionStore
 }

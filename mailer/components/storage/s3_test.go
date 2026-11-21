@@ -541,3 +541,30 @@ func TestS3StorageSessionKeysRejectTraversal(t *testing.T) {
 		t.Error("GetDraft() with traversal id succeeded")
 	}
 }
+
+func TestS3StorageBlobLivesUnderReservedDirectory(t *testing.T) {
+	ctx := context.Background()
+	fake := newFakeS3(map[string]string{})
+	store := &S3Storage{client: fake, bucket: "mail-bucket"}
+	data := []byte("s3 blob bytes")
+
+	meta, err := store.PutBlob(ctx, "Alice@Example.com", "text/plain", data)
+	if err != nil {
+		t.Fatalf("PutBlob() error = %v", err)
+	}
+	objectKey := "users/alice@example.com/_blobs/" + meta.ID
+	if _, ok := fake.objects[objectKey]; !ok {
+		t.Fatalf("blob was not stored under %q: %v", objectKey, fake.objects)
+	}
+	if _, ok := fake.objects[objectKey+blobMetadataSuffix]; !ok {
+		t.Fatalf("blob metadata was not stored under %q", objectKey+blobMetadataSuffix)
+	}
+
+	mailboxes, err := store.ListMailboxes(ctx, "alice@example.com")
+	if err != nil {
+		t.Fatalf("ListMailboxes() error = %v", err)
+	}
+	if len(mailboxes) != len(DefaultMailboxes()) {
+		t.Errorf("ListMailboxes() = %d, want only default mailboxes", len(mailboxes))
+	}
+}

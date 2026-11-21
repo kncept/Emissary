@@ -19,6 +19,7 @@ import (
 	"github.com/kncept/Emissary/mailer/components/storage"
 	"github.com/kncept/Emissary/mailer/components/usermanager"
 	"github.com/kncept/Emissary/mailer/email"
+	"github.com/kncept/Emissary/mailer/jmap/pushsubscription"
 )
 
 // EmailResponse is the test DTO used to decode email results from JMAP responses.
@@ -1616,6 +1617,34 @@ func TestRefreshEndpoint(t *testing.T) {
 			t.Errorf("status = %d, want 401 (body %s)", w.Code, w.Body.String())
 		}
 	})
+}
+
+func TestLogoutDestroysPushSubscriptionsForSession(t *testing.T) {
+	h, store, _ := newHandlerForTest(t, "secret")
+	status, accessToken, response := login(t, h, "admin", "secret")
+	if status != http.StatusOK {
+		t.Fatalf("login status = %d, want 200 (body %v)", status, response)
+	}
+	claims := decodeAuthClaims(t, accessToken)
+	ctx := auth.ContextWithClaims(context.Background(), &claims)
+	credential := pushsubscription.CredentialID(ctx)
+	if err := store.SavePushSubscriptions(ctx, credential, []storage.PushSubscription{{
+		ID:             "push-1",
+		CredentialID:   credential,
+		DeviceClientID: "device-1",
+		URL:            "https://push.example/session",
+	}}); err != nil {
+		t.Fatalf("SavePushSubscriptions() error = %v", err)
+	}
+
+	w := request(t, h, http.MethodPost, "/api/auth/logout", "", accessToken)
+	if w.Code != http.StatusOK {
+		t.Fatalf("logout status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	remaining, err := store.LoadPushSubscriptions(ctx, credential)
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("subscriptions after logout = %+v, %v, want none", remaining, err)
+	}
 }
 
 func TestLogoutEndpoint(t *testing.T) {

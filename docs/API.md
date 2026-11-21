@@ -550,8 +550,9 @@ Example response:
 
 ### Property selection on `/get` methods
 
-The implemented `/get` methods (`Mailbox/get`, `Thread/get`, `Email/get` and
-`Identity/get`) accept the RFC 8620 `properties` argument. When it is omitted
+The implemented `/get` methods (`Mailbox/get`, `Thread/get`, `Email/get`,
+`Identity/get` and `PushSubscription/get`) accept the RFC 8620 `properties`
+argument. When it is omitted
 or `null`, every property is returned; when it is an array, only those
 properties are returned and `id` is always included (so `properties: []`
 returns just `id`). Unknown property names are rejected with a method-level
@@ -569,6 +570,36 @@ requested selection.
 
 Dynamic `header:` property names are accepted syntactically; this server does
 not retain raw headers, so no value is returned for them today.
+
+### Blob/copy
+
+`Blob/copy` copies immutable blobs between different accounts; the source and
+destination account ids must differ. The optional `ifFromInState` argument
+guards the source account's blob state using `stateMismatch`, and
+`onSuccessDestroyOriginal` removes a copied generic blob from the source.
+Failures are reported per blob in `notCopied`; an email-backed blob cannot be
+destroyed this way and is reported in the `notDestroyed` map instead. An
+unknown source account produces the method-level `fromAccountNotFound` error.
+Blob bytes are stored under `users/<account>/_blobs`, which is reserved and
+never exposed as a mailbox.
+
+### PushSubscription
+
+`PushSubscription/get` and `PushSubscription/set` are account-less: they do not
+accept or return `accountId` or state tokens. Subscriptions are scoped to the
+authentication credentials that created them, are removed on logout, and are
+pruned at expiry. The private `url` and `keys` properties are never returned;
+explicitly requesting either from `/get` is rejected with `forbidden`, and
+attempting to update either is rejected with `invalidProperties`.
+
+On creation the server immediately POSTs a `PushVerification` object to the
+registered URL with `Content-Type: application/json` and an RFC 8030 `TTL`
+header. The client must update the subscription with the delivered
+`verificationCode` before any other push is made to that URL. Push URLs must be
+HTTPS and resolve to public addresses; private, loopback and link-local targets
+are rejected to prevent server-side request forgery, and redirects are
+revalidated. Subscriptions are capped per credential and subject to a creation
+rate limit. EventSource and `StateChange` delivery remain unimplemented.
 
 ### Result references
 

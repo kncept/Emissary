@@ -144,8 +144,8 @@ func (s *S3Storage) mailboxDirS3Prefix(accountID, mailboxID string) (string, err
 		return "", err
 	}
 	mailboxID = NormalizeMailboxID(mailboxID)
-	if mailboxID == "" {
-		return "", fmt.Errorf("mailboxID is required")
+	if !IsMailboxDirectory(mailboxID) {
+		return "", fmt.Errorf("invalid mailboxID")
 	}
 	return root + mailboxID + "/", nil
 }
@@ -282,7 +282,7 @@ func (s *S3Storage) ListMailboxes(ctx context.Context, accountID string) ([]Mail
 			}
 			rest := strings.TrimPrefix(*cp.Prefix, root)
 			id := NormalizeMailboxID(strings.TrimSuffix(rest, "/"))
-			if id == "" {
+			if !IsMailboxDirectory(id) {
 				continue
 			}
 			mb, err := s.readMailboxRecord(ctx, accountID, id)
