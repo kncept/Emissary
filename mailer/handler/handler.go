@@ -57,6 +57,10 @@ const (
 	jmapMaxMailboxDepth      = 1
 	jmapMaxSizeMailboxName   = 255
 
+	// RFC 8620 section 2 requires at least the case-insensitive ASCII
+	// collation used by the server's string comparisons.
+	jmapCollationASCIICasemap = "i;ascii-casemap"
+
 	// Resource URL templates. These match the routes registered in
 	// newHandler and include the variables required by RFC 8620 section 2.
 	// The type variable is placed in the query because media types contain
@@ -516,7 +520,7 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 		"maxCallsInRequest":     jmapMaxCallsInRequest,
 		"maxObjectsInGet":       jmapMaxObjectsInGet,
 		"maxObjectsInSet":       jmapMaxObjectsInSet,
-		"collationAlgorithms":   []string{},
+		"collationAlgorithms":   []string{jmapCollationASCIICasemap},
 	}
 	// The Mail and Submission capability values in the Session object are
 	// empty objects; their limits are reported per account (RFC 8621 1.3).

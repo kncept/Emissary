@@ -91,6 +91,29 @@ func TestJMAPSessionAdvertisesConfiguredLimits(t *testing.T) {
 	token := jmapToken(t, h)
 	session := fetchJMAPSession(t, h, token)
 
+	// No stubbed or unsupported capability may be advertised to clients.
+	w := request(t, h, http.MethodGet, "/.well-known/jmap", "", token)
+	var rawSession struct {
+		Capabilities map[string]json.RawMessage `json:"capabilities"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &rawSession); err != nil {
+		t.Fatalf("decode raw session: %v (body %s)", err, w.Body.String())
+	}
+	wantCapabilities := []string{
+		"urn:ietf:params:jmap:core",
+		"urn:ietf:params:jmap:mail",
+		"urn:ietf:params:jmap:submission",
+		"urn:ietf:params:jmap:vacationresponse",
+	}
+	if len(rawSession.Capabilities) != len(wantCapabilities) {
+		t.Errorf("capabilities = %v, want exactly %v", rawSession.Capabilities, wantCapabilities)
+	}
+	for _, capability := range wantCapabilities {
+		if _, ok := rawSession.Capabilities[capability]; !ok {
+			t.Errorf("capabilities is missing %q", capability)
+		}
+	}
+
 	for name, core := range map[string]map[string]any{
 		"capabilities":        session.Capabilities.Core,
 		"accountCapabilities": session.Accounts["admin"].AccountCapabilities.Core,
@@ -192,8 +215,11 @@ func assertCoreCapabilities(t *testing.T, name string, core map[string]any, limi
 		}
 	}
 	algorithms, ok := core["collationAlgorithms"].([]any)
-	if !ok || len(algorithms) != 0 {
-		t.Errorf("%s[collationAlgorithms] = %v, want empty array", name, core["collationAlgorithms"])
+	if !ok || len(algorithms) != 1 || algorithms[0] != jmapCollationASCIICasemap {
+		t.Errorf("%s[collationAlgorithms] = %v, want [%s]", name, core["collationAlgorithms"], jmapCollationASCIICasemap)
+	}
+	if _, ok := core["maxSizeAttachmentsPerEmail"]; ok {
+		t.Errorf("%s must not include maxSizeAttachmentsPerEmail; it belongs in mail accountCapabilities", name)
 	}
 	if len(core) != len(want)+1 {
 		t.Errorf("%s has unexpected keys: %v", name, core)

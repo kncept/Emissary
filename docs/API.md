@@ -412,10 +412,11 @@ and API endpoints:
       "maxCallsInRequest": 16,
       "maxObjectsInGet": 500,
       "maxObjectsInSet": 500,
-      "collationAlgorithms": []
+      "collationAlgorithms": ["i;ascii-casemap"]
     },
     "urn:ietf:params:jmap:mail": {},
-    "urn:ietf:params:jmap:submission": {}
+    "urn:ietf:params:jmap:submission": {},
+    "urn:ietf:params:jmap:vacationresponse": {}
   },
   "accounts": {
     "user@example.com": {
@@ -431,7 +432,7 @@ and API endpoints:
           "maxCallsInRequest": 16,
           "maxObjectsInGet": 500,
           "maxObjectsInSet": 500,
-          "collationAlgorithms": []
+          "collationAlgorithms": ["i;ascii-casemap"]
         },
         "urn:ietf:params:jmap:mail": {
           "maxMailboxesPerEmail": 1,
@@ -444,13 +445,15 @@ and API endpoints:
         "urn:ietf:params:jmap:submission": {
           "maxDelayedSend": 0,
           "submissionExtensions": {}
-        }
+        },
+        "urn:ietf:params:jmap:vacationresponse": {}
       }
     }
   },
   "primaryAccounts": {
     "urn:ietf:params:jmap:mail": "user@example.com",
-    "urn:ietf:params:jmap:submission": "user@example.com"
+    "urn:ietf:params:jmap:submission": "user@example.com",
+    "urn:ietf:params:jmap:vacationresponse": "user@example.com"
   },
   "username": "user@example.com",
   "apiUrl": "/api/jmap/",
@@ -465,8 +468,8 @@ remaining limits describe the current server: binary upload is not
 implemented (`maxConcurrentUpload: 0`), mailboxes are persisted but only
 top-level mailboxes are supported (`maxMailboxDepth: 1`), each email is in a
 single mailbox (`maxMailboxesPerEmail: 1`), only `receivedAt` sorting is
-supported, delayed send is not supported, and no RFC 4790 collation
-algorithms are advertised. The VacationResponse capability is advertised and
+supported, delayed send is not supported, and `i;ascii-casemap` is the
+advertised RFC 4790 collation algorithm. The VacationResponse capability is advertised and
 its singleton settings are persisted in the account's `user.json` record;
 automatic replies follow RFC 3834 loop-prevention rules.
 
