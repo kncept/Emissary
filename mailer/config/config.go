@@ -123,7 +123,7 @@ func (c *ReceiverConfig) Validate() error {
 		if strings.TrimSpace(c.FilesystemDir) == "" {
 			return errors.New("receiver filesystem requires a directory (set RECEIVER_FILESYSTEM_DIR or FILESYSTEM_DIR)")
 		}
-	case "", "memory", "ddb", "dynamodb":
+	case "memory", "ddb", "dynamodb":
 	default:
 		return fmt.Errorf("unknown receiver type %q (want s3, filesystem, memory or ddb)", c.Type)
 	}
@@ -194,9 +194,9 @@ type UserManagerConfig struct {
 func (c *UserManagerConfig) Validate() error {
 	var errs []error
 	switch c.Type {
-	case "", "none", "ddb", "dynamodb", "filesystem", "ldap", "s3":
+	case "none", "ddb", "dynamodb", "filesystem", "ldap", "s3":
 	default:
-		errs = append(errs, fmt.Errorf("unknown user manager type %q (want none, ddb, filesystem, ldap or s3)", c.Type))
+		errs = append(errs, fmt.Errorf("unknown user manager type %q (want none, ddb, filesystem, ldap or s3); set it explicitly to opt into a local/no-op backend", c.Type))
 	}
 	if c.Type == "ldap" && c.LDAPURL == "" {
 		errs = append(errs, errors.New("user manager ldap requires a server URL (set LDAP_URL)"))
@@ -316,6 +316,115 @@ func (c *Config) ReceiverTableName() string {
 	return resolveDDBTable(c.Receiver.DdbTable, c.DDBTablePrefix, "receiver")
 }
 
+// backend records whether one implementation of a pluggable component has
+// configuration present in the environment.
+type backend struct {
+	name       string
+	configured bool
+}
+
+// backendResolver implements the single selection rule shared by every
+// pluggable component:
+//
+//  1. An explicitly configured selector (STORAGE, SENDER, ...) always wins.
+//  2. Otherwise the backend is chosen only when exactly one has configuration.
+//  3. No configuration, or configuration for several backends, is an error.
+//
+// Step 3 is deliberate: a deployment that forgets to configure a component
+// must fail loudly instead of silently losing mail with an in-memory store or
+// failing to deliver it with the log sender. Those local implementations are
+// still available, but only as an explicit opt-in.
+type backendResolver struct {
+	hasCreds       bool
+	tablePrefixSet bool // TABLE_PREFIX/DDB_TABLE_PREFIX set explicitly in the environment
+}
+
+// s3 is configured when AWS credentials are available and a bucket is set.
+// Every value it needs comes from static environment configuration.
+func (r backendResolver) s3(buckets ...string) backend {
+	configured := r.hasCreds
+	if configured {
+		configured = false
+		for _, bucket := range buckets {
+			if strings.TrimSpace(bucket) != "" {
+				configured = true
+				break
+			}
+		}
+	}
+	return backend{name: "s3", configured: configured}
+}
+
+// ddb is configured when AWS credentials are available and either this
+// component's table name or a table prefix was set explicitly in the
+// environment. The table name is passed in because each component has its own
+// override (DDB_TABLE, SESSION_TABLE, RECEIVER_TABLE, USER_TABLE).
+func (r backendResolver) ddb(table string) backend {
+	return backend{
+		name:       "ddb",
+		configured: r.hasCreds && (strings.TrimSpace(table) != "" || r.tablePrefixSet),
+	}
+}
+
+// filesystem is configured when one of the given root environment variables
+// is set. The shared FILESYSTEM_DIR default (~/.emissary) never counts.
+func (r backendResolver) filesystem(dirs ...string) backend {
+	return r.filesystemNamed("filesystem", dirs...)
+}
+
+// filesystemNamed is filesystem with the selector name used by components
+// (for example "file" for metadata) that call their filesystem backend "file".
+func (r backendResolver) filesystemNamed(name string, dirs ...string) backend {
+	configured := false
+	for _, dir := range dirs {
+		if strings.TrimSpace(dir) != "" {
+			configured = true
+			break
+		}
+	}
+	return backend{name: name, configured: configured}
+}
+
+// ses is configured when the SDK can supply AWS credentials (including IAM
+// roles that have no AWS_* environment variables).
+func (r backendResolver) ses() backend {
+	return backend{name: "aws-ses", configured: r.hasCreds}
+}
+
+// mta is configured when its port was set explicitly; MTA_PORT's default of
+// 25 does not count as configuration.
+func (r backendResolver) mta(port string) backend {
+	return backend{name: "mta", configured: strings.TrimSpace(port) != ""}
+}
+
+// ldap is configured when a server URL is set explicitly.
+func (r backendResolver) ldap(url string) backend {
+	return backend{name: "ldap", configured: strings.TrimSpace(url) != ""}
+}
+
+// selectType applies the shared rule to one component. noop names the explicit
+// local/no-op value (memory, log or none) shown in the error; hint lists the
+// environment configurations that count for this component.
+func (r backendResolver) selectType(component, selector, explicit, noop, hint string, candidates ...backend) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	var configured []string
+	for _, candidate := range candidates {
+		if candidate.configured {
+			configured = append(configured, candidate.name)
+		}
+	}
+	switch len(configured) {
+	case 1:
+		return configured[0], nil
+	case 0:
+		return "", fmt.Errorf("%s backend is not configured: set %s=%s to opt into the local/no-op implementation, or configure exactly one backend (%s)", component, selector, noop, hint)
+	default:
+		return "", fmt.Errorf("%s has configuration for multiple backends (%s): set %s explicitly to choose one", component, strings.Join(configured, ", "), selector)
+	}
+}
+
 // Load reads configuration from the environment. Values that name a Secrets
 // Manager secret are resolved; a failed resolution aborts startup instead of
 // leaking the ARN into a credential field. Pass a context for secret
@@ -357,11 +466,16 @@ func Load(ctx context.Context) (*Config, error) {
 	explicitFilesystemDir := get("FILESYSTEM_DIR")
 	explicitReceiverFilesystemDir := get("RECEIVER_FILESYSTEM_DIR")
 
-	// Determine if filesystem-backed stores are needed.
+	// Read every selector up front: backend resolution needs them all, and
+	// TABLE_PREFIX must be checked before its default is applied below.
 	storageType := strings.ToLower(strings.TrimSpace(get("STORAGE")))
-	userManagerType := strings.ToLower(strings.TrimSpace(get("USER_MANAGER")))
+	senderType := strings.ToLower(strings.TrimSpace(get("SENDER")))
 	receiverType := strings.ToLower(strings.TrimSpace(get("RECEIVER")))
 	metadataType := strings.ToLower(strings.TrimSpace(get("METADATA")))
+	sessionType := strings.ToLower(strings.TrimSpace(get("SESSION")))
+	userManagerType := strings.ToLower(strings.TrimSpace(get("USER_MANAGER")))
+	tablePrefixEnv := get("TABLE_PREFIX", "DDB_TABLE_PREFIX")
+	mtaPortEnv := get("MTA_PORT")
 
 	needsFilesystem := storageType == "filesystem" ||
 		userManagerType == "filesystem" ||
@@ -408,12 +522,12 @@ func Load(ctx context.Context) (*Config, error) {
 			JWTIssuer:   get("JWT_ISSUER"),
 		},
 		Storage: StorageConfig{
-			Type:          strings.ToLower(strings.TrimSpace(get("STORAGE"))),
+			Type:          storageType,
 			S3Bucket:      get("S3_BUCKET"),
 			FilesystemDir: filesystemDir,
 		},
 		Sender: SenderConfig{
-			Type:    strings.ToLower(strings.TrimSpace(get("SENDER"))),
+			Type:    senderType,
 			MTAPort: getDefault("25", "MTA_PORT"),
 		},
 		Receiver: ReceiverConfig{
@@ -424,13 +538,13 @@ func Load(ctx context.Context) (*Config, error) {
 			Region:        get("RECEIVER_REGION"),
 		},
 		Metadata: MetadataConfig{
-			Type:     strings.ToLower(strings.TrimSpace(get("METADATA"))),
+			Type:     metadataType,
 			DdbTable: get("DDB_TABLE"),
 			FilePath: get("METADATA_FILE"),
 			Region:   get("METADATA_REGION"),
 		},
 		Session: SessionConfig{
-			Type:     strings.ToLower(strings.TrimSpace(get("SESSION"))),
+			Type:     sessionType,
 			DdbTable: get("SESSION_TABLE"),
 			Region:   get("SESSION_REGION"),
 		},
@@ -484,94 +598,102 @@ func Load(ctx context.Context) (*Config, error) {
 		cfg.Server.JWTGenerated = true
 	}
 
-	// Storage defaults
-	if cfg.Storage.Type == "" {
-		if cfg.Storage.S3Bucket != "" {
-			cfg.Storage.Type = "s3"
-		} else {
-			cfg.Storage.Type = "memory"
-		}
-	}
-
-	// Only probe the SDK credential chain when a backend actually needs the
-	// answer: an explicit SENDER and RECEIVER must not add startup latency.
+	// Only probe the SDK credential chain when a selector is unset and a
+	// backend might therefore need the answer; explicit selectors must not add
+	// startup latency.
 	var hasCreds bool
-	if cfg.Sender.Type == "" || cfg.Receiver.Type == "" {
+	if storageType == "" || senderType == "" || receiverType == "" ||
+		metadataType == "" || sessionType == "" || userManagerType == "" {
 		hasCreds, err = hasAWSCredentials(ctx)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	// Sender defaults. SES is the natural outbound transport whenever the SDK
-	// can supply credentials, including IAM roles that are not visible as
-	// AWS_* environment variables. When no credentials are available at all,
-	// fall back to the log sender so local development works without AWS.
-	if cfg.Sender.Type == "" {
-		if hasCreds {
-			cfg.Sender.Type = "aws-ses"
-		} else {
-			slog.Warn("No AWS credentials detected; using the log sender. Replies and bounces will not be delivered. Set SENDER=aws-ses or SENDER=mta for real delivery")
-			cfg.Sender.Type = "log"
-		}
+	// Resolve every pluggable backend with the same rule: an explicit selector
+	// wins; otherwise exactly one configured backend is required. Missing or
+	// ambiguous configuration is an error instead of a silent memory/log
+	// fallback. The no-op implementations remain available as explicit choices.
+	resolver := backendResolver{hasCreds: hasCreds, tablePrefixSet: strings.TrimSpace(tablePrefixEnv) != ""}
+
+	if cfg.Storage.Type, err = resolver.selectType(
+		"storage", "STORAGE", cfg.Storage.Type, "memory",
+		"AWS credentials + S3_BUCKET (s3), FILESYSTEM_DIR (filesystem)",
+		resolver.s3(cfg.Storage.S3Bucket),
+		resolver.filesystem(explicitFilesystemDir),
+	); err != nil {
+		return nil, err
 	}
 
-	// Receiver config defaults. With AWS credentials and a mail bucket, the
-	// receiver routes from files under receiver/ in that bucket; without them
-	// it keeps its configuration in memory. An explicit RECEIVER always wins.
-	if cfg.Receiver.Type == "" {
-		if hasCreds && cfg.Storage.S3Bucket != "" {
-			cfg.Receiver.Type = "s3"
-		} else {
-			cfg.Receiver.Type = "memory"
-		}
+	if cfg.Sender.Type, err = resolver.selectType(
+		"sender", "SENDER", cfg.Sender.Type, "log",
+		"AWS credentials (aws-ses), MTA_PORT (mta)",
+		resolver.ses(),
+		resolver.mta(mtaPortEnv),
+	); err != nil {
+		return nil, err
 	}
-	// Receiver-specific targets default to the shared storage/filesystem
-	// settings so existing deployments keep working, while RECEIVER_BUCKET and
-	// RECEIVER_FILESYSTEM_DIR allow a dedicated rules store.
+
+	if cfg.Receiver.Type, err = resolver.selectType(
+		"receiver", "RECEIVER", cfg.Receiver.Type, "memory",
+		"AWS credentials + RECEIVER_BUCKET/S3_BUCKET (s3), RECEIVER_FILESYSTEM_DIR/FILESYSTEM_DIR (filesystem), AWS credentials + RECEIVER_TABLE/TABLE_PREFIX (ddb)",
+		resolver.s3(cfg.Receiver.S3Bucket, cfg.Storage.S3Bucket),
+		resolver.filesystem(explicitReceiverFilesystemDir, explicitFilesystemDir),
+		resolver.ddb(cfg.Receiver.DdbTable),
+	); err != nil {
+		return nil, err
+	}
+
+	if cfg.Metadata.Type, err = resolver.selectType(
+		"metadata", "METADATA", cfg.Metadata.Type, "memory",
+		"AWS credentials + DDB_TABLE/TABLE_PREFIX (ddb), METADATA_FILE/FILESYSTEM_DIR (file)",
+		resolver.ddb(cfg.Metadata.DdbTable),
+		resolver.filesystemNamed("file", cfg.Metadata.FilePath, explicitFilesystemDir),
+	); err != nil {
+		return nil, err
+	}
+
+	if cfg.Session.Type, err = resolver.selectType(
+		"session", "SESSION", cfg.Session.Type, "memory",
+		"AWS credentials + SESSION_TABLE/TABLE_PREFIX (ddb)",
+		resolver.ddb(cfg.Session.DdbTable),
+	); err != nil {
+		return nil, err
+	}
+
+	if cfg.UserManager.Type, err = resolver.selectType(
+		"user manager", "USER_MANAGER", cfg.UserManager.Type, "none",
+		"AWS credentials + S3_BUCKET (s3), FILESYSTEM_DIR (filesystem), AWS credentials + USER_TABLE/TABLE_PREFIX (ddb), LDAP_URL (ldap)",
+		resolver.s3(cfg.Storage.S3Bucket),
+		resolver.filesystem(explicitFilesystemDir),
+		resolver.ddb(cfg.UserManager.DdbTable),
+		resolver.ldap(cfg.UserManager.LDAPURL),
+	); err != nil {
+		return nil, err
+	}
+
+	// Component-specific targets default to the shared storage/filesystem
+	// settings. RECEIVER_BUCKET and RECEIVER_FILESYSTEM_DIR allow a dedicated
+	// rules store, as documented in docs/CONFIGURATION.md.
 	if cfg.Receiver.S3Bucket == "" {
 		cfg.Receiver.S3Bucket = cfg.Storage.S3Bucket
 	}
 	if cfg.Receiver.FilesystemDir == "" {
 		cfg.Receiver.FilesystemDir = filesystemDir
 	}
-
-	// Metadata defaults
-	if cfg.Metadata.Type == "" {
-		cfg.Metadata.Type = "memory"
-	}
 	if cfg.Metadata.Type == "file" && cfg.Metadata.FilePath == "" {
-		// METADATA_FILE still overrides this, but by default the file metadata
+		// METADATA_FILE still overrides this; by default the file metadata
 		// store uses one JSON file per email under FILESYSTEM_DIR/metadata.
 		cfg.Metadata.FilePath = cfg.FilesystemMetadataDir()
 	}
 	if cfg.Metadata.Region == "" {
 		cfg.Metadata.Region = cfg.AWSRegion
 	}
-
-	// User manager defaults. When no backend is selected, follow the
-	// storage backend: S3 mail storage implies the S3 user manager and
-	// filesystem mail storage implies the filesystem user manager.
-	if cfg.UserManager.Type == "" {
-		switch cfg.Storage.Type {
-		case "s3":
-			cfg.UserManager.Type = "s3"
-		case "filesystem":
-			cfg.UserManager.Type = "filesystem"
-		default:
-			cfg.UserManager.Type = "none"
-		}
-	}
 	if cfg.UserManager.Region == "" {
 		cfg.UserManager.Region = cfg.AWSRegion
 	}
 	if cfg.Receiver.Region == "" {
 		cfg.Receiver.Region = cfg.AWSRegion
-	}
-
-	// Session defaults
-	if cfg.Session.Type == "" {
-		cfg.Session.Type = "memory"
 	}
 	if cfg.Session.Region == "" {
 		cfg.Session.Region = cfg.AWSRegion
@@ -643,8 +765,8 @@ var credentialProbe = awsutil.HasCredentials
 // hasAWSCredentials reports whether AWS credentials are available. Environment
 // variables cover static keys, shared profiles, web identity and ECS task
 // roles; when none are present the SDK chain is probed so EC2 instance profiles
-// and other IAM roles are recognised instead of silently selecting the log
-// sender.
+// and other IAM roles are recognised as configuration instead of leaving an
+// AWS-backed component looking unconfigured.
 func hasAWSCredentials(ctx context.Context) (bool, error) {
 	accessKey, err := firstEnv(ctx, "AWS_ACCESS_KEY_ID")
 	if err != nil {

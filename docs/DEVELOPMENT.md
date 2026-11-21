@@ -131,12 +131,16 @@ STORAGE=memory ./run.sh run
 `run.sh run` builds first, then starts `.build/frontend`. It defaults
 `USERNAME=Emissary`, generates `PASSWORD` and `JWT_SECRET` when unset
 (printed at startup). `S3_BUCKET` must be set explicitly when using
-`STORAGE=s3` — set `STORAGE=memory` explicitly for an AWS-free run. Outbound
-mail uses the log sender by default (messages appear in stdout only); the From
-address always comes from the sending user rather than from configuration. For
-direct SMTP delivery set `SENDER=mta`; `MTA_PORT=1025` is handy with a local
-mail sink. See
-[CONFIGURATION.md](CONFIGURATION.md) for the full variable list and defaults.
+`STORAGE=s3`. When no backend configuration or selector is present, the runner
+explicitly sets every selector to a local/no-op value (`memory`, `log`,
+`none`); starting the binary directly requires those selectors to be set, or
+exactly one backend to be configured for each component. Outbound mail uses
+the log sender in that local runner setup (messages appear in stdout only);
+the From address always comes from the sending user rather than from
+configuration. For direct SMTP delivery set `SENDER=mta`; `MTA_PORT=1025` is
+handy with a local mail sink. See
+[CONFIGURATION.md](CONFIGURATION.md#backend-selection-all-pluggable-components)
+for the selection rules and variable list.
 
 For pure UI work, `cd frontend && npm run dev` starts the Vite dev
 server, but it does not proxy `/api` — end-to-end work happens against

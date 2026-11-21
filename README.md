@@ -31,9 +31,13 @@ tooling convention and the npm-script workaround.
 administrator. If `PASSWORD` is blank the administrator cannot log in,
 but other user managers can still authenticate ordinary users.
 
-The user manager is selected with `USER_MANAGER` (auto-selected to `s3`
-when `STORAGE=s3`, or `filesystem` when `STORAGE=filesystem`, and no backend
-is chosen):
+The user manager is selected with `USER_MANAGER`. Set it explicitly, or leave
+it unset only when exactly one backend has configuration (for example AWS
+credentials plus `S3_BUCKET` selects `s3`). Missing or ambiguous configuration
+is a startup error, and `none` must be chosen explicitly for an
+administrator-only deployment. The same rule applies to `STORAGE`, `SENDER`,
+`RECEIVER`, `METADATA` and `SESSION`; see
+[Backend selection](docs/CONFIGURATION.md#backend-selection-all-pluggable-components).
 
 | Type | Description |
 | --- | --- |

@@ -51,9 +51,9 @@ AWS, not the application directly):
 | `S3_BUCKET` | no | Use this existing bucket for inbound mail instead of the created one. |
 | `USERNAME` | no | Administrator username baked into the Lambda env. |
 | `PASSWORD` | no | Administrator password baked into the Lambda env (a warning is printed when unset). |
-| `USER_MANAGER` | no | User-manager backend for the deployed app. Unset → the app auto-selects `s3` (storage is always S3 in a deploy); users then live as `users/<email>/user.json` objects in the mail bucket. When set to `ddb`, a users table is created. |
-| `SESSION` | no | Session backend for the deployed app. When set to `ddb`, a sessions table is created. |
-| `RECEIVER` | no | Receiver config backend. Unset → the app uses `s3` (routing files in the mail bucket). When set to `ddb`/`dynamodb`, a receiver table is created for the inbound routing rules. |
+| `USER_MANAGER` | no | User-manager backend for the deployed app. Unset → CDK passes `s3` (storage is always S3 in a deploy); users then live as `users/<email>/user.json` objects in the mail bucket. When set to `ddb`, a users table is created. |
+| `SESSION` | no | Session backend for the deployed app. Unset → CDK passes `memory`. When set to `ddb`, a sessions table is created. |
+| `RECEIVER` | no | Receiver config backend. Unset → CDK passes `s3` (routing files in the mail bucket). When set to `ddb`/`dynamodb`, a receiver table is created for the inbound routing rules. |
 | `RECEIVER_BUCKET` | no | S3 bucket for receiver rules when `RECEIVER=s3` (default: the mail bucket). IAM access is granted on both buckets. |
 | `RECEIVER_TABLE` | no | Override the generated receiver table name (default `<TABLE_PREFIX>receiver`). |
 | `JWT_SECRET` | no | Signing secret for the app. Unset → CDK generates a 64-character secret in Secrets Manager. |
@@ -103,10 +103,14 @@ Skipped (with a warning) unless `mailer/cmd/frontend/bootstrap` exists.
 
 - Lambda function `emissary-<domain>`: custom runtime
   `provided.al2023`, x86_64, 512 MB, 30s timeout, handler `bootstrap`.
-  Its environment pins `STORAGE=s3`, `SENDER=aws-ses`, `METADATA=ddb`
-  and passes the bucket, `TABLE_PREFIX`, the resolved DynamoDB table
-  names (including `RECEIVER_TABLE`/`RECEIVER_REGION` when `RECEIVER=ddb`),
-  domain, admin credentials (password only if provided),
+  Its environment sets **every** pluggable selector explicitly:
+  `STORAGE=s3`, `SENDER=aws-ses`, `METADATA` (default `memory`),
+  `SESSION` (default `memory`), `USER_MANAGER` (default `s3`) and
+  `RECEIVER` (default `s3`). This is required because `config.Load` no
+  longer infers a backend from `TABLE_PREFIX` when several backends have
+  configuration. It also passes the bucket, `TABLE_PREFIX`, the resolved
+  DynamoDB table names (including `RECEIVER_TABLE`/`RECEIVER_REGION` when
+  `RECEIVER=ddb`), domain, admin credentials (password only if provided),
   `JWT_SECRET` as a Secrets Manager ARN, the JWT audience/issuer, and
   `LOG_LEVEL` (default `ERROR`).
 - Lambda function `emissary-<domain>-s3-receiver`: custom runtime

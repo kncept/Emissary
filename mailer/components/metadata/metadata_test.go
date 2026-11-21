@@ -497,12 +497,15 @@ func TestFileMetadata_AtomicWrite(t *testing.T) {
 }
 
 func TestNewStore(t *testing.T) {
-	store, err := NewStore("", "", "", "")
+	if _, err := NewStore("", "", "", ""); err == nil {
+		t.Error("NewStore(\"\") should fail: memory must be selected explicitly")
+	}
+	store, err := NewStore("memory", "", "", "")
 	if err != nil {
-		t.Fatalf("NewStore() error = %v", err)
+		t.Fatalf("NewStore(memory) error = %v", err)
 	}
 	if store.Name() != "memory" {
-		t.Errorf("default store = %q, want memory", store.Name())
+		t.Errorf("explicit memory store = %q, want memory", store.Name())
 	}
 
 	tmpFile := t.TempDir() + "/metadata.json"

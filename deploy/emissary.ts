@@ -406,8 +406,8 @@ async function emailClientStack(
   // Receiver routing rules can also live in DynamoDB. Parse RECEIVER the same
   // way as mailer/config ("dynamodb" is an alias for "ddb"). Only the "id"
   // partition key is needed: each item holds one identity's rules in a
-  // "rules" list. The app defaults to S3 in a deploy, so this table is only
-  // created when RECEIVER explicitly selects DynamoDB.
+  // "rules" list. CDK passes S3 unless RECEIVER overrides it, so this table is
+  // only created when RECEIVER explicitly selects DynamoDB.
   const receiverType = (env.RECEIVER || '').toLowerCase().trim()
   const usesDdbReceiver = receiverType === 'ddb' || receiverType === 'dynamodb'
   let receiverTableName = env.RECEIVER_TABLE || ''
@@ -421,6 +421,13 @@ async function emailClientStack(
     })
     receiverTable.grantReadWriteData(role)
   }
+
+  // Selectors are always passed to the app explicitly. config.Load no longer
+  // infers a backend when it is omitted, and errors when more than one backend
+  // has configuration (TABLE_PREFIX is always set in a deployment).
+  const sessionSelector = env.SESSION || 'memory'
+  const userManagerSelector = env.USER_MANAGER || 's3'
+  const receiverSelector = env.RECEIVER || (receiverTableName ? 'ddb' : 's3')
 
   const authUsername = env.USERNAME || ''
   const authPassword = env.PASSWORD || ''
@@ -494,9 +501,9 @@ async function emailClientStack(
       LOG_LEVEL: env.LOG_LEVEL || 'ERROR',
       // Same MIME/request cap for every Lambda; config validates the value.
       MAX_FILESIZE: env.MAX_FILESIZE || '10485760',
-      // Only set when provided: with STORAGE=s3 the app auto-selects the
-      // s3 user manager when USER_MANAGER is unset.
-      ...(env.USER_MANAGER ? { USER_MANAGER: env.USER_MANAGER } : {}),
+      // Every pluggable backend is selected explicitly; see the selectors
+      // computed above.
+      USER_MANAGER: userManagerSelector,
       STORAGE: 's3',
       S3_BUCKET: inboundEmailBucketName,
       SENDER: 'aws-ses',
@@ -504,9 +511,10 @@ async function emailClientStack(
       TABLE_PREFIX: ddbTablePrefix,
       ...(usesDdbMetadata ? { DDB_TABLE: metadataTableName } : {}),
       METADATA_REGION: awsRegion,
-      ...(sessionTableName ? { SESSION: env.SESSION || 'ddb', SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
+      SESSION: sessionSelector,
+      ...(sessionTableName ? { SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
       ...(userTableName ? { USER_TABLE: userTableName, USER_REGION: awsRegion } : {}),
-      ...(env.RECEIVER ? { RECEIVER: env.RECEIVER } : {}),
+      RECEIVER: receiverSelector,
       RECEIVER_BUCKET: receiverBucketName,
       ...(receiverTableName ? { RECEIVER_TABLE: receiverTableName, RECEIVER_REGION: awsRegion } : {}),
       ...(authPassword ? { PASSWORD: authPassword } : {}),
@@ -590,9 +598,9 @@ async function emailClientStack(
       LOG_LEVEL: env.LOG_LEVEL || 'ERROR',
       // Same MIME/request cap for every Lambda; config validates the value.
       MAX_FILESIZE: env.MAX_FILESIZE || '10485760',
-      // Only set when provided: with STORAGE=s3 the app auto-selects the
-      // s3 user manager when USER_MANAGER is unset.
-      ...(env.USER_MANAGER ? { USER_MANAGER: env.USER_MANAGER } : {}),
+      // Every pluggable backend is selected explicitly; see the selectors
+      // computed above.
+      USER_MANAGER: userManagerSelector,
       STORAGE: 's3',
       S3_BUCKET: inboundEmailBucketName,
       SENDER: 'aws-ses',
@@ -600,9 +608,10 @@ async function emailClientStack(
       TABLE_PREFIX: ddbTablePrefix,
       ...(usesDdbMetadata ? { DDB_TABLE: metadataTableName } : {}),
       METADATA_REGION: awsRegion,
-      ...(sessionTableName ? { SESSION: env.SESSION || 'ddb', SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
+      SESSION: sessionSelector,
+      ...(sessionTableName ? { SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
       ...(userTableName ? { USER_TABLE: userTableName, USER_REGION: awsRegion } : {}),
-      ...(env.RECEIVER ? { RECEIVER: env.RECEIVER } : {}),
+      RECEIVER: receiverSelector,
       RECEIVER_BUCKET: receiverBucketName,
       ...(receiverTableName ? { RECEIVER_TABLE: receiverTableName, RECEIVER_REGION: awsRegion } : {}),
       ...(authPassword ? { PASSWORD: authPassword } : {}),

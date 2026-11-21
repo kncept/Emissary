@@ -30,17 +30,18 @@ type StorageOptions struct {
 	FilesystemDir string
 }
 
-// Storage creates the storage backend named by opts.Type.
+// Storage creates the storage backend named by opts.Type. The type must be
+// explicit: an empty or unknown value is an error, not a silent default.
 func Storage(opts StorageOptions) (storage.Storage, error) {
 	switch normalize(opts.Type) {
 	case "memory":
 		return storage.NewMemoryStorage(), nil
 	case "filesystem":
 		return storage.NewFileStorage(opts.FilesystemDir)
-	case "", "s3":
+	case "s3":
 		return storage.NewS3Storage(opts.S3Bucket)
 	default:
-		return nil, fmt.Errorf("unknown storage type %q", opts.Type)
+		return nil, fmt.Errorf("unknown storage type %q (set STORAGE explicitly)", opts.Type)
 	}
 }
 
@@ -50,17 +51,18 @@ type SenderOptions struct {
 	MTAPort string
 }
 
-// Sender creates the outbound sender named by opts.Type.
+// Sender creates the outbound sender named by opts.Type. The type must be
+// explicit: an empty or unknown value is an error, not a silent default.
 func Sender(ctx context.Context, opts SenderOptions) (sender.Sender, error) {
 	switch normalize(opts.Type) {
 	case "aws-ses", "ses":
 		return sender.NewAwsSesSender(ctx)
 	case "mta":
 		return sender.NewMtaSender(opts.MTAPort), nil
-	case "", "log":
+	case "log":
 		return sender.NewLogSender(), nil
 	default:
-		return nil, fmt.Errorf("unknown sender type %q", opts.Type)
+		return nil, fmt.Errorf("unknown sender type %q (set SENDER explicitly)", opts.Type)
 	}
 }
 
@@ -72,15 +74,16 @@ type SessionOptions struct {
 	Region    string
 }
 
-// Session creates the session store named by opts.Type.
+// Session creates the session store named by opts.Type. The type must be
+// explicit: an empty or unknown value is an error, not a silent default.
 func Session(opts SessionOptions) (session.SessionStore, error) {
 	switch normalize(opts.Type) {
-	case "", "memory":
+	case "memory":
 		return session.NewMemorySessionStore(), nil
 	case "ddb", "dynamodb":
 		return session.NewDdbSessionStore(opts.TableName, opts.Region)
 	default:
-		return nil, fmt.Errorf("unknown session type %q", opts.Type)
+		return nil, fmt.Errorf("unknown session type %q (set SESSION explicitly)", opts.Type)
 	}
 }
 

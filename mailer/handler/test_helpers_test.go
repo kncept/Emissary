@@ -136,8 +136,30 @@ func (tc handlerTestConfig) build(t *testing.T) (*config.Config, *configvendor.B
 		DDBTablePrefix: tc.DDBTablePrefix,
 		MaxFileSize:    tc.MaxFileSize,
 	}
-	// config.Load applies both fallbacks; mirror them for tests that set only
-	// the shared storage/filesystem settings.
+	// This adapter bypasses config.Load, so tests must state the selectors
+	// they want. Where a test injects a fake instead, choose the equivalent
+	// local/no-op selector for the config reported to the handler; nothing is
+	// inferred by the factories any more.
+	if tc.Storage == nil && cfg.Storage.Type == "" {
+		cfg.Storage.Type = "memory"
+	}
+	if tc.Metadata == nil && cfg.Metadata.Type == "" {
+		cfg.Metadata.Type = "memory"
+	}
+	if tc.Session == nil && cfg.Session.Type == "" {
+		cfg.Session.Type = "memory"
+	}
+	if tc.Sender == nil && cfg.Sender.Type == "" {
+		cfg.Sender.Type = "log"
+	}
+	if tc.UserManager == nil && cfg.UserManager.Type == "" {
+		cfg.UserManager.Type = "none"
+	}
+	if tc.ReceiverConfigStore == nil && cfg.Receiver.Type == "" {
+		cfg.Receiver.Type = "memory"
+	}
+	// Mirror config.Load's shared storage/filesystem targets for tests that
+	// set only the shared settings.
 	if cfg.Receiver.S3Bucket == "" {
 		cfg.Receiver.S3Bucket = cfg.Storage.S3Bucket
 	}

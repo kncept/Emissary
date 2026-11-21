@@ -28,10 +28,13 @@ does the web application.
   as a native process, or inside a container. Deployment mode is
   detected at startup, not chosen at build time.
 - **Pluggable edges.** The pieces that talk to the outside world —
-  inbound storage, outbound sender, per-message metadata, and the user
-  directory used for login — are small interfaces selected with
-  environment variables. The in-memory implementations make local
-  development and tests independent of AWS.
+  inbound storage, outbound sender, per-message metadata, sessions,
+  receiver rules, and the user directory used for login — are small
+  interfaces selected with environment variables. A backend is selected
+  explicitly, or inferred when exactly one has configuration; missing or
+  ambiguous configuration is a startup error. The in-memory/log/no-op
+  implementations remain available for local development and tests, but
+  only as explicit opt-ins.
 
 ## Non-goals / status
 
@@ -149,16 +152,22 @@ Emissary/
 (`mailer/config`), builds concrete implementations of each pluggable
 interface, and wires them into the HTTP handler (`mailer/handler`):
 
-- **Storage** (read side of mail) — `STORAGE`: `s3` or `memory`.
-- **Sender** (write side of mail) — `SENDER`: `aws-ses` or `log`.
+- **Storage** (read side of mail) — `STORAGE`: `s3`, `filesystem` or `memory`.
+- **Sender** (write side of mail) — `SENDER`: `aws-ses`, `mta` or `log`.
 - **Metadata** — `METADATA`: `memory`, `file` or `ddb`.
-- **User manager** — `USER_MANAGER`: `none`, `ddb`, `s3` or `ldap`.
-  When unset, the `s3` backend is selected automatically if storage is S3.
+- **Sessions** — `SESSION`: `memory` or `ddb`.
+- **Receiver rules** — `RECEIVER`: `s3`, `filesystem`, `ddb` or `memory`.
+- **User manager** — `USER_MANAGER`: `none`, `ddb`, `filesystem`, `s3` or `ldap`.
 
 The sender and the storage are intentionally independent: a deployment
 can read mail from S3 while logging outbound mail (or vice versa).
-When `METADATA` is unset the memory implementation is used, so a
-bare process starts with no AWS dependencies at all.
+Unset selectors are inferred only when exactly one backend is configured
+(for example AWS credentials plus a bucket selects S3). A bare process
+with no backend configuration does **not** start: set the local selectors
+explicitly (`STORAGE=memory`, `SENDER=log`, `METADATA=memory`,
+`SESSION=memory`, `RECEIVER=memory`, `USER_MANAGER=none`) or provide
+configuration for exactly one backend per component. See
+[CONFIGURATION.md](CONFIGURATION.md#backend-selection-all-pluggable-components).
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how the components
 interact, [CONFIGURATION.md](CONFIGURATION.md) for every variable,

@@ -47,12 +47,17 @@ of the implementation currently backing it:
 | Section | Typical implementations | What it describes |
 | --- | --- | --- |
 | `server` | `http` | HTTP listener, JWT settings and administrator configuration. |
-| `storage` | `s3`, `memory` | Email storage backend. |
+| `storage` | `s3`, `filesystem`, `memory` | Email storage backend. |
 | `sender` | `aws-ses`, `mta`, `log` | Outbound email sender. |
 | `receiver` | `memory`, `filesystem`, `s3`, `ddb` | Inbound recipient routing rules (one config per identity; `_` is the base fallback). |
 | `metadata` | `memory`, `file`, `ddb` | Per-message metadata store (JMAP keywords and server-owned `receivedAt`). |
 | `session` | `memory`, `ddb` | Refresh-token session store. |
-| `user-manager` | `none`, `ddb`, `s3`, `ldap` | Ordinary-user authentication backend (auto-selects `s3` when storage is S3). |
+| `user-manager` | `none`, `ddb`, `filesystem`, `s3`, `ldap` | Ordinary-user authentication backend. |
+
+Every value above is an explicit implementation, not a fallback. If a selector
+and its component are both absent, the support API reports `unconfigured`
+instead of inventing a default; see
+[Backend selection](CONFIGURATION.md#backend-selection-all-pluggable-components).
 | `aws` | `aws-sdk` | AWS region and DynamoDB table naming. |
 
 Example response (`200`):

@@ -190,9 +190,9 @@ deploy_show_env() {
 	echo "SUBDOMAINS: ${SUBDOMAINS:-<not set (defaults to DOMAIN only)>}"
 	echo "S3_BUCKET: ${S3_BUCKET:-<not set (will create new bucket)>}"
 	echo "TABLE_PREFIX: ${TABLE_PREFIX:-${DDB_TABLE_PREFIX:-<not set (defaults to emissary-)>}}"
-	echo "SESSION: ${SESSION:-<not set (defaults to none)>}"
+	echo "SESSION: ${SESSION:-<not set (CDK passes memory unless overridden)>}"
 	echo "SESSION_TABLE: ${SESSION_TABLE:-<not set>}"
-	echo "USER_MANAGER: ${USER_MANAGER:-<not set (defaults to s3 when STORAGE=s3, else none)>}"
+	echo "USER_MANAGER: ${USER_MANAGER:-<not set (CDK passes s3 unless overridden)>}"
 	echo "USER_TABLE: ${USER_TABLE:-<not set>}"
 	echo "USERNAME: ${USERNAME:-<not set (no admin user)>}"
 	if [[ -n "${PASSWORD+x}" ]]; then
@@ -285,9 +285,47 @@ run() {
 		JWT_SECRET=$(generate_guid)
 	fi
 
+	# config.Load never guesses a backend: it uses an explicit selector or the
+	# one backend with configuration, and errors otherwise. This local runner
+	# opts into the no-op/local implementations when nothing is configured, so
+	# `STORAGE=memory ./run.sh run` remains a complete AWS-free run. Anything
+	# the user selected explicitly (or configured through a companion variable)
+	# is left for config.Load to resolve.
+	if [[ -z "${STORAGE:-}" ]] && [[ -z "${S3_BUCKET:-}" ]] && [[ -z "${FILESYSTEM_DIR:-}" ]]; then
+		export STORAGE=memory
+	fi
+	if [[ -z "${SENDER:-}" ]] && [[ -z "${MTA_PORT:-}" ]] \
+		&& [[ -z "${AWS_ACCESS_KEY_ID:-}" ]] && [[ -z "${AWS_PROFILE:-}" ]] \
+		&& [[ -z "${AWS_WEB_IDENTITY_TOKEN_FILE:-}" ]] \
+		&& [[ -z "${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI:-}" ]] \
+		&& [[ -z "${AWS_CONTAINER_CREDENTIALS_FULL_URI:-}" ]]; then
+		export SENDER=log
+	fi
+	if [[ -z "${RECEIVER:-}" ]] && [[ -z "${RECEIVER_BUCKET:-}" ]] \
+		&& [[ -z "${RECEIVER_FILESYSTEM_DIR:-}" ]] && [[ -z "${RECEIVER_TABLE:-}" ]] \
+		&& [[ -z "${S3_BUCKET:-}" ]] && [[ -z "${FILESYSTEM_DIR:-}" ]] \
+		&& [[ -z "${TABLE_PREFIX:-}" ]] && [[ -z "${DDB_TABLE_PREFIX:-}" ]]; then
+		export RECEIVER=memory
+	fi
+	if [[ -z "${METADATA:-}" ]] && [[ -z "${METADATA_FILE:-}" ]] \
+		&& [[ -z "${DDB_TABLE:-}" ]] && [[ -z "${FILESYSTEM_DIR:-}" ]] \
+		&& [[ -z "${TABLE_PREFIX:-}" ]] && [[ -z "${DDB_TABLE_PREFIX:-}" ]]; then
+		export METADATA=memory
+	fi
+	if [[ -z "${SESSION:-}" ]] && [[ -z "${SESSION_TABLE:-}" ]] \
+		&& [[ -z "${TABLE_PREFIX:-}" ]] && [[ -z "${DDB_TABLE_PREFIX:-}" ]]; then
+		export SESSION=memory
+	fi
+	if [[ -z "${USER_MANAGER:-}" ]] && [[ -z "${S3_BUCKET:-}" ]] \
+		&& [[ -z "${FILESYSTEM_DIR:-}" ]] && [[ -z "${USER_TABLE:-}" ]] \
+		&& [[ -z "${LDAP_URL:-}" ]] && [[ -z "${TABLE_PREFIX:-}" ]] \
+		&& [[ -z "${DDB_TABLE_PREFIX:-}" ]]; then
+		export USER_MANAGER=none
+	fi
+
 	# S3 is only needed when it is the selected mail store; the memory and
 	# filesystem backends run entirely locally.
-	if [[ -z "${S3_BUCKET:-}" && "${STORAGE:-s3}" == "s3" ]]; then
+	if [[ -z "${S3_BUCKET:-}" && "${STORAGE:-}" == "s3" ]]; then
 		echo "Error: S3_BUCKET environment variable must be set when STORAGE=s3" >&2
 		return 1
 	fi
@@ -298,7 +336,6 @@ run() {
 	if [[ -n "${S3_BUCKET:-}" ]]; then
 		export S3_BUCKET="$S3_BUCKET"
 	fi
-	export METADATA="${METADATA:-memory}"
 	export PORT="${PORT:-8080}"
 	# Local runs are verbose by default; deployment sets ERROR explicitly.
 	export LOG_LEVEL="${LOG_LEVEL:-DEBUG}"
@@ -312,14 +349,18 @@ run() {
 		echo "  Password: $PASSWORD"
 	fi
 	echo "  JWT Secret: $JWT_SECRET"
-	echo "  Storage Type: ${STORAGE:-s3}"
+	echo "  Storage: ${STORAGE:-auto (inferred from configuration)}"
+	echo "  Sender: ${SENDER:-auto (inferred from configuration)}"
+	echo "  Receiver: ${RECEIVER:-auto (inferred from configuration)}"
+	echo "  Metadata: ${METADATA:-auto (inferred from configuration)}"
+	echo "  Session: ${SESSION:-auto (inferred from configuration)}"
+	echo "  User Manager: ${USER_MANAGER:-auto (inferred from configuration)}"
 	if [[ -n "${S3_BUCKET:-}" ]]; then
 		echo "  S3 Bucket: $S3_BUCKET"
 	fi
 	if [[ "${STORAGE:-}" == "filesystem" ]]; then
 		echo "  Filesystem Dir: ${FILESYSTEM_DIR:-~/.emissary}"
 	fi
-	echo "  Metadata Type: $METADATA"
 	echo "  Port: $PORT"
 	echo "  Log Level: $LOG_LEVEL"
 	echo "  Max File Size: $MAX_FILESIZE bytes"

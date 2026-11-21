@@ -34,8 +34,9 @@ type ConfigStoreOptions struct {
 	Region        string // AWS region for the DynamoDB client
 }
 
-// NewConfigStore selects a receiver config backend by name. An unknown (or
-// empty) type uses memory, matching the other stores in the repository.
+// NewConfigStore selects a receiver config backend by name. The type must be
+// explicit: memory is a supported implementation, but an unset or unknown
+// selector is an error rather than a silent in-memory fallback.
 func NewConfigStore(opts ConfigStoreOptions) (ConfigStore, error) {
 	switch strings.ToLower(strings.TrimSpace(opts.Type)) {
 	case "s3":
@@ -44,8 +45,10 @@ func NewConfigStore(opts ConfigStoreOptions) (ConfigStore, error) {
 		return NewFileConfigStore(opts.FilesystemDir)
 	case "ddb", "dynamodb":
 		return NewDdbConfigStore(opts.TableName, opts.Region)
-	default:
+	case "memory":
 		return NewMemoryConfigStore(), nil
+	default:
+		return nil, fmt.Errorf("unknown receiver type %q (set RECEIVER explicitly)", opts.Type)
 	}
 }
 

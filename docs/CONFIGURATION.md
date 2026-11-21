@@ -11,6 +11,52 @@ left untouched. A failed resolution aborts startup: the ARN is never used as
 if it were the resolved credential. Client creation is retried on the next
 call, so a transient failure does not poison the process permanently.
 
+## Backend selection (all pluggable components)
+
+`STORAGE`, `SENDER`, `RECEIVER`, `METADATA`, `SESSION` and `USER_MANAGER`
+share one rule, applied by `config.Load` at startup:
+
+1. **An explicitly set selector wins**, whatever other configuration exists.
+2. **If the selector is unset and exactly one backend has configuration, use
+   that backend.**
+3. **If none has configuration, error.** The local/no-op implementations
+   (`memory`, `log` and `none`) are still supported, but are opt-ins: set
+   `STORAGE=memory`, `SENDER=log`, `METADATA=memory`, `SESSION=memory`,
+   `RECEIVER=memory` or `USER_MANAGER=none` explicitly.
+4. **If several backends have configuration, error.** Set the selector to
+   choose one rather than letting startup guess.
+
+What counts as configuration for a backend (when the selector is unset):
+
+| Component | Backend | Configuration that selects it |
+| --- | --- | --- |
+| `STORAGE` | `s3` | AWS credentials plus `S3_BUCKET` (all S3 settings are static environment values). |
+| `STORAGE` | `filesystem` | `FILESYSTEM_DIR` set explicitly. The implicit `~/.emissary` default does not count. |
+| `SENDER` | `aws-ses` | AWS credentials from the SDK chain, including IAM roles. |
+| `SENDER` | `mta` | `MTA_PORT` set explicitly. Its default of `25` does not count. |
+| `RECEIVER` | `s3` | AWS credentials plus `RECEIVER_BUCKET` (or `S3_BUCKET`). |
+| `RECEIVER` | `filesystem` | `RECEIVER_FILESYSTEM_DIR` or `FILESYSTEM_DIR` set explicitly. |
+| `RECEIVER` | `ddb` | AWS credentials plus `RECEIVER_TABLE`, or an explicitly set `TABLE_PREFIX`/`DDB_TABLE_PREFIX`. |
+| `METADATA` | `ddb` | AWS credentials plus `DDB_TABLE`, or an explicitly set `TABLE_PREFIX`/`DDB_TABLE_PREFIX`. |
+| `METADATA` | `file` | `METADATA_FILE` or `FILESYSTEM_DIR` set explicitly. |
+| `SESSION` | `ddb` | AWS credentials plus `SESSION_TABLE`, or an explicitly set `TABLE_PREFIX`/`DDB_TABLE_PREFIX`. |
+| `USER_MANAGER` | `s3` | AWS credentials plus `S3_BUCKET`. |
+| `USER_MANAGER` | `filesystem` | `FILESYSTEM_DIR` set explicitly. |
+| `USER_MANAGER` | `ddb` | AWS credentials plus `USER_TABLE`, or an explicitly set `TABLE_PREFIX`/`DDB_TABLE_PREFIX`. |
+| `USER_MANAGER` | `ldap` | `LDAP_URL` set explicitly. |
+
+DynamoDB requires one per-component input: a table name for that component
+(`DDB_TABLE`, `SESSION_TABLE`, `RECEIVER_TABLE` or `USER_TABLE`), or an
+explicitly set table prefix. The derived name from the *default* prefix
+(`emissary`) never counts as configuration. S3 and filesystem checks take no
+further input arguments: S3 uses only static environment values, and the
+filesystem check is just the presence of the root variable.
+
+For example, with `USER_MANAGER` unset, `S3_BUCKET` plus `USER_TABLE` (and AWS
+credentials) is an error, not a silent choice; add `USER_MANAGER=s3` or
+`USER_MANAGER=ddb`. Conversely, with no backend configuration at all, add
+`USER_MANAGER=none` to opt into the administrator-only implementation.
+
 ## Server and authentication
 
 | Variable | Default | Description |
@@ -55,23 +101,24 @@ that need operator attention.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `STORAGE` | `memory` | `s3`, `filesystem` or `memory`. |
+| `STORAGE` | — (see [Backend selection](#backend-selection-all-pluggable-components)) | `s3`, `filesystem` or `memory`. `memory` must be set explicitly. |
 | `S3_BUCKET` | — (required when `STORAGE=s3`) | Bucket holding raw inbound messages. Required when `STORAGE=s3`. Objects are read at their exact key (SES writes them at the bucket root). |
-| `FILESYSTEM_DIR` | `~/.emissary` | Shared root for filesystem-backed stores. `STORAGE=filesystem` stores mail under `<FILESYSTEM_DIR>/mail`. |
+| `FILESYSTEM_DIR` | `~/.emissary` after a filesystem backend is selected | Shared root for filesystem-backed stores. `STORAGE=filesystem` stores mail under `<FILESYSTEM_DIR>/mail`. Setting it explicitly counts as backend configuration; the implicit default does not. |
 
 ## Sender (write side of mail)
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SENDER` | `aws-ses` when AWS credentials are available, otherwise `log` | `aws-ses` (alias `ses`), `mta` or `log`. |
-| `MTA_PORT` | `25` | SMTP port used by the `mta` sender (e.g. `1025` for a local mail sink). |
+| `SENDER` | — (see [Backend selection](#backend-selection-all-pluggable-components)) | `aws-ses` (alias `ses`), `mta` or `log`. `log` must be set explicitly. |
+| `MTA_PORT` | `25` | SMTP port used by the `mta` sender (e.g. `1025` for a local mail sink). Setting it explicitly counts as `mta` configuration when `SENDER` is unset; the default does not. |
 
 Credential detection uses the AWS SDK default chain, so IAM roles (EC2
 instance profiles, ECS task roles, web identity/IRSA and the Lambda execution
 role) select `aws-ses` even when no `AWS_*` credential variables are present.
-When no credentials are found and `SENDER` is unset, the log sender is still
-used as a local-development fallback (with a warning): it does **not** deliver
-replies or bounces.
+If credentials are found and `SENDER` is unset, `aws-ses` is selected. If no
+credentials and no `MTA_PORT` are found, startup errors rather than using the
+log sender; set `SENDER=log` to opt into a sender that prints messages to stdout
+and does **not** deliver replies or bounces.
 
 There is no configured From address. From is locked to the submitting user's
 own address (or the masquerade target's when a User Manager sends on behalf
@@ -102,9 +149,9 @@ authenticate to the MX host and uses STARTTLS when the server advertises it.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `RECEIVER` | `s3` when AWS credentials are available and `S3_BUCKET` is configured, otherwise `memory` | Backend for recipient routing rules: `s3`, `filesystem`, `ddb`/`dynamodb` or `memory`. |
+| `RECEIVER` | — (see [Backend selection](#backend-selection-all-pluggable-components)) | Backend for recipient routing rules: `s3`, `filesystem`, `ddb`/`dynamodb` or `memory`. `memory` must be set explicitly. |
 | `RECEIVER_BUCKET` | `S3_BUCKET` | S3 bucket holding the rules when `RECEIVER=s3`. Set it explicitly to keep receiver rules in a dedicated bucket. |
-| `RECEIVER_FILESYSTEM_DIR` | `FILESYSTEM_DIR` (default `~/.emissary`) | Root directory holding the rules when `RECEIVER=filesystem`. The store adds the `receiver/` subdirectory. |
+| `RECEIVER_FILESYSTEM_DIR` | `FILESYSTEM_DIR` (default `~/.emissary`) | Root directory holding the rules when `RECEIVER=filesystem`. The store adds the `receiver/` subdirectory. Setting it explicitly counts as filesystem configuration. |
 | `RECEIVER_TABLE` | `<TABLE_PREFIX>receiver` | DynamoDB table name for the `ddb` backend (`TABLE_PREFIX` defaults to `emissary-`). |
 | `RECEIVER_REGION` | `AWS_REGION` | AWS region for the `ddb` backend. |
 
@@ -140,8 +187,8 @@ discarding the message.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `METADATA` | `memory` | `memory`, `file` or `ddb` (alias `dynamodb`). |
-| `METADATA_FILE` | `<FILESYSTEM_DIR>/metadata` | File or directory used when `METADATA=file`. By default each record is a separate `<email id>.json` file under `<FILESYSTEM_DIR>/metadata` (normally `~/.emissary/metadata`); an explicit path ending in `.json` keeps the older single-file layout. |
+| `METADATA` | — (see [Backend selection](#backend-selection-all-pluggable-components)) | `memory`, `file` or `ddb` (alias `dynamodb`). `memory` must be set explicitly. |
+| `METADATA_FILE` | `<FILESYSTEM_DIR>/metadata` | File or directory used when `METADATA=file`. Setting it explicitly counts as file-backend configuration. By default each record is a separate `<email id>.json` file under `<FILESYSTEM_DIR>/metadata` (normally `~/.emissary/metadata`); an explicit path ending in `.json` keeps the older single-file layout. |
 | `DDB_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for per-message metadata (keywords and `receivedAt`). When unset, the name is derived from `TABLE_PREFIX` (`metadata` table). The table uses partition key `id` (message id), sort key `userId` (user id), and a `userId-index` GSI (`userId`, then `id`) for per-user listing. |
 | `METADATA_REGION` | AWS region | Region of the DynamoDB table. |
 
@@ -157,7 +204,7 @@ and no stored receive time (JMAP falls back to the message `Date` header).
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SESSION` | `memory` | `memory`, `ddb` or `dynamodb`. |
+| `SESSION` | — (see [Backend selection](#backend-selection-all-pluggable-components)) | `memory`, `ddb` or `dynamodb`. `memory` must be set explicitly. |
 | `SESSION_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for sessions. When unset, the name is derived from `TABLE_PREFIX` (`sessions` table). The table uses partition key `id` (session id) and sort key `userEmail` (user id). |
 | `SESSION_REGION` | AWS region | Region of the DynamoDB sessions table. |
 
@@ -165,7 +212,7 @@ and no stored receive time (JMAP falls back to the message `Date` header).
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `USER_MANAGER` | auto-selected | `none`, `ddb`, `s3`, `filesystem` or `ldap`. When unset: `s3` if `STORAGE=s3`, `filesystem` if `STORAGE=filesystem`, otherwise `none`. The `s3` backend stores each user as a `users/<email>/user.json` object in the mail storage bucket and requires `S3_BUCKET`; the `filesystem` backend writes the same record to `<FILESYSTEM_DIR>/users/<email>/user.json`. |
+| `USER_MANAGER` | — (see [Backend selection](#backend-selection-all-pluggable-components)) | `none`, `ddb`, `s3`, `filesystem` or `ldap`. `none` must be set explicitly. The `s3` backend stores each user as a `users/<email>/user.json` object in the mail storage bucket and requires `S3_BUCKET`; the `filesystem` backend writes the same record to `<FILESYSTEM_DIR>/users/<email>/user.json`. |
 | `DOMAIN` | — | Receiving domain; used for mail delivery, bounce sender addresses and the CDK app. |
 | `USER_TABLE` | derived from `TABLE_PREFIX` | DynamoDB table for the `ddb` backend. When unset, the name is derived from `TABLE_PREFIX` (`users` table). |
 | `USER_REGION` | AWS region | Region of the user table (and of the `s3` backend's S3 client). |
@@ -214,7 +261,7 @@ names.
 | Variable | Description |
 | --- | --- |
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | Default region for DynamoDB and the SDK config chain. |
-| AWS credentials | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, `AWS_PROFILE`, a web identity token (`AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN`) or ECS container credentials. When configured and `SENDER` is unset, the sender defaults to `aws-ses`. |
+| AWS credentials | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, `AWS_PROFILE`, a web identity token (`AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN`) or ECS container credentials. These count as configuration for AWS-backed components when their other required values are set; see [Backend selection](#backend-selection-all-pluggable-components). |
 | `AWS_LAMBDA_FUNCTION_NAME` | Presence switches `cmd/frontend` into Lambda mode (set by the Lambda runtime). |
 
 ## Local runs (`run.sh run`)
@@ -229,18 +276,20 @@ behaviours on top of the table above:
 - `S3_BUCKET` must be set explicitly when using `STORAGE=s3`. For a
   fully local, AWS-free run use `STORAGE=filesystem ./run.sh run`
   (persistent, under `~/.emissary`) or `STORAGE=memory ./run.sh run`.
-- `METADATA` defaults to `memory` and `PORT` to `8080`.
+- When no backend configuration or selector is provided, the runner sets every
+  selector to its local/no-op value (`memory`, `log`, `none`) before starting
+  the binary. `config.Load` itself never supplies these defaults. `PORT`
+  defaults to `8080`.
 - `LOG_LEVEL` defaults to `DEBUG`; set it explicitly (for example
   `LOG_LEVEL=ERROR ./run.sh run`) to reduce local log volume.
 
 ## Deployed values (set by the CDK client stack)
 
-The Lambda is created with: `STORAGE=s3`, `SENDER=aws-ses`,
-`METADATA=ddb`, `TABLE_PREFIX`, and the resolved DynamoDB table/region
-variables for the enabled DDB-backed stores (including
-`METADATA_REGION`/`DDB_TABLE`), `JWT_SECRET` as the Secrets Manager ARN,
-plus `USERNAME`, `PASSWORD` (only when provided at deploy time),
-`USER_MANAGER` (only when provided at deploy time; the app auto-selects
-the `s3` backend since storage is S3), `DOMAIN`, `JWT_AUDIENCE=mail.<DOMAIN>` and
+The Lambda is created with every selector set explicitly: `STORAGE=s3`,
+`SENDER=aws-ses`, `METADATA`, `SESSION`, `USER_MANAGER` and `RECEIVER`, plus
+`TABLE_PREFIX` and the resolved DynamoDB table/region variables for the
+enabled DDB-backed stores (including `METADATA_REGION`/`DDB_TABLE`),
+`JWT_SECRET` as the Secrets Manager ARN, plus `USERNAME`, `PASSWORD` (only
+when provided at deploy time), `DOMAIN`, `JWT_AUDIENCE=mail.<DOMAIN>` and
 `JWT_ISSUER=emissary-<DOMAIN>`. Deploy-time variables are listed in
 [DEPLOYMENT.md](DEPLOYMENT.md#deploy-time-variables).

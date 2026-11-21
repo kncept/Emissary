@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kncept/Emissary/mailer/config"
-	"github.com/kncept/Emissary/mailer/receiver"
 	"github.com/kncept/Emissary/mailer/components/sender"
 	"github.com/kncept/Emissary/mailer/components/storage"
+	"github.com/kncept/Emissary/mailer/config"
+	"github.com/kncept/Emissary/mailer/receiver"
 )
 
 func TestStorage(t *testing.T) {
@@ -31,6 +31,9 @@ func TestStorage(t *testing.T) {
 
 	if _, err := Storage(StorageOptions{Type: "unknown"}); err == nil {
 		t.Error("Storage(unknown) should fail")
+	}
+	if _, err := Storage(StorageOptions{}); err == nil {
+		t.Error("Storage with no type should fail: a backend must be chosen explicitly")
 	}
 }
 
@@ -56,6 +59,9 @@ func TestSender(t *testing.T) {
 	if _, err := Sender(ctx, SenderOptions{Type: "unknown"}); err == nil {
 		t.Error("Sender(unknown) should fail")
 	}
+	if _, err := Sender(ctx, SenderOptions{}); err == nil {
+		t.Error("Sender with no type should fail: a backend must be chosen explicitly")
+	}
 }
 
 func TestSessionAndMetadata(t *testing.T) {
@@ -69,7 +75,13 @@ func TestSessionAndMetadata(t *testing.T) {
 	if _, err := Session(SessionOptions{Type: "unknown"}); err == nil {
 		t.Error("Session(unknown) should fail")
 	}
+	if _, err := Session(SessionOptions{}); err == nil {
+		t.Error("Session with no type should fail: a backend must be chosen explicitly")
+	}
 
+	if _, err := Metadata(MetadataOptions{}); err == nil {
+		t.Error("Metadata with no type should fail: a backend must be chosen explicitly")
+	}
 	meta, err := Metadata(MetadataOptions{Type: "memory"})
 	if err != nil {
 		t.Fatalf("Metadata(memory) error = %v", err)
@@ -88,6 +100,9 @@ func TestSessionAndMetadata(t *testing.T) {
 }
 
 func TestUserManagerAndReceiverConfigStore(t *testing.T) {
+	if _, err := UserManager(UserManagerOptions{}); err == nil {
+		t.Error("UserManager with no type should fail: a backend must be chosen explicitly")
+	}
 	users, err := UserManager(UserManagerOptions{Type: "none"})
 	if err != nil {
 		t.Fatalf("UserManager(none) error = %v", err)
@@ -96,6 +111,9 @@ func TestUserManagerAndReceiverConfigStore(t *testing.T) {
 		t.Errorf("user manager Name() = %q, want none", got)
 	}
 
+	if _, err := ReceiverConfigStore(ReceiverConfigStoreOptions{}); err == nil {
+		t.Error("ReceiverConfigStore with no type should fail: a backend must be chosen explicitly")
+	}
 	store, err := ReceiverConfigStore(ReceiverConfigStoreOptions{Type: "memory"})
 	if err != nil {
 		t.Fatalf("ReceiverConfigStore(memory) error = %v", err)
@@ -107,11 +125,12 @@ func TestUserManagerAndReceiverConfigStore(t *testing.T) {
 
 func TestFromConfig(t *testing.T) {
 	cfg := &config.Config{
-		Storage:  config.StorageConfig{Type: "memory"},
-		Sender:   config.SenderConfig{Type: "log"},
-		Receiver: config.ReceiverConfig{Type: "memory"},
-		Metadata: config.MetadataConfig{Type: "memory"},
-		Session:  config.SessionConfig{Type: "memory"},
+		Storage:     config.StorageConfig{Type: "memory"},
+		Sender:      config.SenderConfig{Type: "log"},
+		Receiver:    config.ReceiverConfig{Type: "memory"},
+		Metadata:    config.MetadataConfig{Type: "memory"},
+		Session:     config.SessionConfig{Type: "memory"},
+		UserManager: config.UserManagerConfig{Type: "none"},
 	}
 
 	bundle, err := FromConfig(context.Background(), cfg)

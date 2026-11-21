@@ -247,9 +247,12 @@ func TestFileConfigStoreRoundTrip(t *testing.T) {
 }
 
 func TestNewConfigStore(t *testing.T) {
-	store, err := NewConfigStore(ConfigStoreOptions{})
+	if _, err := NewConfigStore(ConfigStoreOptions{}); err == nil {
+		t.Error("NewConfigStore(\"\") should fail: memory must be selected explicitly")
+	}
+	store, err := NewConfigStore(ConfigStoreOptions{Type: "memory"})
 	if err != nil || store.Name() != "memory" {
-		t.Fatalf("NewConfigStore(\"\") = %v, %v; want memory", store, err)
+		t.Fatalf("NewConfigStore(memory) = %v, %v; want memory", store, err)
 	}
 	store, err = NewConfigStore(ConfigStoreOptions{Type: "filesystem", FilesystemDir: t.TempDir()})
 	if err != nil || store.Name() != "file" {

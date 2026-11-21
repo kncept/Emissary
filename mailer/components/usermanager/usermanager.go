@@ -141,12 +141,12 @@ type EmissaryAuthManager interface {
 	ChangePassword(ctx context.Context, email, oldPassword, newPassword string) error
 }
 
-// New builds the manager selected by cfg.Type. An empty type is equivalent to
-// "none" (administrator only), which preserves the original single-user
-// behaviour.
+// New builds the manager selected by cfg.Type. The type must be explicit:
+// "none" is the opt-in administrator-only implementation, but an unset or
+// unrecognised selector is an error rather than a silent fallback.
 func New(cfg Config) (UserManager, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Type)) {
-	case "", "none":
+	case "none":
 		return NewNone(cfg), nil
 	case "ddb", "dynamodb":
 		return NewDdb(cfg), nil

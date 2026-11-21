@@ -21,7 +21,20 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// localBackendEnv opts every selector into its local/no-op implementation.
+// Tests that focus on other settings must be explicit now that Load never
+// guesses a backend; selection itself is covered by the dedicated tests below.
+func localBackendEnv() {
+	os.Setenv("STORAGE", "memory")
+	os.Setenv("SENDER", "log")
+	os.Setenv("RECEIVER", "memory")
+	os.Setenv("METADATA", "memory")
+	os.Setenv("SESSION", "memory")
+	os.Setenv("USER_MANAGER", "none")
+}
+
 func TestLoad_Defaults(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "testuser")
 	os.Setenv("PASSWORD", "testpass")
 	defer func() {
@@ -87,6 +100,7 @@ func TestLoad_Defaults(t *testing.T) {
 }
 
 func TestLoad_CustomValues(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "custom")
 	os.Setenv("PASSWORD", "secret")
 	os.Setenv("JWT_SECRET", "mysecret")
@@ -147,81 +161,113 @@ func TestLoad_CustomValues(t *testing.T) {
 func TestLoad_UserManagerAutoSelect(t *testing.T) {
 	tests := []struct {
 		name         string
-		storage      string
-		s3Bucket     string
-		userManager  string
+		env          map[string]string
+		unset        []string
 		wantStorage  string
 		wantUserType string
+		wantErr      string
 	}{
 		{
-			name:         "s3 storage auto-selects s3 user manager",
-			storage:      "s3",
-			s3Bucket:     "my-bucket",
+			name: "s3 storage auto-selects s3 user manager",
+			env: map[string]string{
+				"STORAGE": "s3", "S3_BUCKET": "my-bucket",
+				"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
+			},
+			unset:        []string{"USER_MANAGER"},
 			wantStorage:  "s3",
 			wantUserType: "s3",
 		},
 		{
-			name:         "s3 storage with explicit backend keeps it",
-			storage:      "s3",
-			s3Bucket:     "my-bucket",
-			userManager:  "ddb",
+			name: "s3 storage with explicit backend keeps it",
+			env: map[string]string{
+				"STORAGE": "s3", "S3_BUCKET": "my-bucket", "USER_MANAGER": "ddb",
+				"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
+			},
 			wantStorage:  "s3",
 			wantUserType: "ddb",
 		},
 		{
-			name:         "s3 storage with explicit none stays none",
-			storage:      "s3",
-			s3Bucket:     "my-bucket",
-			userManager:  "none",
+			name: "s3 storage with explicit none stays none",
+			env: map[string]string{
+				"STORAGE": "s3", "S3_BUCKET": "my-bucket", "USER_MANAGER": "none",
+				"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
+			},
 			wantStorage:  "s3",
 			wantUserType: "none",
 		},
 		{
-			name:         "bucket without storage type auto-selects s3",
-			storage:      "",
-			s3Bucket:     "my-bucket",
+			name: "bucket without storage type auto-selects s3",
+			env: map[string]string{
+				"S3_BUCKET":         "my-bucket",
+				"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
+			},
+			unset:        []string{"USER_MANAGER", "STORAGE"},
 			wantStorage:  "s3",
 			wantUserType: "s3",
 		},
 		{
-			name:         "memory storage auto-selects none",
-			storage:      "",
-			s3Bucket:     "",
+			name:    "memory storage without user manager config is an error",
+			env:     map[string]string{"STORAGE": "memory"},
+			unset:   []string{"USER_MANAGER"},
+			wantErr: "user manager backend is not configured",
+		},
+		{
+			name:         "memory storage with explicit none stays none",
+			env:          map[string]string{"STORAGE": "memory", "USER_MANAGER": "none"},
 			wantStorage:  "memory",
 			wantUserType: "none",
 		},
 		{
-			name:         "memory storage with explicit none stays none",
-			storage:      "memory",
-			s3Bucket:     "",
-			userManager:  "none",
-			wantStorage:  "memory",
-			wantUserType: "none",
+			name:         "filesystem dir auto-selects filesystem user manager",
+			env:          map[string]string{"FILESYSTEM_DIR": t.TempDir()},
+			unset:        []string{"USER_MANAGER", "STORAGE", "METADATA"},
+			wantUserType: "filesystem",
+		},
+		{
+			name: "ddb config auto-selects ddb user manager",
+			env: map[string]string{
+				"USER_TABLE":        "users-table",
+				"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
+			},
+			unset:        []string{"USER_MANAGER"},
+			wantUserType: "ddb",
+		},
+		{
+			name: "s3 bucket and ddb table are ambiguous",
+			env: map[string]string{
+				"S3_BUCKET": "bucket", "USER_TABLE": "users-table",
+				"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
+			},
+			unset:   []string{"USER_MANAGER", "STORAGE"},
+			wantErr: "user manager has configuration for multiple backends (s3, ddb)",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			localBackendEnv()
 			os.Setenv("USERNAME", "user")
-			os.Setenv("PASSWORD", "pass")
-			os.Unsetenv("USER_MANAGER")
-			os.Unsetenv("STORAGE")
-			os.Unsetenv("S3_BUCKET")
-			if tt.storage != "" {
-				os.Setenv("STORAGE", tt.storage)
+			for _, name := range tt.unset {
+				os.Unsetenv(name)
 			}
-			if tt.s3Bucket != "" {
-				os.Setenv("S3_BUCKET", tt.s3Bucket)
-			}
-			if tt.userManager != "" {
-				os.Setenv("USER_MANAGER", tt.userManager)
+			for key, value := range tt.env {
+				os.Setenv(key, value)
 			}
 			defer cleanupEnv()
 
 			cfg, err := Load(context.Background())
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("Load() error = nil, want %q", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load() error = %q, want it to contain %q", err, tt.wantErr)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			if cfg.Storage.Type != tt.wantStorage {
+			if tt.wantStorage != "" && cfg.Storage.Type != tt.wantStorage {
 				t.Errorf("Storage.Type = %q, want %q", cfg.Storage.Type, tt.wantStorage)
 			}
 			if cfg.UserManager.Type != tt.wantUserType {
@@ -232,6 +278,7 @@ func TestLoad_UserManagerAutoSelect(t *testing.T) {
 }
 
 func TestLoad_MissingUsernameAllowed(t *testing.T) {
+	localBackendEnv()
 	os.Unsetenv("USERNAME")
 	os.Setenv("PASSWORD", "pass")
 	defer cleanupEnv()
@@ -246,6 +293,7 @@ func TestLoad_MissingUsernameAllowed(t *testing.T) {
 }
 
 func TestLoad_BlankPasswordAllowed(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "user")
 	os.Unsetenv("PASSWORD")
 	defer cleanupEnv()
@@ -260,6 +308,7 @@ func TestLoad_BlankPasswordAllowed(t *testing.T) {
 }
 
 func TestLoad_InvalidJWT_TTL(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("JWT_TTL", "invalid")
@@ -272,6 +321,7 @@ func TestLoad_InvalidJWT_TTL(t *testing.T) {
 }
 
 func TestLoad_UnknownStorage(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("STORAGE", "unknown")
@@ -284,6 +334,7 @@ func TestLoad_UnknownStorage(t *testing.T) {
 }
 
 func TestLoad_UnknownSender(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("SENDER", "unknown")
@@ -296,6 +347,7 @@ func TestLoad_UnknownSender(t *testing.T) {
 }
 
 func TestLoad_UnknownMetadata(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("METADATA", "unknown")
@@ -308,6 +360,7 @@ func TestLoad_UnknownMetadata(t *testing.T) {
 }
 
 func TestLoad_S3StorageRequiresBucket(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("STORAGE", "s3")
@@ -320,6 +373,7 @@ func TestLoad_S3StorageRequiresBucket(t *testing.T) {
 }
 
 func TestLoad_DDBMetadataDerivesTableFromPrefix(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("METADATA", "ddb")
@@ -335,6 +389,7 @@ func TestLoad_DDBMetadataDerivesTableFromPrefix(t *testing.T) {
 }
 
 func TestLoad_DynamoDBAliasDerivesTableFromPrefix(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("METADATA", "dynamodb")
@@ -354,6 +409,7 @@ func TestLoad_DynamoDBAliasDerivesTableFromPrefix(t *testing.T) {
 }
 
 func TestLoad_ReceiverDDBTableDerivesFromPrefix(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("RECEIVER", "dynamodb")
@@ -379,6 +435,7 @@ func TestLoad_ReceiverDDBTableDerivesFromPrefix(t *testing.T) {
 }
 
 func TestLoad_FileMetadataDefaultPath(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("METADATA", "file")
@@ -402,6 +459,7 @@ func TestLoad_FileMetadataDefaultPath(t *testing.T) {
 }
 
 func TestLoad_ListenAddrWithPort(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("PORT", "3000")
@@ -418,6 +476,7 @@ func TestLoad_ListenAddrWithPort(t *testing.T) {
 }
 
 func TestLoad_ListenAddrWithFullAddress(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("LISTEN_ADDR", "127.0.0.1:4000")
@@ -434,6 +493,7 @@ func TestLoad_ListenAddrWithFullAddress(t *testing.T) {
 }
 
 func TestLoad_MetadataRegionDefaultsToAWSRegion(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("METADATA", "ddb")
@@ -507,7 +567,7 @@ func TestReceiverConfig_Validate(t *testing.T) {
 		cfg     ReceiverConfig
 		wantErr bool
 	}{
-		{"unset", ReceiverConfig{}, false},
+		{"unset", ReceiverConfig{}, true},
 		{"memory", ReceiverConfig{Type: "memory"}, false},
 		{"s3 with bucket", ReceiverConfig{Type: "s3", S3Bucket: "receiver-bucket"}, false},
 		{"s3 without bucket", ReceiverConfig{Type: "s3"}, true},
@@ -550,6 +610,7 @@ func TestSenderConfig_Validate(t *testing.T) {
 }
 
 func TestLoad_MtaSenderConfig(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "testuser")
 	os.Setenv("SENDER", "mta")
 	os.Setenv("MTA_PORT", "1025")
@@ -569,43 +630,63 @@ func TestLoad_MtaSenderConfig(t *testing.T) {
 
 func TestLoad_SenderAutoSelect(t *testing.T) {
 	tests := []struct {
-		name   string
-		sender string
-		env    map[string]string
-		want   string
+		name     string
+		env      map[string]string
+		explicit string
+		want     string
+		wantErr  string
 	}{
-		{"no credentials", "", nil, "log"},
-		{"access key pair", "", map[string]string{
+		{"no credentials", nil, "", "", "sender backend is not configured"},
+		{"access key pair", map[string]string{
 			"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
-		}, "aws-ses"},
-		{"incomplete access key pair", "", map[string]string{
+		}, "", "aws-ses", ""},
+		{"incomplete access key pair", map[string]string{
 			"AWS_ACCESS_KEY_ID": "key",
-		}, "log"},
-		{"shared profile", "", map[string]string{"AWS_PROFILE": "dev"}, "aws-ses"},
-		{"web identity", "", map[string]string{
+		}, "", "", "sender backend is not configured"},
+		{"shared profile", map[string]string{"AWS_PROFILE": "dev"}, "", "aws-ses", ""},
+		{"web identity", map[string]string{
 			"AWS_WEB_IDENTITY_TOKEN_FILE": "/token", "AWS_ROLE_ARN": "arn:aws:iam::123456789012:role/test",
-		}, "aws-ses"},
-		{"container credentials", "", map[string]string{
+		}, "", "aws-ses", ""},
+		{"container credentials", map[string]string{
 			"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/credentials/test",
-		}, "aws-ses"},
-		{"explicit sender wins over credentials", "mta", map[string]string{
+		}, "", "aws-ses", ""},
+		{"explicit sender wins over credentials", map[string]string{
 			"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
-		}, "mta"},
+		}, "mta", "mta", ""},
+		{"explicit log is an opt-in with no credentials", nil, "log", "log", ""},
+		{"explicit mta port selects mta without credentials", map[string]string{
+			"MTA_PORT": "1025",
+		}, "", "mta", ""},
+		{"mta port and credentials are ambiguous", map[string]string{
+			"MTA_PORT": "1025", "AWS_PROFILE": "dev",
+		}, "", "", "sender has configuration for multiple backends (aws-ses, mta)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			localBackendEnv()
 			clearAWSCredentialEnv()
 			defer cleanupEnv()
 
 			os.Setenv("USERNAME", "testuser")
-			if tt.sender != "" {
-				os.Setenv("SENDER", tt.sender)
+			if tt.explicit != "" {
+				os.Setenv("SENDER", tt.explicit)
+			} else {
+				os.Unsetenv("SENDER")
 			}
 			for key, value := range tt.env {
 				os.Setenv(key, value)
 			}
 
 			cfg, err := Load(context.Background())
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("Load() error = nil, want %q", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load() error = %q, want it to contain %q", err, tt.wantErr)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
@@ -619,41 +700,63 @@ func TestLoad_SenderAutoSelect(t *testing.T) {
 func TestLoad_ReceiverAutoSelect(t *testing.T) {
 	tests := []struct {
 		name     string
-		receiver string
 		env      map[string]string
+		explicit string
 		want     string
+		wantErr  string
 	}{
-		{"no credentials", "", nil, "memory"},
-		{"credentials without bucket", "", map[string]string{
+		{"no credentials", nil, "", "", "receiver backend is not configured"},
+		{"credentials without bucket", map[string]string{
 			"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
-		}, "memory"},
-		{"access key pair", "", map[string]string{
+		}, "", "", "receiver backend is not configured"},
+		{"access key pair", map[string]string{
 			"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret", "S3_BUCKET": "bucket",
-		}, "s3"},
-		{"shared profile", "", map[string]string{
+		}, "", "s3", ""},
+		{"shared profile", map[string]string{
 			"AWS_PROFILE": "dev", "S3_BUCKET": "bucket",
-		}, "s3"},
-		{"explicit memory wins over credentials", "memory", map[string]string{
+		}, "", "s3", ""},
+		{"ddb table selects ddb", map[string]string{
+			"AWS_PROFILE": "dev", "RECEIVER_TABLE": "receiver-table",
+		}, "", "ddb", ""},
+		{"dedicated filesystem root selects filesystem", map[string]string{
+			"RECEIVER_FILESYSTEM_DIR": t.TempDir(),
+		}, "", "filesystem", ""},
+		{"bucket and table are ambiguous", map[string]string{
+			"AWS_PROFILE": "dev", "S3_BUCKET": "bucket", "RECEIVER_TABLE": "receiver-table",
+		}, "", "", "receiver has configuration for multiple backends (s3, ddb)"},
+		{"explicit memory wins over credentials", map[string]string{
 			"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
-		}, "memory"},
-		{"explicit filesystem", "filesystem", map[string]string{
+		}, "memory", "memory", ""},
+		{"explicit filesystem", map[string]string{
 			"FILESYSTEM_DIR": t.TempDir(),
-		}, "filesystem"},
+		}, "filesystem", "filesystem", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			localBackendEnv()
 			clearAWSCredentialEnv()
 			defer cleanupEnv()
 
 			os.Setenv("USERNAME", "testuser")
-			if tt.receiver != "" {
-				os.Setenv("RECEIVER", tt.receiver)
+			if tt.explicit != "" {
+				os.Setenv("RECEIVER", tt.explicit)
+			} else {
+				os.Unsetenv("RECEIVER")
 			}
 			for key, value := range tt.env {
 				os.Setenv(key, value)
 			}
 
 			cfg, err := Load(context.Background())
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("Load() error = nil, want %q", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load() error = %q, want it to contain %q", err, tt.wantErr)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
@@ -665,6 +768,7 @@ func TestLoad_ReceiverAutoSelect(t *testing.T) {
 }
 
 func TestLoad_DedicatedReceiverTargets(t *testing.T) {
+	localBackendEnv()
 	defer cleanupEnv()
 	clearAWSCredentialEnv()
 
@@ -775,11 +879,13 @@ func TestConfig_Validate_CompositeError(t *testing.T) {
 
 func TestConfig_Validate_AllValid(t *testing.T) {
 	cfg := &Config{
-		Server:   ServerConfig{Username: "u", Password: "p"},
-		Storage:  StorageConfig{Type: "memory"},
-		Sender:   SenderConfig{Type: "log"},
-		Metadata: MetadataConfig{Type: "memory"},
-		Session:  SessionConfig{Type: "memory"},
+		Server:      ServerConfig{Username: "u", Password: "p"},
+		Storage:     StorageConfig{Type: "memory"},
+		Sender:      SenderConfig{Type: "log"},
+		Receiver:    ReceiverConfig{Type: "memory"},
+		Metadata:    MetadataConfig{Type: "memory"},
+		Session:     SessionConfig{Type: "memory"},
+		UserManager: UserManagerConfig{Type: "none"},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate() error = %v, want nil", err)
@@ -792,7 +898,7 @@ func TestUserManagerConfig_Validate(t *testing.T) {
 		cfg     UserManagerConfig
 		wantErr bool
 	}{
-		{"unset", UserManagerConfig{}, false},
+		{"unset", UserManagerConfig{}, true},
 		{"none", UserManagerConfig{Type: "none"}, false},
 		{"ddb", UserManagerConfig{Type: "ddb"}, false},
 		{"dynamodb", UserManagerConfig{Type: "dynamodb"}, false},
@@ -850,6 +956,7 @@ func cleanupEnv() {
 }
 
 func TestLoad_FilesystemBackend(t *testing.T) {
+	localBackendEnv()
 	root := t.TempDir()
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
@@ -885,6 +992,7 @@ func TestLoad_FilesystemBackend(t *testing.T) {
 }
 
 func TestLoad_FilesystemDirExpandsHome(t *testing.T) {
+	localBackendEnv()
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("FILESYSTEM_DIR", "~/emissary-test")
@@ -919,6 +1027,8 @@ func TestValidate_FilesystemTypes(t *testing.T) {
 }
 
 func TestLoad_IAMRoleSelectsSESWithoutEnvCredentials(t *testing.T) {
+	localBackendEnv()
+	os.Unsetenv("SENDER")
 	clearAWSCredentialEnv()
 	defer cleanupEnv()
 	os.Setenv("USERNAME", "testuser")
@@ -936,7 +1046,9 @@ func TestLoad_IAMRoleSelectsSESWithoutEnvCredentials(t *testing.T) {
 	}
 }
 
-func TestLoad_NoCredentialsKeepsLogFallback(t *testing.T) {
+func TestLoad_NoCredentialsRequiresExplicitSender(t *testing.T) {
+	localBackendEnv()
+	os.Unsetenv("SENDER")
 	clearAWSCredentialEnv()
 	defer cleanupEnv()
 	os.Setenv("USERNAME", "testuser")
@@ -945,11 +1057,79 @@ func TestLoad_NoCredentialsKeepsLogFallback(t *testing.T) {
 	credentialProbe = func(context.Context) bool { return false }
 	defer func() { credentialProbe = oldProbe }()
 
+	if _, err := Load(context.Background()); err == nil || !strings.Contains(err.Error(), "sender backend is not configured") {
+		t.Fatalf("Load() error = %v, want an unconfigured sender error", err)
+	}
+
+	// Setting the no-op sender explicitly is the supported local opt-in.
+	os.Setenv("SENDER", "log")
 	cfg, err := Load(context.Background())
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatalf("Load(SENDER=log) error = %v", err)
 	}
 	if cfg.Sender.Type != "log" {
-		t.Errorf("Sender.Type = %q, want log when no credentials are available", cfg.Sender.Type)
+		t.Errorf("Sender.Type = %q, want log when explicitly selected", cfg.Sender.Type)
+	}
+}
+
+func TestLoad_NoBackendConfigurationErrors(t *testing.T) {
+	clearAWSCredentialEnv()
+	defer cleanupEnv()
+	os.Setenv("USERNAME", "testuser")
+
+	oldProbe := credentialProbe
+	credentialProbe = func(context.Context) bool { return false }
+	defer func() { credentialProbe = oldProbe }()
+
+	if _, err := Load(context.Background()); err == nil || !strings.Contains(err.Error(), "storage backend is not configured") {
+		t.Fatalf("Load() error = %v, want an unconfigured storage error", err)
+	}
+}
+
+func TestLoad_DefaultFilesystemPathIsNotConfigurationForOtherComponents(t *testing.T) {
+	localBackendEnv()
+	os.Setenv("STORAGE", "filesystem")
+	os.Unsetenv("FILESYSTEM_DIR")
+	os.Unsetenv("USER_MANAGER")
+	clearAWSCredentialEnv()
+	defer cleanupEnv()
+
+	oldProbe := credentialProbe
+	credentialProbe = func(context.Context) bool { return false }
+	defer func() { credentialProbe = oldProbe }()
+
+	// STORAGE=filesystem applies the ~/.emissary default internally, but that
+	// default must not make an unset USER_MANAGER look configured.
+	if _, err := Load(context.Background()); err == nil || !strings.Contains(err.Error(), "user manager backend is not configured") {
+		t.Fatalf("Load() error = %v, want an unconfigured user manager error", err)
+	}
+}
+
+func TestLoad_TablePrefixMustBeExplicitToSelectDDB(t *testing.T) {
+	localBackendEnv()
+	os.Unsetenv("METADATA")
+	os.Unsetenv("METADATA_FILE")
+	clearAWSCredentialEnv()
+	defer cleanupEnv()
+	os.Setenv("USERNAME", "testuser")
+
+	// The default TABLE_PREFIX (emissary) must never count as configuration.
+	if _, err := Load(context.Background()); err == nil || !strings.Contains(err.Error(), "metadata backend is not configured") {
+		t.Fatalf("Load() error = %v, want an unconfigured metadata error", err)
+	}
+
+	// An explicit prefix with credentials, however, selects ddb.
+	os.Setenv("TABLE_PREFIX", "custom")
+	os.Setenv("AWS_ACCESS_KEY_ID", "key")
+	os.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
+	cfg, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load(TABLE_PREFIX=custom) error = %v", err)
+	}
+	if cfg.Metadata.Type != "ddb" {
+		t.Errorf("Metadata.Type = %q, want ddb", cfg.Metadata.Type)
+	}
+	if got := cfg.MetadataTableName(); got != "custom-metadata" {
+		t.Errorf("MetadataTableName() = %q, want custom-metadata", got)
 	}
 }

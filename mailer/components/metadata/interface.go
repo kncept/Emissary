@@ -7,6 +7,7 @@ package metadata
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -182,14 +183,18 @@ type MetadataStore interface {
 }
 
 // NewStore selects a MetadataStore implementation by name. tableName is
-// expected to be fully resolved by the caller.
+// expected to be fully resolved by the caller. The type must be explicit:
+// memory is a supported implementation, not a fallback for a missing or
+// unrecognised selector (set METADATA=memory to opt into it).
 func NewStore(typeName, filePath, tableName, region string) (MetadataStore, error) {
 	switch strings.ToLower(strings.TrimSpace(typeName)) {
+	case "memory":
+		return NewMemoryMetadata(), nil
 	case "file":
 		return NewFileMetadata(filePath)
 	case "ddb", "dynamodb":
 		return NewDdbMetadata(tableName, region)
 	default:
-		return NewMemoryMetadata(), nil
+		return nil, fmt.Errorf("unknown metadata type %q (set METADATA explicitly)", typeName)
 	}
 }

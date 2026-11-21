@@ -484,7 +484,7 @@ func storageImplementation(configured string, store storage.Storage) string {
 		if store != nil {
 			return strings.ToLower(store.Name())
 		}
-		return "s3"
+		return "unconfigured"
 	default:
 		return strings.ToLower(strings.TrimSpace(configured))
 	}
@@ -492,7 +492,9 @@ func storageImplementation(configured string, store storage.Storage) string {
 
 func receiverImplementation(configured string) string {
 	switch strings.ToLower(strings.TrimSpace(configured)) {
-	case "", "memory":
+	case "":
+		return "unconfigured"
+	case "memory":
 		return "memory"
 	case "file", "filesystem":
 		return "filesystem"
@@ -524,7 +526,7 @@ func senderImplementation(configured string, mailSender sender.Sender) string {
 			return strings.ToLower(mailSender.Name())
 		}
 	}
-	return "log"
+	return "unconfigured"
 }
 
 func metadataImplementation(configured string, store metadata.MetadataStore) string {
@@ -534,7 +536,7 @@ func metadataImplementation(configured string, store metadata.MetadataStore) str
 	if configured != "" {
 		return strings.ToLower(strings.TrimSpace(configured))
 	}
-	return "memory"
+	return "unconfigured"
 }
 
 func sessionImplementation(configured string, store session.SessionStore) string {
@@ -544,7 +546,7 @@ func sessionImplementation(configured string, store session.SessionStore) string
 	if configured != "" {
 		return strings.ToLower(strings.TrimSpace(configured))
 	}
-	return "memory"
+	return "unconfigured"
 }
 
 func userManagerImplementation(configured string, users usermanager.UserManager) string {
@@ -554,7 +556,7 @@ func userManagerImplementation(configured string, users usermanager.UserManager)
 	if configured != "" {
 		return strings.ToLower(strings.TrimSpace(configured))
 	}
-	return "none"
+	return "unconfigured"
 }
 
 func addSetting(settings map[string]string, key, value string) {

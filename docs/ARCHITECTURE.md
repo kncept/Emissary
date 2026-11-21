@@ -34,15 +34,19 @@ Deployed on AWS, Emissary looks like this:
 ```
 
 The same `http.Handler` runs without AWS when started natively: it
-listens with `net/http` and uses the memory/log implementations.
+listens with `net/http`. For an AWS-free run the local/no-op implementations
+(memory/log/none) must be selected explicitly; `run.sh run` does this when no
+backend configuration is present. `config.Load` never selects them as a
+fallback.
 
 ## Application startup
 
 `mailer/cmd/frontend/main.go`:
 
 1. `config.Load` reads all environment variables (see
-   [CONFIGURATION.md](CONFIGURATION.md)), applies defaults, and
-   validates. Any variable whose value starts with `arn:aws:` is
+   [CONFIGURATION.md](CONFIGURATION.md)), resolves every pluggable backend
+   with the shared explicit-or-unique-configuration rule, applies non-backend
+   defaults, and validates. Any variable whose value starts with `arn:aws:` is
    resolved from AWS Secrets Manager at this point (`envutil` +
    `awsutil`) — that is how the deployed Lambda receives its JWT
    secret as an ARN.
@@ -52,7 +56,7 @@ listens with `net/http` and uses the memory/log implementations.
    - a `usermanager.UserManager` (the built-in administrator plus the
      selected backend),
    - a `storage.Storage` (S3, filesystem, or memory),
-   - a `metadata.MetadataStore` (memory, file, filesystem, or DynamoDB),
+   - a `metadata.MetadataStore` (memory, file, or DynamoDB),
    - a `sender.Sender` (SES, MTA, or log),
    - a `session.SessionStore` (memory or DynamoDB),
    - a `receiver.ConfigStore` (S3, filesystem, memory, or DynamoDB),
@@ -89,14 +93,20 @@ listens with `net/http` and uses the memory/log implementations.
 ## Pluggable components
 
 Each seam is a small interface, selected by environment variable and
-instantiated in `configvendor.FromConfig`:
+instantiated in `configvendor.FromConfig`. A selector must be set explicitly,
+or exactly one backend must have configuration; otherwise startup fails. See
+[CONFIGURATION.md](CONFIGURATION.md#backend-selection-all-pluggable-components)
+for the per-backend rules. Local/no-op implementations (`memory`, `log`,
+`none`) are explicit opt-ins, never fallbacks.
 
 | Seam | Interface | Selector | Implementations | Notes |
 | --- | --- | --- | --- | --- |
-| Inbound messages | `storage.Storage` | `STORAGE` | `s3`, `filesystem`, `memory` | `s3` needs `S3_BUCKET`; `filesystem` uses `FILESYSTEM_DIR`. Defaults to `memory`. |
-| Outbound mail | `sender.Sender` | `SENDER` | `aws-ses`, `mta`, `log` | Defaults to `log`. The From address comes from the submitting user (or masquerade target), not from configuration. |
-| Message state | `metadata.MetadataStore` | `METADATA` | `memory` (default), `file`, `filesystem`, `ddb` | Stores JMAP keywords and the server-owned `receivedAt` timestamp, keyed by email id and owning user id. `ddb` uses `DDB_TABLE` or the `metadata` table derived from `TABLE_PREFIX`; its table has partition key `id`, sort key `userId`, and a `userId-index` GSI for `List`. Both `handler.New` and the `s3-receiver` build this store with `metadata.NewStore`. |
-| Users | `usermanager.Manager` | `USER_MANAGER` | `none`, `ddb`, `filesystem`, `s3`, `ldap` | Auto-selects `s3` when storage is S3, else `none`. `ddb` uses `USER_TABLE` or the `users` table derived from `TABLE_PREFIX`; `s3` stores each user as `users/<email>/user.json` in the mail bucket; `filesystem` stores each user under `FILESYSTEM_DIR/users/<email>/user.json`. Both `ddb` and `s3` are Emissary-mastered. `ldap` is unimplemented. |
+| Inbound messages | `storage.Storage` | `STORAGE` | `s3`, `filesystem`, `memory` | `s3` needs `S3_BUCKET`; `filesystem` needs `FILESYSTEM_DIR`. `memory` is an explicit opt-in. |
+| Outbound mail | `sender.Sender` | `SENDER` | `aws-ses`, `mta`, `log` | `aws-ses` uses the SDK credential chain; `mta` needs `MTA_PORT`; `log` is an explicit opt-in. The From address comes from the submitting user (or masquerade target), not from configuration. |
+| Message state | `metadata.MetadataStore` | `METADATA` | `memory`, `file`, `ddb` | Stores JMAP keywords and the server-owned `receivedAt` timestamp, keyed by email id and owning user id. `ddb` uses `DDB_TABLE` or the `metadata` table derived from `TABLE_PREFIX`; its table has partition key `id`, sort key `userId`, and a `userId-index` GSI for `List`. `memory` is an explicit opt-in. Both `handler.New` and the `s3-receiver` build this store with `metadata.NewStore`. |
+| Sessions | `session.SessionStore` | `SESSION` | `memory`, `ddb` | Refresh tokens for JWT sessions. `ddb` uses `SESSION_TABLE` or the `sessions` table derived from `TABLE_PREFIX`; `memory` is an explicit opt-in. |
+| Receiver rules | `receiver.ConfigStore` | `RECEIVER` | `s3`, `filesystem`, `ddb`, `memory` | One routing config per mail identity; `RECEIVER_BUCKET`/`RECEIVER_FILESYSTEM_DIR` override the shared settings. `memory` is an explicit opt-in. |
+| Users | `usermanager.Manager` | `USER_MANAGER` | `none`, `ddb`, `filesystem`, `s3`, `ldap` | `none` is an explicit opt-in. `ddb` uses `USER_TABLE` or the `users` table derived from `TABLE_PREFIX`; `s3` stores each user as `users/<email>/user.json` in the mail bucket; `filesystem` stores each user under `FILESYSTEM_DIR/users/<email>/user.json`. Both `ddb` and `s3` are Emissary-mastered. `ldap` is unimplemented. |
 
 ## Inbound mail flow
 

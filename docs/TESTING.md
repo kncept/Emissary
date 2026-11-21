@@ -50,9 +50,10 @@ this document explains the reasoning behind them.
 nested multipart, base64, quoted-printable, ISO-8859-1, missing
 headers, round trips. `auth` covers token issue/validate, expiry and
 future tokens, audience/issuer mismatch, constant-time password
-compare and the injectable time source. `config` covers defaults and
-the validation of every selector value and its companion variables,
-table-driven with `t.Run` subtests.
+compare and the injectable time source. `config` covers backend selection
+(explicit selectors, unique inferred configuration, missing configuration and
+ambiguous configuration) and the validation of every selector value and its
+companion variables, table-driven with `t.Run` subtests.
 
 ### Seam implementations
 

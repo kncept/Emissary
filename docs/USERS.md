@@ -17,11 +17,13 @@ hold:
 2. The configured user manager is Emissary-mastered — it owns its
    user store rather than proxying to an external directory.
 
-The backends selected with `USER_MANAGER` are `none`, `ddb`, `s3` and
-`ldap` (see [CONFIGURATION.md](CONFIGURATION.md)); the in-application
-`ddb` and `s3` backends are Emissary-mastered. When no backend is selected
-and the storage backend is S3, the `s3` backend is selected automatically.
-When using DynamoDB, table names are derived from `TABLE_PREFIX` the same
+The backends selected with `USER_MANAGER` are `none`, `ddb`, `s3`,
+`filesystem` and `ldap` (see [CONFIGURATION.md](CONFIGURATION.md)); the
+in-application `ddb` and `s3` backends are Emissary-mastered. Set the backend
+explicitly, or leave it unset only when exactly one backend has configuration
+(for example AWS credentials plus `S3_BUCKET` selects `s3`). Missing or
+ambiguous configuration is a startup error. When using DynamoDB, table names
+are derived from `TABLE_PREFIX` the same
 way as the household project (default `emissary`), with explicit
 `USER_TABLE`/`DDB_TABLE`/`SESSION_TABLE` overrides available (see
 [CONFIGURATION.md](CONFIGURATION.md#dynamodb-table-naming)). The `s3`
