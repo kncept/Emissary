@@ -13,8 +13,8 @@ import (
 	mailemail "github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 	"github.com/kncept/Emissary/mailer/jmap/internal/model"
-	"github.com/kncept/Emissary/mailer/metadata"
-	"github.com/kncept/Emissary/mailer/storage"
+	"github.com/kncept/Emissary/mailer/components/metadata"
+	"github.com/kncept/Emissary/mailer/components/storage"
 )
 
 func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {

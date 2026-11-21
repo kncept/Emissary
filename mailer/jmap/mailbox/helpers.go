@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/kncept/Emissary/mailer/jmap/internal/base"
-	"github.com/kncept/Emissary/mailer/metadata"
-	"github.com/kncept/Emissary/mailer/storage"
+	"github.com/kncept/Emissary/mailer/components/metadata"
+	"github.com/kncept/Emissary/mailer/components/storage"
 )
 
 func (h *Handler) getMailboxes(ctx context.Context, accountID string) []Mailbox {

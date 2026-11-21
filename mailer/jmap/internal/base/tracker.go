@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/kncept/Emissary/mailer/storage"
+	"github.com/kncept/Emissary/mailer/components/storage"
 )
 
 // StateKind is one independently versioned set of JMAP records. RFC 8620

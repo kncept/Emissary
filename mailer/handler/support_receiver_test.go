@@ -14,8 +14,8 @@ import (
 	supportapi "github.com/kncept/Emissary/api/support/generated"
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/receiver"
-	"github.com/kncept/Emissary/mailer/sender"
-	"github.com/kncept/Emissary/mailer/storage"
+	"github.com/kncept/Emissary/mailer/components/sender"
+	"github.com/kncept/Emissary/mailer/components/storage"
 )
 
 type fakeSESIdentityLister struct {

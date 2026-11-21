@@ -12,7 +12,7 @@ import (
 	mailemail "github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 	"github.com/kncept/Emissary/mailer/jmap/internal/model"
-	"github.com/kncept/Emissary/mailer/metadata"
+	"github.com/kncept/Emissary/mailer/components/metadata"
 )
 
 func (m *JMAPEmail) setBodyValues(e *mailemail.UserEmail, fetchText, fetchHTML bool, maxBytes int) {

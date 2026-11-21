@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kncept/Emissary/mailer/storage"
+	"github.com/kncept/Emissary/mailer/components/storage"
 )
 
 const testAccountID = "user@example.com"

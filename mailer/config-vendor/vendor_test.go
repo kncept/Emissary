@@ -7,8 +7,8 @@ import (
 
 	"github.com/kncept/Emissary/mailer/config"
 	"github.com/kncept/Emissary/mailer/receiver"
-	"github.com/kncept/Emissary/mailer/sender"
-	"github.com/kncept/Emissary/mailer/storage"
+	"github.com/kncept/Emissary/mailer/components/sender"
+	"github.com/kncept/Emissary/mailer/components/storage"
 )
 
 func TestStorage(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kncept/Emissary/mailer/sender"
+	"github.com/kncept/Emissary/mailer/components/sender"
 )
 
 func TestNew_FilesystemBackends(t *testing.T) {

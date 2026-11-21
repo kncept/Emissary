@@ -14,12 +14,12 @@ import (
 	"strings"
 
 	"github.com/kncept/Emissary/mailer/config"
-	"github.com/kncept/Emissary/mailer/metadata"
+	"github.com/kncept/Emissary/mailer/components/metadata"
 	"github.com/kncept/Emissary/mailer/receiver"
-	"github.com/kncept/Emissary/mailer/sender"
-	"github.com/kncept/Emissary/mailer/session"
-	"github.com/kncept/Emissary/mailer/storage"
-	"github.com/kncept/Emissary/mailer/usermanager"
+	"github.com/kncept/Emissary/mailer/components/sender"
+	"github.com/kncept/Emissary/mailer/components/session"
+	"github.com/kncept/Emissary/mailer/components/storage"
+	"github.com/kncept/Emissary/mailer/components/usermanager"
 )
 
 // StorageOptions carries the settings used by the storage backends.

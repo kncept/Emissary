@@ -11,7 +11,7 @@ import (
 
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/handler"
-	"github.com/kncept/Emissary/mailer/storage"
+	"github.com/kncept/Emissary/mailer/components/storage"
 )
 
 func newTestHandler() (http.Handler, *auth.Authenticator) {

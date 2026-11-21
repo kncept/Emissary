@@ -8,7 +8,7 @@ import (
 
 	usersapi "github.com/kncept/Emissary/api/users/generated"
 	"github.com/kncept/Emissary/mailer/auth"
-	"github.com/kncept/Emissary/mailer/usermanager"
+	"github.com/kncept/Emissary/mailer/components/usermanager"
 )
 
 type usersHandler struct {

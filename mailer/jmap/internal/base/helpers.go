@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kncept/Emissary/mailer/metadata"
+	"github.com/kncept/Emissary/mailer/components/metadata"
 )
 
 // EmailMetadata returns the metadata for an email. A missing record (or a

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kncept/Emissary/mailer/sender"
-	"github.com/kncept/Emissary/mailer/storage"
+	"github.com/kncept/Emissary/mailer/components/sender"
+	"github.com/kncept/Emissary/mailer/components/storage"
 )
 
 func TestLoginLimiterFixedWindow(t *testing.T) {

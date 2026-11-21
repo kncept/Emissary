@@ -16,10 +16,10 @@ import (
 	"github.com/kncept/Emissary/mailer/jmap/searchsnippet"
 	"github.com/kncept/Emissary/mailer/jmap/thread"
 	"github.com/kncept/Emissary/mailer/jmap/vacationresponse"
-	"github.com/kncept/Emissary/mailer/metadata"
-	"github.com/kncept/Emissary/mailer/sender"
-	"github.com/kncept/Emissary/mailer/storage"
-	"github.com/kncept/Emissary/mailer/usermanager"
+	"github.com/kncept/Emissary/mailer/components/metadata"
+	"github.com/kncept/Emissary/mailer/components/sender"
+	"github.com/kncept/Emissary/mailer/components/storage"
+	"github.com/kncept/Emissary/mailer/components/usermanager"
 )
 
 // Distinct local names let the composition root embed all method handlers

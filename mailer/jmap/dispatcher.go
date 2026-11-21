@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/kncept/Emissary/mailer/auth"
-	"github.com/kncept/Emissary/mailer/storage"
+	"github.com/kncept/Emissary/mailer/components/storage"
 )
 
 // UnmarshalJSON implements custom JSON unmarshaling for Invocation.

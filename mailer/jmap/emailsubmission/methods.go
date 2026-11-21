@@ -12,7 +12,7 @@ import (
 	mailemail "github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/identity"
 	"github.com/kncept/Emissary/mailer/jmap/internal/base"
-	"github.com/kncept/Emissary/mailer/storage"
+	"github.com/kncept/Emissary/mailer/components/storage"
 )
 
 func (h *Handler) EmailSubmissionGet(_ context.Context, _ string, _ json.RawMessage) (json.RawMessage, error) {

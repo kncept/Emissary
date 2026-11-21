@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kncept/Emissary/mailer/session"
-	"github.com/kncept/Emissary/mailer/usermanager"
+	"github.com/kncept/Emissary/mailer/components/session"
+	"github.com/kncept/Emissary/mailer/components/usermanager"
 )
 
 var (

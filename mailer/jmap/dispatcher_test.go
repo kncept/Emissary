@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/kncept/Emissary/mailer/auth"
-	"github.com/kncept/Emissary/mailer/metadata"
-	"github.com/kncept/Emissary/mailer/sender"
-	"github.com/kncept/Emissary/mailer/storage"
-	"github.com/kncept/Emissary/mailer/usermanager"
+	"github.com/kncept/Emissary/mailer/components/metadata"
+	"github.com/kncept/Emissary/mailer/components/sender"
+	"github.com/kncept/Emissary/mailer/components/storage"
+	"github.com/kncept/Emissary/mailer/components/usermanager"
 )
 
 func TestResolveCreationIDs(t *testing.T) {

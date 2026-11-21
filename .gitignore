@@ -6,3 +6,6 @@ mailer/cmd/s3-receiver/bootstrap
 
 # ai keeps regenerating this :/
 /mailer/frontend
+
+
+JMAP_*.md
