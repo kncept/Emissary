@@ -33,7 +33,6 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, json.RawMessage, error) {
 	slog.Debug("JMAP: submitting email", "account", accountID)
 	var req struct {
-		AccountID string `json:"accountId"`
 		Create    map[string]struct {
 			IdentityID string `json:"identityId"`
 			EmailID    string `json:"emailId"`
@@ -370,7 +369,6 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 
 func (h *Handler) EmailSubmissionChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID  string `json:"accountId"`
 		SinceState string `json:"sinceState"`
 		MaxChanges *int   `json:"maxChanges,omitempty"`
 	}

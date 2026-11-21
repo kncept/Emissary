@@ -372,12 +372,6 @@ func sameStringMap(a, b map[string]string) bool {
 	return true
 }
 
-// implicitSetHandler is implemented by handlers whose method produces a
-// second response. RFC 8621 section 7.5 requires EmailSubmission/set to emit
-// a separate Email/set response for onSuccessUpdateEmail/DestroyEmail, with
-// the same method call id as the submission response.
-type implicitSetHandler = ImplicitSetHandler
-
 func (d *Dispatcher) dispatchCall(ctx context.Context, accountID string, call Invocation) ([]Invocation, error) {
 	methodName := call.Name
 	args := call.Arguments
@@ -449,7 +443,7 @@ func (d *Dispatcher) dispatchCall(ctx context.Context, accountID string, call In
 	case MethodEmailSubmissionGet:
 		result, err = d.handler.EmailSubmissionGet(ctx, accountID, argsJSON)
 	case MethodEmailSubmissionSet:
-		if multi, ok := d.handler.(implicitSetHandler); ok {
+		if multi, ok := d.handler.(ImplicitSetHandler); ok {
 			var implicit json.RawMessage
 			result, implicit, err = multi.EmailSubmissionSetWithImplicit(ctx, accountID, argsJSON)
 			if err == nil && len(implicit) > 0 {

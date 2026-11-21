@@ -121,7 +121,8 @@ func run() error {
 	// The application http.Handler is fully built at this point. In Lambda,
 	// hand it to the runtime instead of starting a listener of our own; the
 	// adapter translates API Gateway events into requests.
-	if awsutil.IsAwsLambda() {
+	isLambda := handlerCfg.IsLambda
+	if isLambda {
 		slog.Info("Lambda listener loaded")
 		lambda.Start(httpadapter.New(h).ProxyWithContext)
 		return nil

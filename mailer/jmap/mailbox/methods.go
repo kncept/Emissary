@@ -13,8 +13,7 @@ import (
 
 func (h *Handler) MailboxGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID string   `json:"accountId"`
-		IDs       []string `json:"ids,omitempty"`
+		IDs []string `json:"ids,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
@@ -79,7 +78,6 @@ type mailboxPatch struct {
 
 func (h *Handler) MailboxSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID string                     `json:"accountId"`
 		IfInState *string                    `json:"ifInState,omitempty"`
 		Create    map[string]json.RawMessage `json:"create,omitempty"`
 		Update    map[string]json.RawMessage `json:"update,omitempty"`
@@ -342,7 +340,6 @@ func setError(typ, description string) map[string]string {
 
 func (h *Handler) MailboxChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID  string `json:"accountId"`
 		SinceState string `json:"sinceState"`
 		MaxChanges *int   `json:"maxChanges,omitempty"`
 	}
@@ -426,7 +423,6 @@ func (h *Handler) queryMailboxIDs(ctx context.Context, accountID string, filter 
 
 func (h *Handler) MailboxQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID    string         `json:"accountId"`
 		Filter       *mailboxFilter `json:"filter,omitempty"`
 		Sort         []interface{}  `json:"sort,omitempty"`
 		Position     *int           `json:"position,omitempty"`
@@ -464,7 +460,6 @@ func (h *Handler) MailboxQuery(ctx context.Context, accountID string, args json.
 
 func (h *Handler) MailboxQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID       string         `json:"accountId"`
 		SinceQueryState string         `json:"sinceQueryState"`
 		Filter          *mailboxFilter `json:"filter,omitempty"`
 		Sort            []interface{}  `json:"sort,omitempty"`

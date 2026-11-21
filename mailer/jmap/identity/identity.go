@@ -47,8 +47,7 @@ var _ MethodHandler = (*Handler)(nil)
 
 func (h *Handler) IdentityGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID string   `json:"accountId"`
-		IDs       []string `json:"ids,omitempty"`
+		IDs []string `json:"ids,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
@@ -126,7 +125,6 @@ func (h *Handler) IdentitySet(_ context.Context, _ string, _ json.RawMessage) (j
 
 func (h *Handler) IdentityChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID  string `json:"accountId"`
 		SinceState string `json:"sinceState"`
 		MaxChanges *int   `json:"maxChanges,omitempty"`
 	}

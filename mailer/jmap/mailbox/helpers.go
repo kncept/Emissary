@@ -140,5 +140,3 @@ func (h *Handler) syncMailboxState(ctx context.Context, accountID string, mailbo
 	}
 	return h.deps.Changes.State(ctx, accountID, base.StateMailbox)
 }
-
-func stringPtr(s string) *string { return &s }

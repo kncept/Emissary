@@ -168,8 +168,6 @@ func emailFingerprint(listed *mailemail.ListedEmail, meta metadata.EmailMetadata
 }
 
 func (h *Handler) toJMAPEmail(ctx context.Context, listed *mailemail.ListedEmail) (*JMAPEmail, error) {
-	// keep error for interface symmetry/future parsing failures
-	_ = error(nil)
 	e := listed.Email
 	id := listed.Ref.ID
 

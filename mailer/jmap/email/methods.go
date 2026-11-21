@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -12,14 +11,12 @@ import (
 
 	mailemail "github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/jmap/internal/base"
-	"github.com/kncept/Emissary/mailer/jmap/internal/model"
 	"github.com/kncept/Emissary/mailer/components/metadata"
 	"github.com/kncept/Emissary/mailer/components/storage"
 )
 
 func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID           string   `json:"accountId"`
 		IDs                 []string `json:"ids,omitempty"`
 		FetchTextBodyValues bool     `json:"fetchTextBodyValues"`
 		FetchHTMLBodyValues bool     `json:"fetchHTMLBodyValues"`
@@ -106,7 +103,6 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 
 func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID string                     `json:"accountId"`
 		IfInState *string                    `json:"ifInState,omitempty"`
 		Create    map[string]json.RawMessage `json:"create,omitempty"`
 		Update    map[string]json.RawMessage `json:"update,omitempty"`
@@ -180,19 +176,19 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 		subject, _ := createMap["subject"].(string)
 		replyTo, err := jmapAddressList(createMap, "replyTo")
 		if err != nil {
-			return nil, base.Errorf("invalidArguments", err.Error())
+			return nil, base.Errorf("invalidArguments", "%s", err.Error())
 		}
 		to, err := jmapAddressList(createMap, "to")
 		if err != nil {
-			return nil, base.Errorf("invalidArguments", err.Error())
+			return nil, base.Errorf("invalidArguments", "%s", err.Error())
 		}
 		cc, err := jmapAddressList(createMap, "cc")
 		if err != nil {
-			return nil, base.Errorf("invalidArguments", err.Error())
+			return nil, base.Errorf("invalidArguments", "%s", err.Error())
 		}
 		bcc, err := jmapAddressList(createMap, "bcc")
 		if err != nil {
-			return nil, base.Errorf("invalidArguments", err.Error())
+			return nil, base.Errorf("invalidArguments", "%s", err.Error())
 		}
 
 		// Locked From: submissions/creates send as the caller's own account,
@@ -282,11 +278,6 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 		// A session draft is stored separately (durable across lambda
 		// invocations) and is only valid in drafts mailbox context.
 		if claims := base.ClaimsFromContext(ctx); claims != nil && claims.SID != "" {
-			if targetMailbox != "drafts" && targetMailbox != "" {
-				// allow drafts mailbox only for session draft storage path? keep simple:
-				// if client asks for drafts, fine; otherwise still store as draft blob but
-				// mailboxIds in result reflect request. To keep semantics, prefer drafts.
-			}
 			newID, err := h.deps.Storage.PutDraft(ctx, claims.SID, createID, newEmail)
 			if err != nil {
 				notCreated[createID] = setErr("serverFail", "Failed to create email")
@@ -466,8 +457,11 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 		meta := base.EmailMetadata(ctx, h.deps, accountID, id)
 		patched, ok, errType := ApplyKeywordPatch(meta, updateMap)
 		if !ok {
-			// If move already happened but metadata patch invalid, report error; move is done though.
-			// Better to validate keywords before move? simple approach: accept move, reject bad keywords.
+			// TODO: validate keywords before applying mailbox move. Currently we accept
+			// the move but reject the keyword update, leaving the email in the new mailbox
+			// with unchanged keywords. A stricter approach would validate first and reject
+			// the entire update if keywords are invalid. This simpler approach matches
+			// the current semantics where mailboxIds and keywords are independent patches.
 			notUpdated[id] = setErr(errType, "Invalid keyword update")
 			if mailboxChanged {
 				_ = h.deps.Changes.Record(ctx, accountID, base.StateEmail, id, base.ChangeUpdate)
@@ -556,7 +550,6 @@ func rightsForRole(role string) struct {
 
 func (h *Handler) EmailChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID  string `json:"accountId"`
 		SinceState string `json:"sinceState"`
 		MaxChanges *int   `json:"maxChanges,omitempty"`
 	}
@@ -575,7 +568,6 @@ func (h *Handler) EmailChanges(ctx context.Context, accountID string, args json.
 
 func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID       string        `json:"accountId"`
 		Filter          *EmailFilter  `json:"filter,omitempty"`
 		Sort            []interface{} `json:"sort,omitempty"`
 		Position        *int          `json:"position,omitempty"`
@@ -677,7 +669,6 @@ func (h *Handler) queryEmailIDs(ctx context.Context, accountID string, filter *E
 
 func (h *Handler) EmailQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID       string        `json:"accountId"`
 		SinceQueryState string        `json:"sinceQueryState"`
 		Filter          *EmailFilter  `json:"filter,omitempty"`
 		Sort            []interface{} `json:"sort,omitempty"`
@@ -716,7 +707,3 @@ func (h *Handler) EmailImport(ctx context.Context, accountID string, args json.R
 func (h *Handler) EmailParse(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	return base.NotImplemented(MethodParse)
 }
-
-// helper types used above need to be available in package; ensure EmailFilter is defined in email.go (it is).
-var _ = fmt.Sprintf
-var _ = model.EmailAddress{}

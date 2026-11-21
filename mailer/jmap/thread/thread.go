@@ -39,8 +39,7 @@ var _ MethodHandler = (*Handler)(nil)
 
 func (h *Handler) ThreadGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID string   `json:"accountId"`
-		IDs       []string `json:"ids,omitempty"`
+		IDs []string `json:"ids,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
@@ -92,7 +91,6 @@ func (h *Handler) ThreadGet(ctx context.Context, accountID string, args json.Raw
 
 func (h *Handler) ThreadChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		AccountID  string `json:"accountId"`
 		SinceState string `json:"sinceState"`
 		MaxChanges *int   `json:"maxChanges,omitempty"`
 	}
