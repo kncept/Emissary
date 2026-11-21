@@ -14,6 +14,7 @@ import (
 	configvendor "github.com/kncept/Emissary/mailer/config-vendor"
 	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/envutil"
+	"github.com/kncept/Emissary/mailer/jmap/delivery"
 	"github.com/kncept/Emissary/mailer/logging"
 	"github.com/kncept/Emissary/mailer/receiver"
 )
@@ -96,6 +97,7 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 		Metadata:       components.Metadata,
 		Dedup:          receiver.NewS3Dedup(s3Client, cfg.Storage.S3Bucket),
 		IdentityConfig: components.ReceiverConfig,
+		EmailDelivery:  delivery.New(components.Storage),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create receiver: %w", err)

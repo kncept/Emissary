@@ -15,11 +15,13 @@
  * - the request and response arguments for every method required by a
  *   minimal RFC 8621 mail implementation.
  *
- * State changes are observed by polling `Foo/changes` and
- * `Foo/queryChanges`. As Lambda is a primary target, this document defines
- * polling-only behaviour; working out state change events is a future
- * requirement. EventSource `StateChange` events, including `EmailDelivery`,
- * are not advertised by the Session object.
+ * State changes can be observed by polling `Foo/changes` and
+ * `Foo/queryChanges`, or in near real time through the EventSource resource
+ * advertised by `eventSourceUrl`. The stream sends RFC 8620 `StateChange`
+ * objects with per-type state tokens, including `EmailDelivery` when inbound
+ * mail is delivered. Verified PushSubscription webhooks receive the same
+ * objects. Because Lambda deployments cannot always hold a stream open,
+ * clients may use `closeafter=state` to receive one event per connection.
  *
  * This document defines no authentication operations. All auth
  * operations (login, refresh, and any future auth endpoints) are
@@ -68,6 +70,11 @@ export interface Session {
      * `accountId`.
      */
   uploadUrl: string;
+  /**
+     * URI Template (RFC 6570 level 1) containing the variables
+     * `types`, `closeafter`, and `ping` (RFC 8620 section 7.3).
+     */
+  eventSourceUrl: string;
   state: string;
   [key: string]: unknown;
  }

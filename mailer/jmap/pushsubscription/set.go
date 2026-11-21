@@ -307,6 +307,16 @@ func isJSONNull(raw json.RawMessage) bool {
 // link-local and similar addresses keeps the verification POST off internal
 // networks and cloud metadata endpoints.
 func (h *Handler) validatePushURL(ctx context.Context, value string) error {
+	return validatePushURL(ctx, value, h.allowPrivateURLs)
+}
+
+// ValidateURL applies the production URL validation outside the set handler.
+// Webhook delivery revalidates both the stored URL and redirects with it.
+func ValidateURL(ctx context.Context, value string) error {
+	return validatePushURL(ctx, value, false)
+}
+
+func validatePushURL(ctx context.Context, value string, allowPrivate bool) error {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 		return fmt.Errorf("url must be an absolute https:// URL")
@@ -314,7 +324,7 @@ func (h *Handler) validatePushURL(ctx context.Context, value string) error {
 	if parsed.User != nil {
 		return fmt.Errorf("url must not contain credentials")
 	}
-	if h.allowPrivateURLs {
+	if allowPrivate {
 		return nil
 	}
 

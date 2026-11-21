@@ -104,6 +104,19 @@ func (h *Handler) IdentityGet(ctx context.Context, accountID string, args json.R
 	return json.Marshal(resp)
 }
 
+// SyncState refreshes the derived singleton identity from the user record.
+func (h *Handler) SyncState(ctx context.Context, accountID string) (string, error) {
+	user, err := h.deps.UserMgr.Lookup(ctx, accountID)
+	if err != nil {
+		return "", err
+	}
+	email := accountID
+	if user != nil && user.Email != "" {
+		email = user.Email
+	}
+	return h.syncIdentityState(ctx, accountID, Identity{ID: "primary", Name: email, Email: email})
+}
+
 // syncIdentityState fingerprints the derived identity so Identity/changes
 // reports an update when the underlying user record changes.
 func (h *Handler) syncIdentityState(ctx context.Context, accountID string, identity Identity) (string, error) {

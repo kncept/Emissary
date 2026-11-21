@@ -89,6 +89,15 @@ func (h *Handler) ThreadGet(ctx context.Context, accountID string, args json.Raw
 	return json.Marshal(resp)
 }
 
+// SyncState refreshes the Thread state from the stored messages.
+func (h *Handler) SyncState(ctx context.Context, accountID string) (string, error) {
+	threads, err := h.getThreads(ctx, accountID)
+	if err != nil {
+		return "", err
+	}
+	return h.syncThreadState(ctx, accountID, threads)
+}
+
 func (h *Handler) ThreadChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
 		SinceState string `json:"sinceState"`

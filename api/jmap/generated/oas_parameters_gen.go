@@ -269,6 +269,356 @@ func decodeDownloadBinaryParams(args [3]string, argsEscaped bool, r *http.Reques
 	return params, nil
 }
 
+// EventSourceParams is parameters of eventSource operation.
+type EventSourceParams struct {
+	// Comma-separated type names, or `*` for all supported types.
+	Types OptString `json:",omitempty,omitzero"`
+	// Close after one `state` event, or keep the stream open.
+	Closeafter OptEventSourceCloseafter `json:",omitempty,omitzero"`
+	// Ping interval in seconds; 0 disables pings.
+	Ping OptInt `json:",omitempty,omitzero"`
+	// Access token for clients that cannot set an Authorization header.
+	Token OptString `json:",omitempty,omitzero"`
+	// Optional target account; defaults to the authenticated subject.
+	AccountId OptID `json:",omitempty,omitzero"`
+}
+
+func unpackEventSourceParams(packed middleware.Parameters) (params EventSourceParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "types",
+			In:   "query",
+		}
+		if v, ok := packed[key]; ok {
+			params.Types = v.(OptString)
+		}
+	}
+	{
+		key := middleware.ParameterKey{
+			Name: "closeafter",
+			In:   "query",
+		}
+		if v, ok := packed[key]; ok {
+			params.Closeafter = v.(OptEventSourceCloseafter)
+		}
+	}
+	{
+		key := middleware.ParameterKey{
+			Name: "ping",
+			In:   "query",
+		}
+		if v, ok := packed[key]; ok {
+			params.Ping = v.(OptInt)
+		}
+	}
+	{
+		key := middleware.ParameterKey{
+			Name: "token",
+			In:   "query",
+		}
+		if v, ok := packed[key]; ok {
+			params.Token = v.(OptString)
+		}
+	}
+	{
+		key := middleware.ParameterKey{
+			Name: "accountId",
+			In:   "query",
+		}
+		if v, ok := packed[key]; ok {
+			params.AccountId = v.(OptID)
+		}
+	}
+	return params
+}
+
+func decodeEventSourceParams(args [0]string, argsEscaped bool, r *http.Request) (params EventSourceParams, _ error) {
+	q := uri.NewQueryDecoder(r.URL.Query())
+	// Set default value for query: types.
+	{
+		val := string("*")
+		params.Types.SetTo(val)
+	}
+	// Decode query: types.
+	if err := func() error {
+		cfg := uri.QueryParameterDecodingConfig{
+			Name:    "types",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.HasParam(cfg); err == nil {
+			if err := q.DecodeParam(cfg, func(d uri.Decoder) error {
+				var paramsDotTypesVal string
+				if err := func() error {
+					val, err := d.DecodeValue()
+					if err != nil {
+						return err
+					}
+
+					c, err := conv.ToString(val)
+					if err != nil {
+						return err
+					}
+
+					paramsDotTypesVal = c
+					return nil
+				}(); err != nil {
+					return err
+				}
+				params.Types.SetTo(paramsDotTypesVal)
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "types",
+			In:   "query",
+			Err:  err,
+		}
+	}
+	// Set default value for query: closeafter.
+	{
+		val := EventSourceCloseafter("no")
+		params.Closeafter.SetTo(val)
+	}
+	// Decode query: closeafter.
+	if err := func() error {
+		cfg := uri.QueryParameterDecodingConfig{
+			Name:    "closeafter",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.HasParam(cfg); err == nil {
+			if err := q.DecodeParam(cfg, func(d uri.Decoder) error {
+				var paramsDotCloseafterVal EventSourceCloseafter
+				if err := func() error {
+					val, err := d.DecodeValue()
+					if err != nil {
+						return err
+					}
+
+					c, err := conv.ToString(val)
+					if err != nil {
+						return err
+					}
+
+					paramsDotCloseafterVal = EventSourceCloseafter(c)
+					return nil
+				}(); err != nil {
+					return err
+				}
+				params.Closeafter.SetTo(paramsDotCloseafterVal)
+				return nil
+			}); err != nil {
+				return err
+			}
+			if err := func() error {
+				if value, ok := params.Closeafter.Get(); ok {
+					if err := func() error {
+						if err := value.Validate(); err != nil {
+							return err
+						}
+						return nil
+					}(); err != nil {
+						return err
+					}
+				}
+				return nil
+			}(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "closeafter",
+			In:   "query",
+			Err:  err,
+		}
+	}
+	// Set default value for query: ping.
+	{
+		val := int(30)
+		params.Ping.SetTo(val)
+	}
+	// Decode query: ping.
+	if err := func() error {
+		cfg := uri.QueryParameterDecodingConfig{
+			Name:    "ping",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.HasParam(cfg); err == nil {
+			if err := q.DecodeParam(cfg, func(d uri.Decoder) error {
+				var paramsDotPingVal int
+				if err := func() error {
+					val, err := d.DecodeValue()
+					if err != nil {
+						return err
+					}
+
+					c, err := conv.ToInt(val)
+					if err != nil {
+						return err
+					}
+
+					paramsDotPingVal = c
+					return nil
+				}(); err != nil {
+					return err
+				}
+				params.Ping.SetTo(paramsDotPingVal)
+				return nil
+			}); err != nil {
+				return err
+			}
+			if err := func() error {
+				if value, ok := params.Ping.Get(); ok {
+					if err := func() error {
+						if err := (validate.Int{
+							MinSet:        true,
+							Min:           0,
+							MaxSet:        false,
+							Max:           0,
+							MinExclusive:  false,
+							MaxExclusive:  false,
+							MultipleOfSet: false,
+							MultipleOf:    0,
+							Pattern:       nil,
+						}).Validate(int64(value)); err != nil {
+							return errors.Wrap(err, "int")
+						}
+						return nil
+					}(); err != nil {
+						return err
+					}
+				}
+				return nil
+			}(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "ping",
+			In:   "query",
+			Err:  err,
+		}
+	}
+	// Decode query: token.
+	if err := func() error {
+		cfg := uri.QueryParameterDecodingConfig{
+			Name:    "token",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.HasParam(cfg); err == nil {
+			if err := q.DecodeParam(cfg, func(d uri.Decoder) error {
+				var paramsDotTokenVal string
+				if err := func() error {
+					val, err := d.DecodeValue()
+					if err != nil {
+						return err
+					}
+
+					c, err := conv.ToString(val)
+					if err != nil {
+						return err
+					}
+
+					paramsDotTokenVal = c
+					return nil
+				}(); err != nil {
+					return err
+				}
+				params.Token.SetTo(paramsDotTokenVal)
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "token",
+			In:   "query",
+			Err:  err,
+		}
+	}
+	// Decode query: accountId.
+	if err := func() error {
+		cfg := uri.QueryParameterDecodingConfig{
+			Name:    "accountId",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.HasParam(cfg); err == nil {
+			if err := q.DecodeParam(cfg, func(d uri.Decoder) error {
+				var paramsDotAccountIdVal ID
+				if err := func() error {
+					var paramsDotAccountIdValVal string
+					if err := func() error {
+						val, err := d.DecodeValue()
+						if err != nil {
+							return err
+						}
+
+						c, err := conv.ToString(val)
+						if err != nil {
+							return err
+						}
+
+						paramsDotAccountIdValVal = c
+						return nil
+					}(); err != nil {
+						return err
+					}
+					paramsDotAccountIdVal = ID(paramsDotAccountIdValVal)
+					return nil
+				}(); err != nil {
+					return err
+				}
+				params.AccountId.SetTo(paramsDotAccountIdVal)
+				return nil
+			}); err != nil {
+				return err
+			}
+			if err := func() error {
+				if value, ok := params.AccountId.Get(); ok {
+					if err := func() error {
+						if err := value.Validate(); err != nil {
+							return err
+						}
+						return nil
+					}(); err != nil {
+						return err
+					}
+				}
+				return nil
+			}(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "accountId",
+			In:   "query",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // UploadBinaryParams is parameters of uploadBinary operation.
 type UploadBinaryParams struct {
 	AccountId ID

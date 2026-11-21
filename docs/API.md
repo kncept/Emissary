@@ -599,7 +599,11 @@ header. The client must update the subscription with the delivered
 HTTPS and resolve to public addresses; private, loopback and link-local targets
 are rejected to prevent server-side request forgery, and redirects are
 revalidated. Subscriptions are capped per credential and subject to a creation
-rate limit. EventSource and `StateChange` delivery remain unimplemented.
+rate limit. Once verified, the subscription receives `StateChange` webhook
+POSTs (same payload as the EventSource `state` event, with `TTL: 60`); unverified
+subscriptions never receive one. Delivery is best effort and is rate limited:
+an endpoint answering `429` puts the credential into a one-minute backoff and
+carries the missed type states into the next notification.
 
 ### Result references
 
@@ -683,15 +687,14 @@ copies, so a blob cannot be destroyed inside the method call that still uses
 it. Unreferenced blobs are visible only to the user who uploaded them, even in
 a shared account.
 
-## State changes and polling
+## State changes
 
-Emissary is polling-only. The per-type `state` tokens returned by `Foo/get`
-and the `queryState` tokens returned by `Foo/query` are persisted with the
-account's mail data, so they survive restarts and do not regress when
-concurrent Lambda invocations update the same account. A state token changes
-only when the underlying data (or, for query states, the ordered query result
-set) changes. Query states are scoped to the filter and sort that produced
-them.
+The per-type `state` tokens returned by `Foo/get` and the `queryState` tokens
+returned by `Foo/query` are persisted with the account's mail data, so they
+survive restarts and do not regress when concurrent Lambda invocations update
+the same account. A state token changes only when the underlying data (or, for
+query states, the ordered query result set) changes. Query states are scoped to
+the filter and sort that produced them.
 
 Clients detect changes by polling:
 
@@ -702,8 +705,52 @@ Clients detect changes by polling:
   `canCalculateChanges`. When `canCalculateChanges` is `false`, refetch the
   query with `Foo/query`.
 
-As we are supporting Lambda as a primary target, we document polling-only
-behaviour: working out state change events is a future requirement. There is
-no `/eventsource` route and the Session object does not advertise
-`eventSourceUrl`. EventSource `StateChange` events, including `EmailDelivery`
-notifications, are not available.
+### EventSource
+
+The Session object advertises an `eventSourceUrl` URI template with the
+variables `types`, `closeafter` and `ping`. `GET /eventsource` accepts the same
+bearer token as the JMAP API or, for the browser `EventSource` API (which
+cannot set request headers), the token in a `token` query parameter. Query
+tokens are secrets and should not be logged or shared.
+
+- `types` is a comma-separated list of JMAP type names or `*` for every type
+  Emissary tracks. Only the listed types are included in each event.
+- `closeafter=state` closes the response after the first `state` event;
+  `closeafter=no` keeps the stream open. The default is `no`. Buffered or
+  buffering proxies and API Gateway deployments should use `state` so each
+  event is delivered in its own response.
+- `ping` is a positive number of seconds; `0` disables pings. Requests below
+  10 seconds are raised to 10 and requests above 300 seconds are lowered to
+  300. The default is 30 seconds.
+
+Successful responses use `text/event-stream`, disable caching and flush each
+event. A `state` event's data is an RFC 8620 `StateChange` object:
+
+```json
+{
+  "@type": "StateChange",
+  "changed": {
+    "alice@example.com": {
+      "Email": "email-4",
+      "EmailDelivery": "email-delivery-2"
+    }
+  }
+}
+```
+
+Each `state` event carries an `id` encoding the *entire* visible type-state
+snapshot immediately after the change. On reconnect the client's automatic
+`Last-Event-ID` header is compared with the current durable state; missed type
+tokens are sent as a catch-up event before the stream continues. `ping` events
+are `{"interval": n}` and deliberately carry no `id`.
+
+Changes are polled from the durable state store (about every two seconds), so
+events also cover writes made by another process. Multiple changes within the
+rate-limit window are coalesced into one event with the latest token for each
+affected type; if an event is dropped, the next `/get` or `/changes` still
+finds the data. Live streams are closed on logout or session revocation, and
+at most eight concurrent streams are accepted per credential.
+
+`EmailDelivery` is advanced by the inbound pipeline after a message is stored
+and its metadata is saved. It is reported in `StateChange` events even though
+there is no `EmailDelivery/get` method, matching the RFC 8620 example.

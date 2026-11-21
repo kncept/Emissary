@@ -365,6 +365,79 @@ type DownloadBinaryUnauthorized ProblemDetails
 
 func (*DownloadBinaryUnauthorized) downloadBinaryRes() {}
 
+type EventSourceBadRequest ProblemDetails
+
+func (*EventSourceBadRequest) eventSourceRes() {}
+
+type EventSourceCloseafter string
+
+const (
+	EventSourceCloseafterState EventSourceCloseafter = "state"
+	EventSourceCloseafterNo    EventSourceCloseafter = "no"
+)
+
+// AllValues returns all EventSourceCloseafter values.
+func (EventSourceCloseafter) AllValues() []EventSourceCloseafter {
+	return []EventSourceCloseafter{
+		EventSourceCloseafterState,
+		EventSourceCloseafterNo,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s EventSourceCloseafter) MarshalText() ([]byte, error) {
+	switch s {
+	case EventSourceCloseafterState:
+		return []byte(s), nil
+	case EventSourceCloseafterNo:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *EventSourceCloseafter) UnmarshalText(data []byte) error {
+	switch EventSourceCloseafter(data) {
+	case EventSourceCloseafterState:
+		*s = EventSourceCloseafterState
+		return nil
+	case EventSourceCloseafterNo:
+		*s = EventSourceCloseafterNo
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type EventSourceForbidden ProblemDetails
+
+func (*EventSourceForbidden) eventSourceRes() {}
+
+type EventSourceOK struct {
+	Data io.Reader
+}
+
+// Read reads data from the Data reader.
+//
+// Kept to satisfy the io.Reader interface.
+func (s EventSourceOK) Read(p []byte) (n int, err error) {
+	if s.Data == nil {
+		return 0, io.EOF
+	}
+	return s.Data.Read(p)
+}
+
+func (*EventSourceOK) eventSourceRes() {}
+
+type EventSourceTooManyRequests ProblemDetails
+
+func (*EventSourceTooManyRequests) eventSourceRes() {}
+
+type EventSourceUnauthorized ProblemDetails
+
+func (*EventSourceUnauthorized) eventSourceRes() {}
+
 type ID string
 
 type Invocation []jx.Raw
@@ -696,6 +769,144 @@ func (o OptCoreCapability) Get() (v CoreCapability, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptCoreCapability) Or(d CoreCapability) CoreCapability {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptEventSourceCloseafter returns new OptEventSourceCloseafter with value set to v.
+func NewOptEventSourceCloseafter(v EventSourceCloseafter) OptEventSourceCloseafter {
+	return OptEventSourceCloseafter{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptEventSourceCloseafter is optional EventSourceCloseafter.
+type OptEventSourceCloseafter struct {
+	Value EventSourceCloseafter
+	Set   bool
+}
+
+// IsSet returns true if OptEventSourceCloseafter was set.
+func (o OptEventSourceCloseafter) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptEventSourceCloseafter) Reset() {
+	var v EventSourceCloseafter
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptEventSourceCloseafter) SetTo(v EventSourceCloseafter) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptEventSourceCloseafter) Get() (v EventSourceCloseafter, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptEventSourceCloseafter) Or(d EventSourceCloseafter) EventSourceCloseafter {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptID returns new OptID with value set to v.
+func NewOptID(v ID) OptID {
+	return OptID{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptID is optional ID.
+type OptID struct {
+	Value ID
+	Set   bool
+}
+
+// IsSet returns true if OptID was set.
+func (o OptID) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptID) Reset() {
+	var v ID
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptID) SetTo(v ID) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptID) Get() (v ID, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptID) Or(d ID) ID {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptInt returns new OptInt with value set to v.
+func NewOptInt(v int) OptInt {
+	return OptInt{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptInt is optional int.
+type OptInt struct {
+	Value int
+	Set   bool
+}
+
+// IsSet returns true if OptInt was set.
+func (o OptInt) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptInt) Reset() {
+	var v int
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptInt) SetTo(v int) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptInt) Get() (v int, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptInt) Or(d int) int {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -1165,7 +1376,10 @@ type Session struct {
 	// URI Template (RFC 6570 level 1) containing the variables `accountId`, `blobId`, `type`, and `name`.
 	DownloadUrl string `json:"downloadUrl"`
 	// URI Template (RFC 6570 level 1) containing the variable `accountId`.
-	UploadUrl       string `json:"uploadUrl"`
+	UploadUrl string `json:"uploadUrl"`
+	// URI Template (RFC 6570 level 1) containing the variables `types`, `closeafter`, and `ping` (RFC 8620
+	// section 7.3).
+	EventSourceUrl  string `json:"eventSourceUrl"`
 	State           string `json:"state"`
 	AdditionalProps SessionAdditional
 }
@@ -1203,6 +1417,11 @@ func (s *Session) GetDownloadUrl() string {
 // GetUploadUrl returns the value of UploadUrl.
 func (s *Session) GetUploadUrl() string {
 	return s.UploadUrl
+}
+
+// GetEventSourceUrl returns the value of EventSourceUrl.
+func (s *Session) GetEventSourceUrl() string {
+	return s.EventSourceUrl
 }
 
 // GetState returns the value of State.
@@ -1248,6 +1467,11 @@ func (s *Session) SetDownloadUrl(val string) {
 // SetUploadUrl sets the value of UploadUrl.
 func (s *Session) SetUploadUrl(val string) {
 	s.UploadUrl = val
+}
+
+// SetEventSourceUrl sets the value of EventSourceUrl.
+func (s *Session) SetEventSourceUrl(val string) {
+	s.EventSourceUrl = val
 }
 
 // SetState sets the value of State.

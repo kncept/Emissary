@@ -15,11 +15,13 @@
  * - the request and response arguments for every method required by a
  *   minimal RFC 8621 mail implementation.
  *
- * State changes are observed by polling `Foo/changes` and
- * `Foo/queryChanges`. As Lambda is a primary target, this document defines
- * polling-only behaviour; working out state change events is a future
- * requirement. EventSource `StateChange` events, including `EmailDelivery`,
- * are not advertised by the Session object.
+ * State changes can be observed by polling `Foo/changes` and
+ * `Foo/queryChanges`, or in near real time through the EventSource resource
+ * advertised by `eventSourceUrl`. The stream sends RFC 8620 `StateChange`
+ * objects with per-type state tokens, including `EmailDelivery` when inbound
+ * mail is delivered. Verified PushSubscription webhooks receive the same
+ * objects. Because Lambda deployments cannot always hold a stream open,
+ * clients may use `closeafter=state` to receive one event per connection.
  *
  * This document defines no authentication operations. All auth
  * operations (login, refresh, and any future auth endpoints) are
@@ -49,6 +51,7 @@
  */
 import type {
   DownloadBinaryParams,
+  EventSourceParams,
   Id,
   JmapRequest,
   JmapResponse,
@@ -126,6 +129,86 @@ export const getSession = async ( options?: RequestInit): Promise<getSessionResp
 
   const data: getSessionResponse['data'] = body ? JSON.parse(body) : {}
   return { data, status: res.status, headers: res.headers } as getSessionResponse
+}
+
+
+
+export type eventSourceResponse200 = {
+  data: string
+  status: 200
+}
+
+export type eventSourceResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
+export type eventSourceResponse401 = {
+  data: ProblemDetails
+  status: 401
+}
+
+export type eventSourceResponse403 = {
+  data: ProblemDetails
+  status: 403
+}
+
+export type eventSourceResponse429 = {
+  data: ProblemDetails
+  status: 429
+}
+
+export type eventSourceResponseSuccess = (eventSourceResponse200) & {
+  headers: Headers;
+};
+export type eventSourceResponseError = (eventSourceResponse400 | eventSourceResponse401 | eventSourceResponse403 | eventSourceResponse429) & {
+  headers: Headers;
+};
+
+export type eventSourceResponse = (eventSourceResponseSuccess | eventSourceResponseError)
+
+export const getEventSourceUrl = (params?: EventSourceParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/eventsource?${stringifiedParams}` : `/eventsource`
+}
+
+/**
+ * RFC 8620 section 7.3 server-sent event stream. Successful responses use
+ * `text/event-stream` and carry `state` events whose data is a
+ * StateChange object. `ping` events carry `{"interval": n}` and do not
+ * update the event id. The browser EventSource API cannot set an
+ * Authorization header, so the access token may be supplied in the
+ * `token` query parameter; treat it like a bearer token. The `accountId`
+ * parameter is optional and only accepted for accounts the caller may
+ * access.
+ * @summary Receive JMAP StateChange events
+ */
+export const eventSource = async (params?: EventSourceParams, options?: RequestInit): Promise<eventSourceResponse> => {
+
+  const res = await fetch(getEventSourceUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: eventSourceResponse['data'] = body ? (contentType.includes('json') ? JSON.parse(body) : body) : {}
+  return { data, status: res.status, headers: res.headers } as eventSourceResponse
 }
 
 

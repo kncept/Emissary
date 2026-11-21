@@ -45,6 +45,9 @@ type StagedMessageProcessorConfig struct {
 
 	IdentityConfig MailIdentityConfigSource
 
+	// EmailDelivery advances the push EmailDelivery type state on delivery.
+	EmailDelivery DeliveryNotifier
+
 	// Processor is an optional test seam. Production leaves it nil so a fresh
 	// Receiver is built with the latest rules for each message.
 	Processor RawEventProcessor
@@ -74,12 +77,13 @@ func NewStagedMessageProcessor(cfg StagedMessageProcessorConfig) (StagedMessageP
 	}
 
 	base := ReceiverConfig{
-		UserManager: cfg.UserManager,
-		Sender:      cfg.Sender,
-		Domain:      cfg.Domain,
-		Storage:     cfg.Storage,
-		Metadata:    cfg.Metadata,
-		Dedup:       NewS3Dedup(cfg.Client, cfg.Bucket),
+		UserManager:   cfg.UserManager,
+		Sender:        cfg.Sender,
+		Domain:        cfg.Domain,
+		Storage:       cfg.Storage,
+		Metadata:      cfg.Metadata,
+		Dedup:         NewS3Dedup(cfg.Client, cfg.Bucket),
+		EmailDelivery: cfg.EmailDelivery,
 	}
 	return &stagedMessageProcessor{
 		client:  cfg.Client,

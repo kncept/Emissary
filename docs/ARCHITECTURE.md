@@ -180,9 +180,12 @@ Durable JMAP change-tracker state uses a separate `_jmap-state/` prefix:
 fingerprints, bounded change logs and recent query result sets used by
 `Foo/changes` and `Foo/queryChanges`. Writes use optimistic concurrency (an S3
 ETag condition or a filesystem content hash) so a stale Lambda invocation
-cannot roll a state counter backwards. This deployment is polling-only; there
-is no EventSource route, and `StateChange` events (including `EmailDelivery`)
-are future work.
+cannot roll a state counter backwards. The same state is the source for push
+notifications: `/eventsource` polls it for connected clients, and JMAP writes
+flush their changes after dispatch. Verified PushSubscriptions receive the same
+`StateChange` payload by webhook. Inbound delivery advances the `EmailDelivery`
+counter through the shared store so a different Lambda process is visible to
+push clients.
 
 ### Recipient validation and delivery
 

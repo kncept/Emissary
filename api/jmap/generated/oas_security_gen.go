@@ -38,6 +38,7 @@ func findAuthorization(h http.Header, prefix string) (string, bool) {
 var operationRolesBasicAuth = map[string][]string{
 	ApiRequestOperation:     []string{},
 	DownloadBinaryOperation: []string{},
+	EventSourceOperation:    []string{},
 	GetSessionOperation:     []string{},
 	UploadBinaryOperation:   []string{},
 }
@@ -67,6 +68,7 @@ func GetRolesForBasicAuth(operation string) []string {
 var operationRolesBearerAuth = map[string][]string{
 	ApiRequestOperation:     []string{},
 	DownloadBinaryOperation: []string{},
+	EventSourceOperation:    []string{},
 	GetSessionOperation:     []string{},
 	UploadBinaryOperation:   []string{},
 }

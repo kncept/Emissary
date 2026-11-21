@@ -16,11 +16,13 @@ info:
     - the request and response arguments for every method required by a
       minimal RFC 8621 mail implementation.
 
-    State changes are observed by polling `Foo/changes` and
-    `Foo/queryChanges`. As Lambda is a primary target, this document defines
-    polling-only behaviour; working out state change events is a future
-    requirement. EventSource `StateChange` events, including `EmailDelivery`,
-    are not advertised by the Session object.
+    State changes can be observed by polling `Foo/changes` and
+    `Foo/queryChanges`, or in near real time through the EventSource resource
+    advertised by `eventSourceUrl`. The stream sends RFC 8620 `StateChange`
+    objects with per-type state tokens, including `EmailDelivery` when inbound
+    mail is delivered. Verified PushSubscription webhooks receive the same
+    objects. Because Lambda deployments cannot always hold a stream open,
+    clients may use `closeafter=state` to receive one event per connection.
 
     This document defines no authentication operations. All auth
     operations (login, refresh, and any future auth endpoints) are
@@ -105,6 +107,90 @@ paths:
                 $ref: '#/components/schemas/Session'
         '401':
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /eventsource:
+    get:
+      tags:
+      - Push
+      summary: Receive JMAP StateChange events
+      description: |-
+        RFC 8620 section 7.3 server-sent event stream. Successful responses use
+        `text/event-stream` and carry `state` events whose data is a
+        StateChange object. `ping` events carry `{"interval": n}` and do not
+        update the event id. The browser EventSource API cannot set an
+        Authorization header, so the access token may be supplied in the
+        `token` query parameter; treat it like a bearer token. The `accountId`
+        parameter is optional and only accepted for accounts the caller may
+        access.
+      operationId: eventSource
+      parameters:
+      - name: types
+        in: query
+        required: false
+        description: Comma-separated type names, or `*` for all supported types
+        schema:
+          type: string
+          default: '*'
+      - name: closeafter
+        in: query
+        required: false
+        description: Close after one `state` event, or keep the stream open
+        schema:
+          type: string
+          enum:
+          - state
+          - "no"
+          default: "no"
+      - name: ping
+        in: query
+        required: false
+        description: Ping interval in seconds; 0 disables pings
+        schema:
+          type: integer
+          minimum: 0
+          default: 30
+      - name: token
+        in: query
+        required: false
+        description: Access token for clients that cannot set an Authorization header
+        schema:
+          type: string
+      - name: accountId
+        in: query
+        required: false
+        description: Optional target account; defaults to the authenticated subject
+        schema:
+          $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          description: Invalid types, closeafter or ping argument
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Account not accessible
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          description: Too many concurrent connections
           content:
             application/json:
               schema:
@@ -318,6 +404,7 @@ components:
       - apiUrl
       - downloadUrl
       - uploadUrl
+      - eventSourceUrl
       - state
       properties:
         capabilities:
@@ -346,6 +433,11 @@ components:
           description: |-
             URI Template (RFC 6570 level 1) containing the variable
             `accountId`.
+        eventSourceUrl:
+          type: string
+          description: |-
+            URI Template (RFC 6570 level 1) containing the variables
+            `types`, `closeafter`, and `ping` (RFC 8620 section 7.3).
         state:
           type: string
       additionalProperties: true

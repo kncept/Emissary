@@ -123,6 +123,12 @@ func messageIDDomain(address string) string {
 	return ""
 }
 
+// SyncState refreshes the Email state from storage so external changes (such
+// as inbound delivery) are visible to push notifications and /changes.
+func (h *Handler) SyncState(ctx context.Context, accountID string) (string, error) {
+	return h.syncEmailState(ctx, accountID)
+}
+
 // syncEmailState refreshes the Email snapshots from storage.
 func (h *Handler) syncEmailState(ctx context.Context, accountID string) (string, error) {
 	listed, err := h.deps.Storage.ListEmails(ctx, accountID, "")

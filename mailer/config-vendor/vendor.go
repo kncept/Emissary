@@ -19,6 +19,7 @@ import (
 	"github.com/kncept/Emissary/mailer/components/storage"
 	"github.com/kncept/Emissary/mailer/components/usermanager"
 	"github.com/kncept/Emissary/mailer/config"
+	"github.com/kncept/Emissary/mailer/jmap/delivery"
 	"github.com/kncept/Emissary/mailer/receiver"
 )
 
@@ -264,6 +265,7 @@ func FromConfig(ctx context.Context, cfg *config.Config) (*Bundle, error) {
 			UserManager:    b.UserManager,
 			Sender:         b.Sender,
 			IdentityConfig: b.MailIdentityConfigSource,
+			EmailDelivery:  delivery.New(b.Storage),
 		}); err != nil {
 			return nil, fmt.Errorf("staged message processor: %w", err)
 		}

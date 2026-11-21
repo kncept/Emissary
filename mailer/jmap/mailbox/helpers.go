@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 	"github.com/kncept/Emissary/mailer/components/metadata"
 	"github.com/kncept/Emissary/mailer/components/storage"
+	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 )
 
 func (h *Handler) getMailboxes(ctx context.Context, accountID string) []Mailbox {
@@ -121,6 +121,11 @@ func (h *Handler) CountUnreadInMailbox(ctx context.Context, accountID, mailboxID
 func (h *Handler) countThreadsInMailbox(ctx context.Context, accountID, mailboxID string) int {
 	// For now, each email is its own thread
 	return h.countEmailsInMailbox(ctx, accountID, mailboxID)
+}
+
+// SyncState refreshes the Mailbox state from the configured mailbox store.
+func (h *Handler) SyncState(ctx context.Context, accountID string) (string, error) {
+	return h.syncMailboxState(ctx, accountID, h.getMailboxes(ctx, accountID))
 }
 
 // syncMailboxState builds a fingerprint snapshot from the current mailboxes.

@@ -21,15 +21,19 @@ import (
 type StateKind string
 
 const (
-	StateEmail        StateKind = "email"
-	StateEmailQuery   StateKind = "email-query"
-	StateMailbox      StateKind = "mailbox"
-	StateMailboxQuery StateKind = "mailbox-query"
-	StateThread       StateKind = "thread"
-	StateIdentity     StateKind = "identity"
-	StateSubmission   StateKind = "submission"
-	StateVacation     StateKind = "vacation"
-	StateBlob         StateKind = "blob"
+	StateEmail      StateKind = "email"
+	StateEmailQuery StateKind = "email-query"
+	// StateEmailDelivery is the RFC 8620 "EmailDelivery" type state. It is
+	// advanced when a message is delivered to an account by the inbound
+	// pipeline, independently of the Email records that /changes reports.
+	StateEmailDelivery StateKind = "email-delivery"
+	StateMailbox       StateKind = "mailbox"
+	StateMailboxQuery  StateKind = "mailbox-query"
+	StateThread        StateKind = "thread"
+	StateIdentity      StateKind = "identity"
+	StateSubmission    StateKind = "submission"
+	StateVacation      StateKind = "vacation"
+	StateBlob          StateKind = "blob"
 
 	// maxChangeEntries bounds the persisted delta log. Callers whose state is
 	// older than the retained window get cannotCalculateChanges, which RFC
@@ -47,6 +51,20 @@ const (
 	// counter monotonic instead of letting a stale writer win.
 	stateSaveRetries = 8
 )
+
+// PushStateKinds are the type states that may appear in an RFC 8620
+// StateChange event. Query states are deliberately excluded: they are not
+// JMAP data types, and clients discover them through /queryChanges instead.
+var PushStateKinds = []StateKind{
+	StateEmail,
+	StateEmailDelivery,
+	StateMailbox,
+	StateThread,
+	StateIdentity,
+	StateSubmission,
+	StateVacation,
+	StateBlob,
+}
 
 // ChangeOp is the kind of modification applied to a record.
 type ChangeOp uint8
@@ -348,6 +366,26 @@ func (t *Tracker) State(ctx context.Context, accountID string, kind StateKind) (
 		return "", err
 	}
 	return stateToken(kind, account.state.Versions[kind]), nil
+}
+
+// States returns the current token for every type that has a state in the
+// durable tracker. The cached snapshot is discarded first so changes made by
+// another process (for example inbound delivery in a separate Lambda) are
+// visible to push notifications.
+func (t *Tracker) States(ctx context.Context, accountID string) (map[StateKind]string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	account := t.accountLocked(accountID)
+	account.loaded = false
+	account, err := t.loadLocked(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	states := make(map[StateKind]string, len(PushStateKinds))
+	for _, kind := range PushStateKinds {
+		states[kind] = stateToken(kind, account.state.Versions[kind])
+	}
+	return states, nil
 }
 
 // Sync compares new snapshots with the previous ones and records one change

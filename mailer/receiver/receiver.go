@@ -57,6 +57,16 @@ type ReceiverConfig struct {
 	// managers without one get a process-local store so loop prevention still
 	// works within the process.
 	VacationStore usermanager.VacationStore
+
+	// EmailDelivery advances the RFC 8620 EmailDelivery type state after a
+	// message is stored. It is optional so existing callers and tests keep
+	// their behaviour; production wiring supplies a durable tracker.
+	EmailDelivery DeliveryNotifier
+}
+
+// DeliveryNotifier records a successful inbound delivery for push clients.
+type DeliveryNotifier interface {
+	Delivered(ctx context.Context, accountID, messageID string) error
 }
 
 // Receiver processes inbound messages.
@@ -395,6 +405,15 @@ func (r *Receiver) deliverToRecipient(ctx context.Context, recipient string, mes
 	// keywords and is unread and unflagged until a JMAP client changes it.
 	if err := r.cfg.Metadata.Save(ctx, metadata.NewEmailMetadata(recipient, id)); err != nil {
 		return fmt.Errorf("failed to save metadata for %s: %w", id, err)
+	}
+
+	// Push state is best effort: the message is already durable, so a failure
+	// here must not trigger a Lambda retry that would deliver it twice. Clients
+	// still discover the new mail through the normal Email state token.
+	if r.cfg.EmailDelivery != nil {
+		if err := r.cfg.EmailDelivery.Delivered(ctx, recipient, id); err != nil {
+			slog.Warn("Receiver: could not record EmailDelivery state", "id", id, "err", err)
+		}
 	}
 
 	slog.Debug("Receiver: delivered message", "id", id, "smtp_id", message.MessageID, "recipient", recipient)

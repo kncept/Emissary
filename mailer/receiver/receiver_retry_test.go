@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/components/sender"
 	"github.com/kncept/Emissary/mailer/components/storage"
+	"github.com/kncept/Emissary/mailer/email"
 )
 
 // failOnceStorage fails delivery for selected accounts until they are removed

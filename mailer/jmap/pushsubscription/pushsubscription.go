@@ -124,9 +124,22 @@ func CredentialID(ctx context.Context) string {
 		case claims.SID != "":
 			seed = "sid:" + claims.SID
 		case claims.Subject != "":
-			seed = "sub:" + claims.Subject
+			seed = credentialSeedFromSubject(claims.Subject)
 		}
 	}
+	return hashCredentialSeed(seed)
+}
+
+// CredentialFromSubject derives the credential id used by a session-less
+// token for subject. It lets delivery associate a stored subscription with an
+// account known only from durable state (for example an inbound delivery).
+func CredentialFromSubject(subject string) string {
+	return hashCredentialSeed(credentialSeedFromSubject(subject))
+}
+
+func credentialSeedFromSubject(subject string) string { return "sub:" + subject }
+
+func hashCredentialSeed(seed string) string {
 	sum := sha256.Sum256([]byte(seed))
 	return base64.RawURLEncoding.EncodeToString(sum[:16])
 }

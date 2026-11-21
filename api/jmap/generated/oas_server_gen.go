@@ -24,6 +24,16 @@ type Handler interface {
 	//
 	// GET /download/{accountId}/{blobId}/{name}
 	DownloadBinary(ctx context.Context, params DownloadBinaryParams) (DownloadBinaryRes, error)
+	// EventSource implements eventSource operation.
+	//
+	// RFC 8620 section 7.3 server-sent event stream. Successful responses use `text/event-stream` and
+	// carry `state` events whose data is a StateChange object. `ping` events carry `{"interval": n}` and
+	// do not update the event id. The browser EventSource API cannot set an Authorization header, so the
+	// access token may be supplied in the `token` query parameter; treat it like a bearer token. The
+	// `accountId` parameter is optional and only accepted for accounts the caller may access.
+	//
+	// GET /eventsource
+	EventSource(ctx context.Context, params EventSourceParams) (EventSourceRes, error)
 	// GetSession implements getSession operation.
 	//
 	// Returns the Session object for the authenticated user. The response should disable HTTP caching (for

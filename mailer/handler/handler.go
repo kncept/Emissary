@@ -27,6 +27,7 @@ import (
 	"github.com/kncept/Emissary/mailer/gui"
 	"github.com/kncept/Emissary/mailer/identity"
 	"github.com/kncept/Emissary/mailer/jmap"
+	"github.com/kncept/Emissary/mailer/jmap/push"
 	"github.com/kncept/Emissary/mailer/jmap/pushsubscription"
 	"github.com/kncept/Emissary/mailer/receiver"
 )
@@ -70,6 +71,9 @@ const (
 	jmapAPIPath             = "/api/jmap/"
 	jmapDownloadURLTemplate = "/download/{accountId}/{blobId}/{name}?type={type}"
 	jmapUploadURLTemplate   = "/upload/{accountId}"
+	// eventSourceUrl is a level-1 URI template; clients substitute all three
+	// variables (RFC 8620 section 7.3).
+	jmapEventSourceURLTemplate = "/eventsource?types={types}&closeafter={closeafter}&ping={ping}"
 
 	// jmapUnreferencedBlobQuotaLimit names the separate quota applied to
 	// blobs that no JMAP object references yet (RFC 8620 section 6).
@@ -211,6 +215,12 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 		_, err := b.Session.Get(ctx, sid)
 		return err == nil
 	})
+	pushHub := push.NewHub(jmapHandler, jmapHandler, emailStore)
+	pushHub.SetSessionChecker(func(ctx context.Context, sid string) bool {
+		_, err := b.Session.Get(ctx, sid)
+		return err == nil
+	})
+	pushHub.Start(ctx)
 	dispatcher := jmap.NewDispatcher(jmapHandler, emailStore)
 
 	mux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, r *http.Request) {
@@ -297,11 +307,13 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 	mux.Handle("GET /.well-known/jmap", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPSession(w, r, maxFileSize)
 	})))
+	mux.Handle("GET /eventsource", requireEventSourceAuth(authenticator, http.HandlerFunc(pushHub.ServeHTTP)))
 	mux.Handle("POST /api/jmap/", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleJMAPAPIRequest(w, r, dispatcher, maxFileSize)
+		handleJMAPAPIRequest(w, r, dispatcher, maxFileSize, pushHub)
 	})))
 	mux.Handle("POST /upload/{accountId}", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPUpload(w, r, blobLifecycle, userManager, maxFileSize, uploadSlots)
+		flushPushState(r, pushHub)
 	})))
 	mux.Handle("GET /download/{accountId}/{blobId}/{name}", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPDownload(w, r, emailStore, userManager)
@@ -375,7 +387,7 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 		})))
 	}
 
-	mux.Handle("POST /api/auth/logout", requireAuth(authenticator, handleLogout(authenticator, emailStore)))
+	mux.Handle("POST /api/auth/logout", requireAuth(authenticator, handleLogout(authenticator, emailStore, pushHub)))
 
 	notFound := func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
@@ -410,6 +422,32 @@ func requireAuth(authenticator *auth.Authenticator, next http.Handler) http.Hand
 		claims, err := auth.ClaimsFromBearerHeader(authenticator, r.Header.Get("Authorization"))
 		if err != nil {
 			logRequestWarn(r, "validate bearer token", err)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="emissary"`)
+			writeError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		ctx := auth.ContextWithClaims(r.Context(), claims)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// requireEventSourceAuth accepts the same bearer token as requireAuth plus a
+// `token` query parameter, because the browser EventSource API cannot set an
+// Authorization header. The query token is equivalent to a bearer token and
+// must be treated as a secret by clients and intermediaries.
+func requireEventSourceAuth(authenticator *auth.Authenticator, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var claims *auth.Claims
+		var err error
+		if header := r.Header.Get("Authorization"); header != "" {
+			claims, err = auth.ClaimsFromBearerHeader(authenticator, header)
+		} else if token := r.URL.Query().Get("token"); token != "" {
+			claims, err = auth.ClaimsFromBearerToken(authenticator, token)
+		} else {
+			err = auth.ErrInvalidToken
+		}
+		if err != nil {
+			logRequestWarn(r, "validate event source token", err)
 			w.Header().Set("WWW-Authenticate", `Bearer realm="emissary"`)
 			writeError(w, http.StatusUnauthorized, "authentication required")
 			return
@@ -589,18 +627,19 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 			jmap.CapabilitySubmission:       username,
 			jmap.CapabilityVacationResponse: username,
 		},
-		"username":    username,
-		"apiUrl":      jmapAPIPath,
-		"downloadUrl": jmapDownloadURLTemplate,
-		"uploadUrl":   jmapUploadURLTemplate,
-		"state":       jmapSessionState,
+		"username":       username,
+		"apiUrl":         jmapAPIPath,
+		"downloadUrl":    jmapDownloadURLTemplate,
+		"uploadUrl":      jmapUploadURLTemplate,
+		"eventSourceUrl": jmapEventSourceURLTemplate,
+		"state":          jmapSessionState,
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(session)
 }
 
-func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jmap.Dispatcher, maxFileSize int64) {
+func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jmap.Dispatcher, maxFileSize int64, pushHub *push.Hub) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
@@ -652,8 +691,29 @@ func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jm
 
 	resp.SessionState = jmapSessionState
 
+	// Publish before the response is written so a client that immediately opens
+	// an EventSource sees the new state in its snapshot as well.
+	flushPushState(r, pushHub)
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// flushPushState records the credential/account pair for webhook delivery and
+// refreshes the type states after a write. It is deliberately non-fatal: JMAP
+// writes are already durable, and push is best effort.
+func flushPushState(r *http.Request, hub *push.Hub) {
+	if hub == nil {
+		return
+	}
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims == nil || claims.Subject == "" {
+		return
+	}
+	hub.Remember(r.Context(), claims.Subject)
+	if err := hub.Refresh(r.Context(), claims.Subject); err != nil {
+		logRequestWarn(r, "refresh JMAP push state", err)
+	}
 }
 
 // writeJMAPRequestError renders an RFC 8620 section 3.6.1 request-level error
@@ -933,7 +993,7 @@ func handleRawEmail(w http.ResponseWriter, r *http.Request, store storage.Storag
 	}
 }
 
-func handleLogout(authenticator *auth.Authenticator, store storage.PushSubscriptionStore) http.HandlerFunc {
+func handleLogout(authenticator *auth.Authenticator, store storage.PushSubscriptionStore, pushHub *push.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
 		if claims == nil || claims.SID == "" {
@@ -951,6 +1011,11 @@ func handleLogout(authenticator *auth.Authenticator, store storage.PushSubscript
 		// subscriptions are unreachable even if cleanup cannot run.
 		if err := pushsubscription.DestroyForCredential(r.Context(), store); err != nil {
 			logRequestWarn(r, "destroy push subscriptions on logout", err)
+		}
+		// Access tokens are stateless and remain valid until expiry, so a live
+		// stream must be closed explicitly when its session is revoked.
+		if pushHub != nil {
+			pushHub.CloseCredential(r.Context())
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 	}

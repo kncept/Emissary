@@ -50,11 +50,12 @@ func jmapToken(t *testing.T, h http.Handler) string {
 
 // jmapTestSession is only the part of the Session object these tests inspect.
 type jmapTestSession struct {
-	State        string `json:"state"`
-	APIURL       string `json:"apiUrl"`
-	DownloadURL  string `json:"downloadUrl"`
-	UploadURL    string `json:"uploadUrl"`
-	Capabilities struct {
+	State          string `json:"state"`
+	APIURL         string `json:"apiUrl"`
+	DownloadURL    string `json:"downloadUrl"`
+	UploadURL      string `json:"uploadUrl"`
+	EventSourceURL string `json:"eventSourceUrl"`
+	Capabilities   struct {
 		Core       map[string]any `json:"urn:ietf:params:jmap:core"`
 		Mail       map[string]any `json:"urn:ietf:params:jmap:mail"`
 		Submission map[string]any `json:"urn:ietf:params:jmap:submission"`
@@ -232,9 +233,10 @@ func TestJMAPSessionURLTemplatesMatchRoutes(t *testing.T) {
 	session := fetchJMAPSession(t, h, token)
 
 	wantTemplates := map[string]string{
-		"apiUrl":      "/api/jmap/",
-		"downloadUrl": "/download/{accountId}/{blobId}/{name}?type={type}",
-		"uploadUrl":   "/upload/{accountId}",
+		"apiUrl":         "/api/jmap/",
+		"downloadUrl":    "/download/{accountId}/{blobId}/{name}?type={type}",
+		"uploadUrl":      "/upload/{accountId}",
+		"eventSourceUrl": "/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
 	}
 	for name, want := range wantTemplates {
 		var got string
@@ -245,20 +247,21 @@ func TestJMAPSessionURLTemplatesMatchRoutes(t *testing.T) {
 			got = session.DownloadURL
 		case "uploadUrl":
 			got = session.UploadURL
+		case "eventSourceUrl":
+			got = session.EventSourceURL
 		}
 		if got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
 	}
 
-	// Push is deliberately out of scope for this polling-only deployment.
-	var rawSession map[string]any
-	w := request(t, h, http.MethodGet, "/.well-known/jmap", "", token)
-	if err := json.Unmarshal(w.Body.Bytes(), &rawSession); err != nil {
-		t.Fatalf("decode raw session: %v", err)
-	}
-	if _, ok := rawSession["eventSourceUrl"]; ok {
-		t.Fatal("session must not advertise eventSourceUrl while EventSource is unsupported")
+	// RFC 8620 section 7.3 requires the EventSource template to expose all
+	// three variables; assert them explicitly even though the full string is
+	// compared above.
+	for _, variable := range []string{"types", "closeafter", "ping"} {
+		if !strings.Contains(session.EventSourceURL, "{"+variable+"}") {
+			t.Errorf("eventSourceUrl is missing {%s}: %q", variable, session.EventSourceURL)
+		}
 	}
 
 	// Expanding the advertised templates must upload bytes and download the

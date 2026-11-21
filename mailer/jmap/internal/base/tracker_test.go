@@ -85,6 +85,33 @@ func TestTrackerStateIsDurableAndMonotonic(t *testing.T) {
 	}
 }
 
+func TestTrackerStatesIncludeEmailDeliveryAcrossProcesses(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewMemoryStorage()
+	writer := NewTracker(store)
+	if err := writer.Record(ctx, testAccountID, StateEmailDelivery, "message-1", ChangeCreate); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+
+	// A different process loads the current tokens from shared storage.
+	reader := NewTracker(store)
+	states, err := reader.States(ctx, testAccountID)
+	if err != nil {
+		t.Fatalf("States() error = %v", err)
+	}
+	if got, want := states[StateEmailDelivery], "email-delivery-1"; got != want {
+		t.Errorf("EmailDelivery state = %q, want %q", got, want)
+	}
+	if _, ok := states[StateEmailQuery]; ok {
+		t.Error("States() included a query state, which is not a JMAP data type")
+	}
+	for _, kind := range PushStateKinds {
+		if _, ok := states[kind]; !ok {
+			t.Errorf("States() omitted %q", kind)
+		}
+	}
+}
+
 func TestTrackerRetriesConflictsWithoutRegressingState(t *testing.T) {
 	ctx := context.Background()
 	store := storage.NewMemoryStorage()

@@ -11,11 +11,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/components/metadata"
 	"github.com/kncept/Emissary/mailer/components/sender"
 	"github.com/kncept/Emissary/mailer/components/storage"
 	"github.com/kncept/Emissary/mailer/components/usermanager"
+	"github.com/kncept/Emissary/mailer/email"
 )
 
 type fakeS3 struct {
@@ -834,8 +834,8 @@ func (e *testParsedEmailEvent) OnComplete(_ context.Context) error {
 
 func TestProcessParsedEventDeliversThroughConfiguredStorage(t *testing.T) {
 	// Create a parsed wire email directly
-	wireEmail := email.ParseWireFormat("test-key", bytes.NewReader([]byte(receivedHeader("alice@example.com") +
-		"From: sender@example.com\r\nTo: alice@example.com\r\n" +
+	wireEmail := email.ParseWireFormat("test-key", bytes.NewReader([]byte(receivedHeader("alice@example.com")+
+		"From: sender@example.com\r\nTo: alice@example.com\r\n"+
 		"Date: Fri, 08 Mar 2024 15:30:00 +0100\r\nSubject: hi\r\n\r\nbody\r\n")))
 
 	event := &testParsedEmailEvent{wireEmail: wireEmail, completed: false}

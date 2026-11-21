@@ -2,6 +2,7 @@ package jmap
 
 import (
 	"context"
+	"errors"
 
 	"github.com/kncept/Emissary/mailer/components/metadata"
 	"github.com/kncept/Emissary/mailer/components/sender"
@@ -72,6 +73,46 @@ func NewHandler(store storage.Storage, meta metadata.MetadataStore, userMgr user
 		pushSubscriptionMethods: pushsubscription.New(deps),
 		blobMethods:             blob.New(deps),
 	}
+}
+
+// RefreshState synchronises every storage-backed type state before push reads
+// it. Each refresh is best effort: a single failing store must not suppress
+// notifications for the other types.
+func (h *Handler) RefreshState(ctx context.Context, accountID string) error {
+	refreshers := []func(context.Context, string) error{
+		func(ctx context.Context, accountID string) error {
+			_, err := h.emailMethods.SyncState(ctx, accountID)
+			return err
+		},
+		func(ctx context.Context, accountID string) error {
+			_, err := h.threadMethods.SyncState(ctx, accountID)
+			return err
+		},
+		func(ctx context.Context, accountID string) error {
+			_, err := h.mailboxMethods.SyncState(ctx, accountID)
+			return err
+		},
+		func(ctx context.Context, accountID string) error {
+			_, err := h.identityMethods.SyncState(ctx, accountID)
+			return err
+		},
+		func(ctx context.Context, accountID string) error {
+			_, err := h.vacationMethods.SyncState(ctx, accountID)
+			return err
+		},
+	}
+	var errs []error
+	for _, refresh := range refreshers {
+		if err := refresh(ctx, accountID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// States exposes the shared tracker's current type states to the push hub.
+func (h *Handler) States(ctx context.Context, accountID string) (map[base.StateKind]string, error) {
+	return h.deps.Changes.States(ctx, accountID)
 }
 
 // SetSessionChecker wires session-expiry detection into the PushSubscription

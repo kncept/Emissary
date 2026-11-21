@@ -9,6 +9,10 @@ type DownloadBinaryRes interface {
 	downloadBinaryRes()
 }
 
+type EventSourceRes interface {
+	eventSourceRes()
+}
+
 type GetSessionRes interface {
 	getSessionRes()
 }

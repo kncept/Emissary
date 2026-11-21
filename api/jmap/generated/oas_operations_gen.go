@@ -8,6 +8,7 @@ type OperationName = string
 const (
 	ApiRequestOperation     OperationName = "ApiRequest"
 	DownloadBinaryOperation OperationName = "DownloadBinary"
+	EventSourceOperation    OperationName = "EventSource"
 	GetSessionOperation     OperationName = "GetSession"
 	UploadBinaryOperation   OperationName = "UploadBinary"
 )

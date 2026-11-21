@@ -151,6 +151,19 @@ func fingerprint(v usermanager.VacationResponse) string {
 	return string(raw)
 }
 
+// SyncState refreshes the singleton's state from the durable vacation store.
+func (h *Handler) SyncState(ctx context.Context, accountID string) (string, error) {
+	email, err := h.accountEmail(ctx, accountID)
+	if err != nil {
+		return "", err
+	}
+	stored, err := h.store.GetVacationResponse(ctx, email)
+	if err != nil {
+		return "", err
+	}
+	return h.syncState(ctx, accountID, stored)
+}
+
 func (h *Handler) syncState(ctx context.Context, accountID string, v usermanager.VacationResponse) (string, error) {
 	if err := h.deps.Changes.Sync(ctx, accountID, map[base.StateKind]map[string]string{
 		base.StateVacation: {SingletonID: fingerprint(v)},
