@@ -55,5 +55,4 @@ export type EventSourceCloseafter = typeof EventSourceCloseafter[keyof typeof Ev
 
 export const EventSourceCloseafter = {
   state: 'state',
-  no: 'no',
 } as const;

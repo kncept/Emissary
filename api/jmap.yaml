@@ -140,6 +140,95 @@ paths:
       - name: closeafter
         in: query
         required: false
+        description: |-
+          The REST proxy only supports `state`: API Gateway's integration
+          timeout cannot carry an open stream. Use the Session's
+          `eventSourceUrl` (the dedicated streaming origin) for `no`.
+        schema:
+          type: string
+          enum:
+          - state
+          default: state
+      - name: ping
+        in: query
+        required: false
+        description: Ping interval in seconds; 0 disables pings
+        schema:
+          type: integer
+          minimum: 0
+          default: 30
+      - name: token
+        in: query
+        required: false
+        description: Access token for clients that cannot set an Authorization header
+        schema:
+          type: string
+      - name: accountId
+        in: query
+        required: false
+        description: Optional target account; defaults to the authenticated subject
+        schema:
+          $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          description: Invalid types, closeafter or ping argument
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          description: Authentication required
+          content:
+            text/plain:
+              schema:
+                type: string
+        '403':
+          description: Account not accessible
+          content:
+            text/plain:
+              schema:
+                type: string
+        '429':
+          description: Too many concurrent connections
+          content:
+            text/plain:
+              schema:
+                type: string
+  /eventsource/stream:
+    get:
+      tags:
+      - Push
+      summary: Long-lived JMAP StateChange stream (dedicated streaming origin)
+      description: |-
+        RFC 8620 section 7.3 server-sent event stream served by the dedicated
+        response-streaming Lambda Function URL (RESOLVED-1). Unlike the REST
+        proxy's `/eventsource`, this operation keeps `closeafter=no` open for
+        the full 15-minute Lambda timeout. Successful responses use
+        `text/event-stream` and carry `state` events whose data is a
+        StateChange object; `ping` events carry `{"interval": n}` and do not
+        update the event id. The browser EventSource API cannot set an
+        Authorization header, so the access token may be supplied in the
+        `token` query parameter; treat it like a bearer token. The `accountId`
+        parameter is optional and only accepted for accounts the caller may
+        access.
+      operationId: eventSourceStream
+      parameters:
+      - name: types
+        in: query
+        required: false
+        description: Comma-separated type names, or `*` for all supported types
+        schema:
+          type: string
+          default: '*'
+      - name: closeafter
+        in: query
+        required: false
         description: Close after one `state` event, or keep the stream open
         schema:
           type: string

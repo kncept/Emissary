@@ -52,6 +52,7 @@
 import type {
   DownloadBinaryParams,
   EventSourceParams,
+  EventSourceStreamParams,
   Id,
   JmapRequest,
   JmapResponse,
@@ -209,6 +210,89 @@ export const eventSource = async (params?: EventSourceParams, options?: RequestI
 
   const data: eventSourceResponse['data'] = body !== null ? body : ''
   return { data, status: res.status, headers: res.headers } as eventSourceResponse
+}
+
+
+
+export type eventSourceStreamResponse200 = {
+  data: string
+  status: 200
+}
+
+export type eventSourceStreamResponse400 = {
+  data: string
+  status: 400
+}
+
+export type eventSourceStreamResponse401 = {
+  data: string
+  status: 401
+}
+
+export type eventSourceStreamResponse403 = {
+  data: string
+  status: 403
+}
+
+export type eventSourceStreamResponse429 = {
+  data: string
+  status: 429
+}
+
+export type eventSourceStreamResponseSuccess = (eventSourceStreamResponse200) & {
+  headers: Headers;
+};
+export type eventSourceStreamResponseError = (eventSourceStreamResponse400 | eventSourceStreamResponse401 | eventSourceStreamResponse403 | eventSourceStreamResponse429) & {
+  headers: Headers;
+};
+
+export type eventSourceStreamResponse = (eventSourceStreamResponseSuccess | eventSourceStreamResponseError)
+
+export const getEventSourceStreamUrl = (params?: EventSourceStreamParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/eventsource/stream?${stringifiedParams}` : `/eventsource/stream`
+}
+
+/**
+ * RFC 8620 section 7.3 server-sent event stream served by the dedicated
+ * response-streaming Lambda Function URL (RESOLVED-1). Unlike the REST
+ * proxy's `/eventsource`, this operation keeps `closeafter=no` open for
+ * the full 15-minute Lambda timeout. Successful responses use
+ * `text/event-stream` and carry `state` events whose data is a
+ * StateChange object; `ping` events carry `{"interval": n}` and do not
+ * update the event id. The browser EventSource API cannot set an
+ * Authorization header, so the access token may be supplied in the
+ * `token` query parameter; treat it like a bearer token. The `accountId`
+ * parameter is optional and only accepted for accounts the caller may
+ * access.
+ * @summary Long-lived JMAP StateChange stream (dedicated streaming origin)
+ */
+export const eventSourceStream = async (params?: EventSourceStreamParams, options?: RequestInit): Promise<eventSourceStreamResponse> => {
+
+  const res = await fetch(getEventSourceStreamUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: eventSourceStreamResponse['data'] = body !== null ? body : ''
+  return { data, status: res.status, headers: res.headers } as eventSourceStreamResponse
 }
 
 

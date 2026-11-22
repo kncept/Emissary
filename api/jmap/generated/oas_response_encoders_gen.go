@@ -212,6 +212,83 @@ func encodeEventSourceResponse(response EventSourceRes, w http.ResponseWriter, s
 	}
 }
 
+func encodeEventSourceStreamResponse(response EventSourceStreamRes, w http.ResponseWriter, span trace.Span) error {
+	switch response := response.(type) {
+	case *EventSourceStreamOK:
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+
+		writer := w
+		if closer, ok := response.Data.(io.Closer); ok {
+			defer closer.Close()
+		}
+		if _, err := io.Copy(writer, response); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *EventSourceStreamBadRequest:
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(400)
+
+		writer := w
+		if closer, ok := response.Data.(io.Closer); ok {
+			defer closer.Close()
+		}
+		if _, err := io.Copy(writer, response); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *EventSourceStreamUnauthorized:
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(401)
+
+		writer := w
+		if closer, ok := response.Data.(io.Closer); ok {
+			defer closer.Close()
+		}
+		if _, err := io.Copy(writer, response); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *EventSourceStreamForbidden:
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(403)
+
+		writer := w
+		if closer, ok := response.Data.(io.Closer); ok {
+			defer closer.Close()
+		}
+		if _, err := io.Copy(writer, response); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *EventSourceStreamTooManyRequests:
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(429)
+
+		writer := w
+		if closer, ok := response.Data.(io.Closer); ok {
+			defer closer.Close()
+		}
+		if _, err := io.Copy(writer, response); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	default:
+		return errors.Errorf("unexpected response type: %T", response)
+	}
+}
+
 func encodeGetSessionResponse(response GetSessionRes, w http.ResponseWriter, span trace.Span) error {
 	switch response := response.(type) {
 	case *Session:

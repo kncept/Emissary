@@ -307,7 +307,7 @@ func TestJMAPSessionURLsAreAbsolute(t *testing.T) {
 	if !strings.HasPrefix(session.APIURL, "https://jmap.example.net/api/jmap/") {
 		t.Errorf("apiUrl = %q, want the configured public origin", session.APIURL)
 	}
-	if !strings.HasPrefix(session.EventSourceURL, "https://stream.example.net/eventsource") {
+	if !strings.HasPrefix(session.EventSourceURL, "https://stream.example.net/eventsource/stream") {
 		t.Errorf("eventSourceUrl = %q, want the dedicated streaming origin", session.EventSourceURL)
 	}
 	if strings.Contains(session.EventSourceURL, "jmap.example.net") {
@@ -325,7 +325,7 @@ func TestJMAPSessionURLTemplatesMatchRoutes(t *testing.T) {
 		"apiUrl":         testJMAPPublicURL + "/api/jmap/",
 		"downloadUrl":    testJMAPPublicURL + "/download/{accountId}/{blobId}/{name}?type={type}",
 		"uploadUrl":      testJMAPPublicURL + "/upload/{accountId}",
-		"eventSourceUrl": testJMAPPublicURL + "/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
+		"eventSourceUrl": testJMAPPublicURL + "/eventsource/stream?types={types}&closeafter={closeafter}&ping={ping}",
 	}
 	for name, want := range wantTemplates {
 		var got string

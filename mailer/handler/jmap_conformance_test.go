@@ -65,6 +65,7 @@ func TestJMAPRoutesMatchOpenAPI(t *testing.T) {
 	runtimeRoutes := []string{
 		jmapSessionRoute,
 		jmapEventSourceRoute,
+		jmapEventSourceStreamRoute,
 		jmapAPIRoute,
 		jmapUploadRoute,
 		jmapDownloadRoute,

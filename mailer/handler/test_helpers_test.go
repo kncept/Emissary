@@ -52,6 +52,7 @@ type handlerTestConfig struct {
 
 	JMAPPublicURL      string
 	JMAPEventSourceURL string
+	JMAPRESTProxy      bool
 
 	UserManager      usermanager.UserManager
 	UserManagerType  string
@@ -104,6 +105,7 @@ func (tc handlerTestConfig) build(t *testing.T) (*config.Config, *configvendor.B
 			JWTIssuer:          tc.JWTIssuer,
 			JMAPPublicURL:      publicURL,
 			JMAPEventSourceURL: tc.JMAPEventSourceURL,
+			JMAPRESTProxy:      tc.JMAPRESTProxy,
 		},
 		Storage: config.StorageConfig{
 			Type:          tc.StorageType,

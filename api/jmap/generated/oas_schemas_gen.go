@@ -357,14 +357,12 @@ type EventSourceCloseafter string
 
 const (
 	EventSourceCloseafterState EventSourceCloseafter = "state"
-	EventSourceCloseafterNo    EventSourceCloseafter = "no"
 )
 
 // AllValues returns all EventSourceCloseafter values.
 func (EventSourceCloseafter) AllValues() []EventSourceCloseafter {
 	return []EventSourceCloseafter{
 		EventSourceCloseafterState,
-		EventSourceCloseafterNo,
 	}
 }
 
@@ -372,8 +370,6 @@ func (EventSourceCloseafter) AllValues() []EventSourceCloseafter {
 func (s EventSourceCloseafter) MarshalText() ([]byte, error) {
 	switch s {
 	case EventSourceCloseafterState:
-		return []byte(s), nil
-	case EventSourceCloseafterNo:
 		return []byte(s), nil
 	default:
 		return nil, errors.Errorf("invalid value: %q", s)
@@ -385,9 +381,6 @@ func (s *EventSourceCloseafter) UnmarshalText(data []byte) error {
 	switch EventSourceCloseafter(data) {
 	case EventSourceCloseafterState:
 		*s = EventSourceCloseafterState
-		return nil
-	case EventSourceCloseafterNo:
-		*s = EventSourceCloseafterNo
 		return nil
 	default:
 		return errors.Errorf("invalid value: %q", data)
@@ -425,6 +418,127 @@ func (s EventSourceOK) Read(p []byte) (n int, err error) {
 }
 
 func (*EventSourceOK) eventSourceRes() {}
+
+type EventSourceStreamBadRequest struct {
+	Data io.Reader
+}
+
+// Read reads data from the Data reader.
+//
+// Kept to satisfy the io.Reader interface.
+func (s EventSourceStreamBadRequest) Read(p []byte) (n int, err error) {
+	if s.Data == nil {
+		return 0, io.EOF
+	}
+	return s.Data.Read(p)
+}
+
+func (*EventSourceStreamBadRequest) eventSourceStreamRes() {}
+
+type EventSourceStreamCloseafter string
+
+const (
+	EventSourceStreamCloseafterState EventSourceStreamCloseafter = "state"
+	EventSourceStreamCloseafterNo    EventSourceStreamCloseafter = "no"
+)
+
+// AllValues returns all EventSourceStreamCloseafter values.
+func (EventSourceStreamCloseafter) AllValues() []EventSourceStreamCloseafter {
+	return []EventSourceStreamCloseafter{
+		EventSourceStreamCloseafterState,
+		EventSourceStreamCloseafterNo,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s EventSourceStreamCloseafter) MarshalText() ([]byte, error) {
+	switch s {
+	case EventSourceStreamCloseafterState:
+		return []byte(s), nil
+	case EventSourceStreamCloseafterNo:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *EventSourceStreamCloseafter) UnmarshalText(data []byte) error {
+	switch EventSourceStreamCloseafter(data) {
+	case EventSourceStreamCloseafterState:
+		*s = EventSourceStreamCloseafterState
+		return nil
+	case EventSourceStreamCloseafterNo:
+		*s = EventSourceStreamCloseafterNo
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type EventSourceStreamForbidden struct {
+	Data io.Reader
+}
+
+// Read reads data from the Data reader.
+//
+// Kept to satisfy the io.Reader interface.
+func (s EventSourceStreamForbidden) Read(p []byte) (n int, err error) {
+	if s.Data == nil {
+		return 0, io.EOF
+	}
+	return s.Data.Read(p)
+}
+
+func (*EventSourceStreamForbidden) eventSourceStreamRes() {}
+
+type EventSourceStreamOK struct {
+	Data io.Reader
+}
+
+// Read reads data from the Data reader.
+//
+// Kept to satisfy the io.Reader interface.
+func (s EventSourceStreamOK) Read(p []byte) (n int, err error) {
+	if s.Data == nil {
+		return 0, io.EOF
+	}
+	return s.Data.Read(p)
+}
+
+func (*EventSourceStreamOK) eventSourceStreamRes() {}
+
+type EventSourceStreamTooManyRequests struct {
+	Data io.Reader
+}
+
+// Read reads data from the Data reader.
+//
+// Kept to satisfy the io.Reader interface.
+func (s EventSourceStreamTooManyRequests) Read(p []byte) (n int, err error) {
+	if s.Data == nil {
+		return 0, io.EOF
+	}
+	return s.Data.Read(p)
+}
+
+func (*EventSourceStreamTooManyRequests) eventSourceStreamRes() {}
+
+type EventSourceStreamUnauthorized struct {
+	Data io.Reader
+}
+
+// Read reads data from the Data reader.
+//
+// Kept to satisfy the io.Reader interface.
+func (s EventSourceStreamUnauthorized) Read(p []byte) (n int, err error) {
+	if s.Data == nil {
+		return 0, io.EOF
+	}
+	return s.Data.Read(p)
+}
+
+func (*EventSourceStreamUnauthorized) eventSourceStreamRes() {}
 
 type EventSourceTooManyRequests struct {
 	Data io.Reader
@@ -835,6 +949,52 @@ func (o OptEventSourceCloseafter) Get() (v EventSourceCloseafter, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptEventSourceCloseafter) Or(d EventSourceCloseafter) EventSourceCloseafter {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptEventSourceStreamCloseafter returns new OptEventSourceStreamCloseafter with value set to v.
+func NewOptEventSourceStreamCloseafter(v EventSourceStreamCloseafter) OptEventSourceStreamCloseafter {
+	return OptEventSourceStreamCloseafter{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptEventSourceStreamCloseafter is optional EventSourceStreamCloseafter.
+type OptEventSourceStreamCloseafter struct {
+	Value EventSourceStreamCloseafter
+	Set   bool
+}
+
+// IsSet returns true if OptEventSourceStreamCloseafter was set.
+func (o OptEventSourceStreamCloseafter) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptEventSourceStreamCloseafter) Reset() {
+	var v EventSourceStreamCloseafter
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptEventSourceStreamCloseafter) SetTo(v EventSourceStreamCloseafter) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptEventSourceStreamCloseafter) Get() (v EventSourceStreamCloseafter, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptEventSourceStreamCloseafter) Or(d EventSourceStreamCloseafter) EventSourceStreamCloseafter {
 	if v, ok := o.Get(); ok {
 		return v
 	}

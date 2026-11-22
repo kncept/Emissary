@@ -55,6 +55,19 @@ type Invoker interface {
 	//
 	// GET /eventsource
 	EventSource(ctx context.Context, params EventSourceParams) (EventSourceRes, error)
+	// EventSourceStream invokes eventSourceStream operation.
+	//
+	// RFC 8620 section 7.3 server-sent event stream served by the dedicated response-streaming Lambda
+	// Function URL (RESOLVED-1). Unlike the REST proxy's `/eventsource`, this operation keeps
+	// `closeafter=no` open for the full 15-minute Lambda timeout. Successful responses use
+	// `text/event-stream` and carry `state` events whose data is a StateChange object; `ping` events carry
+	// `{"interval": n}` and do not update the event id. The browser EventSource API cannot set an
+	// Authorization header, so the access token may be supplied in the `token` query parameter; treat it
+	// like a bearer token. The `accountId` parameter is optional and only accepted for accounts the caller
+	// may access.
+	//
+	// GET /eventsource/stream
+	EventSourceStream(ctx context.Context, params EventSourceStreamParams) (EventSourceStreamRes, error)
 	// GetSession invokes getSession operation.
 	//
 	// Returns the Session object for the authenticated user. The response should disable HTTP caching (for
@@ -630,6 +643,218 @@ func (c *Client) sendEventSource(ctx context.Context, params EventSourceParams) 
 
 	stage = "DecodeResponse"
 	result, err := decodeEventSourceResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// EventSourceStream invokes eventSourceStream operation.
+//
+// RFC 8620 section 7.3 server-sent event stream served by the dedicated response-streaming Lambda
+// Function URL (RESOLVED-1). Unlike the REST proxy's `/eventsource`, this operation keeps
+// `closeafter=no` open for the full 15-minute Lambda timeout. Successful responses use
+// `text/event-stream` and carry `state` events whose data is a StateChange object; `ping` events carry
+// `{"interval": n}` and do not update the event id. The browser EventSource API cannot set an
+// Authorization header, so the access token may be supplied in the `token` query parameter; treat it
+// like a bearer token. The `accountId` parameter is optional and only accepted for accounts the caller
+// may access.
+//
+// GET /eventsource/stream
+func (c *Client) EventSourceStream(ctx context.Context, params EventSourceStreamParams) (EventSourceStreamRes, error) {
+	res, err := c.sendEventSourceStream(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendEventSourceStream(ctx context.Context, params EventSourceStreamParams) (res EventSourceStreamRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("eventSourceStream"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/eventsource/stream"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, EventSourceStreamOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/eventsource/stream"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "types" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "types",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Types.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "closeafter" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "closeafter",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Closeafter.Get(); ok {
+				return e.EncodeValue(conv.StringToString(string(val)))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "ping" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "ping",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Ping.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "token" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "token",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Token.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "accountId" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "accountId",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.AccountId.Get(); ok {
+				if unwrapped := string(val); true {
+					return e.EncodeValue(conv.StringToString(unwrapped))
+				}
+				return nil
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+			stage = "Security:BearerAuth"
+			switch err := c.securityBearerAuth(ctx, EventSourceStreamOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"BearerAuth\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	stage = "DecodeResponse"
+	result, err := decodeEventSourceStreamResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

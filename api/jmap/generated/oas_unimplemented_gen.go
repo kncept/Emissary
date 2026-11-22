@@ -48,6 +48,22 @@ func (UnimplementedHandler) EventSource(ctx context.Context, params EventSourceP
 	return r, ht.ErrNotImplemented
 }
 
+// EventSourceStream implements eventSourceStream operation.
+//
+// RFC 8620 section 7.3 server-sent event stream served by the dedicated response-streaming Lambda
+// Function URL (RESOLVED-1). Unlike the REST proxy's `/eventsource`, this operation keeps
+// `closeafter=no` open for the full 15-minute Lambda timeout. Successful responses use
+// `text/event-stream` and carry `state` events whose data is a StateChange object; `ping` events carry
+// `{"interval": n}` and do not update the event id. The browser EventSource API cannot set an
+// Authorization header, so the access token may be supplied in the `token` query parameter; treat it
+// like a bearer token. The `accountId` parameter is optional and only accepted for accounts the caller
+// may access.
+//
+// GET /eventsource/stream
+func (UnimplementedHandler) EventSourceStream(ctx context.Context, params EventSourceStreamParams) (r EventSourceStreamRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // GetSession implements getSession operation.
 //
 // Returns the Session object for the authenticated user. The response should disable HTTP caching (for

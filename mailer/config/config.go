@@ -43,6 +43,10 @@ type ServerConfig struct {
 	// When empty it defaults to JMAPPublicURL. Deployments with a dedicated
 	// streaming Function URL set this to that endpoint (RESOLVED-1).
 	JMAPEventSourceURL string
+	// JMAPRESTProxy marks the API Gateway REST Lambda. API Gateway caps
+	// integrations at 29 seconds, so this deployment must never serve a
+	// closeafter=no stream; clients use the advertised streaming origin.
+	JMAPRESTProxy bool
 }
 
 // Validate checks that the server configuration is complete and consistent.
@@ -468,6 +472,15 @@ func Load(ctx context.Context) (*Config, error) {
 	}
 	awsRegion := get("AWS_REGION", "AWS_DEFAULT_REGION")
 
+	restProxy := false
+	if raw := strings.TrimSpace(get("JMAP_REST_PROXY")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid JMAP_REST_PROXY: %w", err)
+		}
+		restProxy = parsed
+	}
+
 	// Read FILESYSTEM_DIR early to check if it's explicitly set.
 	// If explicitly set (even with ~), we expand it.
 	// If not set, we only apply the default ~/.emissary and expand it
@@ -533,6 +546,7 @@ func Load(ctx context.Context) (*Config, error) {
 			JWTIssuer:          get("JWT_ISSUER"),
 			JMAPPublicURL:      strings.TrimRight(get("JMAP_PUBLIC_URL"), "/"),
 			JMAPEventSourceURL: strings.TrimRight(get("JMAP_EVENTSOURCE_URL"), "/"),
+			JMAPRESTProxy:      restProxy,
 		},
 		Storage: StorageConfig{
 			Type:          storageType,

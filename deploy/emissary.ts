@@ -482,6 +482,40 @@ async function emailClientStack(
   // Grant the Lambda role permission to read the JWT secret
   jwtSecret.grantRead(role)
 
+  const appEnvironment: Record<string, string> = {
+    // Configuration consumed by mailer/config (and the current frontend).
+    USERNAME: authUsername,
+    DOMAIN: emissaryDomain,
+    // Deployments are quiet by default: only real errors are logged.
+    LOG_LEVEL: env.LOG_LEVEL || 'ERROR',
+    // Same MIME/request cap for every Lambda; config validates the value.
+    MAX_FILESIZE: env.MAX_FILESIZE || '10485760',
+    // Every pluggable backend is selected explicitly; see the selectors
+    // computed above.
+    USER_MANAGER: userManagerSelector,
+    STORAGE: 's3',
+    S3_BUCKET: inboundEmailBucketName,
+    SENDER: 'aws-ses',
+    METADATA: metadataType,
+    TABLE_PREFIX: ddbTablePrefix,
+    ...(usesDdbMetadata ? { DDB_TABLE: metadataTableName } : {}),
+    METADATA_REGION: awsRegion,
+    SESSION: sessionSelector,
+    ...(sessionTableName ? { SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
+    ...(userTableName ? { USER_TABLE: userTableName, USER_REGION: awsRegion } : {}),
+    RECEIVER: receiverSelector,
+    RECEIVER_BUCKET: receiverBucketName,
+    ...(receiverTableName ? { RECEIVER_TABLE: receiverTableName, RECEIVER_REGION: awsRegion } : {}),
+    ...(authPassword ? { PASSWORD: authPassword } : {}),
+    // Pass the JWT secret ARN - the application will resolve it at runtime
+    JWT_SECRET: jwtSecret.secretArn,
+    JWT_AUDIENCE: mailFromDomain,
+    JWT_ISSUER: `emissary-${emissaryDomain}`,
+    // RFC 8620 section 2 requires the Session to advertise absolute URLs.
+    // All JMAP resource templates are resolved against this public origin.
+    JMAP_PUBLIC_URL: `https://${mailFromDomain}`,
+  }
+
   const fn = new lambda.Function(stack, 'emissary-fn', {
     runtime: lambda.Runtime.PROVIDED_AL2023,
     architecture: lambda.Architecture.X86_64,
@@ -491,42 +525,36 @@ async function emailClientStack(
     handler: 'bootstrap',
     role,
     logGroup,
+    // API Gateway's integration timeout is 29s, so this Lambda must never
+    // serve closeafter=no. The dedicated stream Function URL does.
     timeout: cdk.Duration.seconds(30),
     memorySize: 512,
-    environment: {
-      // Configuration consumed by mailer/config (and the current frontend).
-      USERNAME: authUsername,
-      DOMAIN: emissaryDomain,
-      // Deployments are quiet by default: only real errors are logged.
-      LOG_LEVEL: env.LOG_LEVEL || 'ERROR',
-      // Same MIME/request cap for every Lambda; config validates the value.
-      MAX_FILESIZE: env.MAX_FILESIZE || '10485760',
-      // Every pluggable backend is selected explicitly; see the selectors
-      // computed above.
-      USER_MANAGER: userManagerSelector,
-      STORAGE: 's3',
-      S3_BUCKET: inboundEmailBucketName,
-      SENDER: 'aws-ses',
-      METADATA: metadataType,
-      TABLE_PREFIX: ddbTablePrefix,
-      ...(usesDdbMetadata ? { DDB_TABLE: metadataTableName } : {}),
-      METADATA_REGION: awsRegion,
-      SESSION: sessionSelector,
-      ...(sessionTableName ? { SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
-      ...(userTableName ? { USER_TABLE: userTableName, USER_REGION: awsRegion } : {}),
-      RECEIVER: receiverSelector,
-      RECEIVER_BUCKET: receiverBucketName,
-      ...(receiverTableName ? { RECEIVER_TABLE: receiverTableName, RECEIVER_REGION: awsRegion } : {}),
-      ...(authPassword ? { PASSWORD: authPassword } : {}),
-      // Pass the JWT secret ARN - the application will resolve it at runtime
-      JWT_SECRET: jwtSecret.secretArn,
-      JWT_AUDIENCE: mailFromDomain,
-      JWT_ISSUER: `emissary-${emissaryDomain}`,
-      // RFC 8620 section 2 requires the Session to advertise absolute URLs.
-      // All JMAP resource templates are resolved against this public origin.
-      JMAP_PUBLIC_URL: `https://${mailFromDomain}`,
-    },
+    environment: { ...appEnvironment, JMAP_REST_PROXY: 'true' },
   })
+
+  // RESOLVED-1: RFC 8620 section 7.3 streams are long-lived. Serve them from
+  // a response-streaming Function URL with a 15-minute timeout instead of the
+  // REST proxy. Browser EventSource clients authenticate with the `token`
+  // query parameter, so the Function URL itself must not require SigV4.
+  const streamFn = new lambda.Function(stack, 'emissary-eventsource-fn', {
+    runtime: lambda.Runtime.PROVIDED_AL2023,
+    architecture: lambda.Architecture.X86_64,
+    functionName: `emissary-stream-${emissaryDomain.replaceAll(".", "-")}`,
+    description: 'Dedicated JMAP EventSource stream for Emissary',
+    code: lambda.Code.fromAsset(appAssetDirectory, { exclude: ['**', '!bootstrap'] }),
+    handler: 'bootstrap',
+    role,
+    logGroup,
+    timeout: cdk.Duration.minutes(15),
+    memorySize: 512,
+    environment: { ...appEnvironment },
+  })
+  const streamFunctionUrl = streamFn.addFunctionUrl({
+    authType: lambda.FunctionUrlAuthType.NONE,
+    invokeMode: lambda.InvokeMode.RESPONSE_STREAM,
+  })
+  fn.addEnvironment('JMAP_EVENTSOURCE_URL', streamFunctionUrl.url)
+  streamFn.addEnvironment('JMAP_EVENTSOURCE_URL', streamFunctionUrl.url)
 
   const restApi = new apigateway.LambdaRestApi(stack, 'emissary-restapi', {
     restApiName: `emissary-${emissaryDomain.replaceAll(".", "-")}`,
@@ -571,6 +599,12 @@ async function emailClientStack(
     value: `https://${mailFromDomain}`,
     description: 'Emissary application URL',
     exportName: `EmissaryAppUrl-${emissaryDomain.replaceAll(".", "-")}`,
+  })
+
+  new cdk.CfnOutput(stack, 'output-EmissaryEventSourceUrl', {
+    value: streamFunctionUrl.url,
+    description: 'Dedicated JMAP EventSource streaming URL',
+    exportName: `EmissaryEventSourceUrl-${emissaryDomain.replaceAll(".", "-")}`,
   })
 
   // S3 Receiver Lambda - processes inbound emails when written to S3. It uses

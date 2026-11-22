@@ -150,6 +150,8 @@ export * from './emailUpdate';
 export * from './envelope';
 export * from './eventSourceCloseafter';
 export * from './eventSourceParams';
+export * from './eventSourceStreamCloseafter';
+export * from './eventSourceStreamParams';
 export * from './filter';
 export * from './filterCondition';
 export * from './filterOperator';

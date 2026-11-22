@@ -55,7 +55,11 @@ import type { Id } from './id';
 export type EventSourceParams = {
   /** Comma-separated type names, or `*` for all supported types */
   types?: string;
-  /** Close after one `state` event, or keep the stream open */
+  /**
+   * The REST proxy only supports `state`: API Gateway's integration
+   * timeout cannot carry an open stream. Use the Session's
+   * `eventSourceUrl` (the dedicated streaming origin) for `no`.
+   */
   closeafter?: EventSourceCloseafter;
   /**
    * Ping interval in seconds; 0 disables pings

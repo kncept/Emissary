@@ -68,16 +68,19 @@ const (
 	jmapDownloadURLTemplate = "/download/{accountId}/{blobId}/{name}?type={type}"
 	jmapUploadURLTemplate   = "/upload/{accountId}"
 	// eventSourceUrl is a level-1 URI template; clients substitute all three
-	// variables (RFC 8620 section 7.3).
-	jmapEventSourceURLTemplate = "/eventsource?types={types}&closeafter={closeafter}&ping={ping}"
+	// variables (RFC 8620 section 7.3). The streaming path is served by the
+	// dedicated, long-lived Function URL; the REST proxy's /eventsource only
+	// supports closeafter=state (RESOLVED-1).
+	jmapEventSourceURLTemplate = "/eventsource/stream?types={types}&closeafter={closeafter}&ping={ping}"
 
 	// Registered JMAP routes. Tests compare this list with api/jmap.yaml so
 	// a route cannot drift out of the OpenAPI contract unnoticed.
-	jmapSessionRoute     = "GET /.well-known/jmap"
-	jmapEventSourceRoute = "GET /eventsource"
-	jmapAPIRoute         = "POST /api/jmap/"
-	jmapUploadRoute      = "POST /upload/{accountId}"
-	jmapDownloadRoute    = "GET /download/{accountId}/{blobId}/{name}"
+	jmapSessionRoute           = "GET /.well-known/jmap"
+	jmapEventSourceRoute       = "GET /eventsource"
+	jmapEventSourceStreamRoute = "GET /eventsource/stream"
+	jmapAPIRoute               = "POST /api/jmap/"
+	jmapUploadRoute            = "POST /upload/{accountId}"
+	jmapDownloadRoute          = "GET /download/{accountId}/{blobId}/{name}"
 
 	// jmapUnreferencedBlobQuotaLimit names the separate quota applied to
 	// blobs that no JMAP object references yet (RFC 8620 section 6).
@@ -336,6 +339,27 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 			http.Error(w, detail, status)
 			return
 		}
+		// API Gateway's 29-second integration cap makes closeafter=no
+		// impossible here. Force the value the spec declares as this
+		// endpoint's default instead of silently shortening a stream. This is
+		// unconditional so the route contract is identical in every deployment.
+		var err error
+		r, err = stateOnlyEventSource(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		pushHub.ServeHTTP(w, r)
+	})))
+	mux.Handle(jmapEventSourceStreamRoute, requireEventSourceAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if cfg.Server.JMAPRESTProxy {
+			http.Error(w, "EventSource streams are served by the dedicated streaming endpoint", http.StatusNotFound)
+			return
+		}
+		if status, detail := normalizeEventSourceAccount(r, userManager); status != 0 {
+			http.Error(w, detail, status)
+			return
+		}
 		pushHub.ServeHTTP(w, r)
 	})))
 	mux.Handle(jmapAPIRoute, requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -480,6 +504,25 @@ func requireEventSourceAuth(authenticator *auth.Authenticator, next http.Handler
 		ctx := auth.ContextWithClaims(r.Context(), claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// stateOnlyEventSource rewrites an omitted closeafter to "state" and rejects
+// an explicit closeafter=no. This keeps long-lived streams off the API Gateway
+// REST integration, whose hard timeout is shorter than RFC 8620's minimum ping
+// interval. The dedicated streaming path has no such restriction.
+func stateOnlyEventSource(r *http.Request) (*http.Request, error) {
+	query := r.URL.Query()
+	switch strings.TrimSpace(query.Get("closeafter")) {
+	case "", "state":
+		query.Set("closeafter", "state")
+	default:
+		return nil, fmt.Errorf("closeafter=%q is unavailable through the REST proxy; use eventSourceUrl from the Session object", query.Get("closeafter"))
+	}
+	clone := r.Clone(r.Context())
+	urlCopy := *r.URL
+	urlCopy.RawQuery = query.Encode()
+	clone.URL = &urlCopy
+	return clone, nil
 }
 
 type usersSecurityHandler struct {

@@ -6,9 +6,10 @@ package api
 type OperationName = string
 
 const (
-	ApiRequestOperation     OperationName = "ApiRequest"
-	DownloadBinaryOperation OperationName = "DownloadBinary"
-	EventSourceOperation    OperationName = "EventSource"
-	GetSessionOperation     OperationName = "GetSession"
-	UploadBinaryOperation   OperationName = "UploadBinary"
+	ApiRequestOperation        OperationName = "ApiRequest"
+	DownloadBinaryOperation    OperationName = "DownloadBinary"
+	EventSourceOperation       OperationName = "EventSource"
+	EventSourceStreamOperation OperationName = "EventSourceStream"
+	GetSessionOperation        OperationName = "GetSession"
+	UploadBinaryOperation      OperationName = "UploadBinary"
 )

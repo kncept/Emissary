@@ -1,6 +1,7 @@
 package push
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io"
@@ -450,4 +451,141 @@ func TestWebhookRateLimitBackoffCoalescesPendingStates(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("webhook was not retried after backoff")
 	}
+}
+
+// TestEventSourceStreamOutlivesRESTTimeoutRFC8620_7_3 proves the dedicated
+// streaming origin can hold closeafter=no beyond the REST integration's 30 s
+// ceiling, with pings that never advance the event id and a later state event
+// that does.
+func TestEventSourceStreamOutlivesRESTTimeoutRFC8620_7_3(t *testing.T) {
+	state := newMemoryState()
+	hub := NewHub(state, state, nil)
+	hub.pollInterval = 10 * time.Millisecond
+	hub.coalesce = 0
+	// ping=10 is ten real seconds here, so three pings prove the stream was
+	// still open at t=30s.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.ServeHTTP(w, r.WithContext(pushContext("sid-long-lived")))
+	}))
+	defer server.Close()
+
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		server.URL+"/eventsource/stream?types=Email&closeafter=no&ping=10", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("connect to EventSource: %v", err)
+	}
+	defer resp.Body.Close()
+	if got := resp.Header.Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	readEvent := func() (name, id, data string) {
+		t.Helper()
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("read event (stream closed early): %v", err)
+			}
+			line = strings.TrimRight(line, "\r\n")
+			switch {
+			case line == "":
+				if name != "" {
+					return
+				}
+			case strings.HasPrefix(line, "event: "):
+				name = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "id: "):
+				id = strings.TrimPrefix(line, "id: ")
+			case strings.HasPrefix(line, "data: "):
+				data += strings.TrimPrefix(line, "data: ")
+			}
+		}
+	}
+
+	for ping := 1; ping <= 3; ping++ {
+		name, id, data := readEvent()
+		if name != "ping" || !strings.Contains(data, `"interval":10`) {
+			t.Fatalf("event %d = %q %q, want a 10s ping", ping, name, data)
+		}
+		if id != "" {
+			t.Fatalf("ping %d set an event id: %q", ping, id)
+		}
+	}
+	if elapsed := time.Since(start); elapsed < 30*time.Second {
+		t.Fatalf("stream only stayed open %v, want past 30s", elapsed)
+	}
+
+	state.set(base.StateEmail, "email-long-lived")
+	if err := hub.Refresh(ctx, "alice@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	name, id, data := readEvent()
+	if name != "state" || id == "" || !strings.Contains(data, `"Email":"email-long-lived"`) {
+		t.Fatalf("state event = %q id=%q data=%q", name, id, data)
+	}
+}
+
+// TestEventSourceCoalescedResyncRFC8620_7_3 checks the two reconnect cases:
+// a cold start does not replay history, while Last-Event-ID replays several
+// missed state tokens in one coalesced StateChange.
+func TestEventSourceCoalescedResyncRFC8620_7_3(t *testing.T) {
+	state := newMemoryState()
+	hub := newTestHub(state, nil)
+	ctx := pushContext("sid-resync")
+	before, err := hub.Snapshot(ctx, "alice@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for kind, token := range map[base.StateKind]string{
+		base.StateEmail: "email-2", base.StateMailbox: "mailbox-2", base.StateEmailDelivery: "delivery-2",
+	} {
+		state.set(kind, token)
+	}
+
+	t.Run("cold start", func(t *testing.T) {
+		// No Last-Event-ID means no catch-up: the stream stays open waiting
+		// for future changes. Bound the context so the handler returns, then
+		// verify it never replayed the states changed above.
+		streamCtx, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+		defer cancel()
+		req := httptest.NewRequestWithContext(streamCtx, http.MethodGet,
+			"/eventsource/stream?types=*&closeafter=state&ping=0", nil)
+		w := httptest.NewRecorder()
+		hub.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), "event: state") {
+			t.Fatalf("cold start replayed history: %s", w.Body.String())
+		}
+	})
+
+	t.Run("last event id replays one coalesced change", func(t *testing.T) {
+		req := httptest.NewRequestWithContext(ctx, http.MethodGet,
+			"/eventsource/stream?types=*&closeafter=state&ping=0", nil)
+		req.Header.Set("Last-Event-ID", encodeEventID(before))
+		w := httptest.NewRecorder()
+		hub.ServeHTTP(w, req)
+		body := w.Body.String()
+		if strings.Count(body, "event: state\n") != 1 {
+			t.Fatalf("want one coalesced state event, got %q", body)
+		}
+		for _, token := range []string{`"Email":"email-2"`, `"Mailbox":"mailbox-2"`, `"EmailDelivery":"delivery-2"`} {
+			if !strings.Contains(body, token) {
+				t.Errorf("resync missing %s: %s", token, body)
+			}
+		}
+		if !strings.Contains(body, "id: ") {
+			t.Errorf("resync event has no id: %s", body)
+		}
+	})
 }

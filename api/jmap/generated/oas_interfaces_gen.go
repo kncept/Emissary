@@ -13,6 +13,10 @@ type EventSourceRes interface {
 	eventSourceRes()
 }
 
+type EventSourceStreamRes interface {
+	eventSourceStreamRes()
+}
+
 type GetSessionRes interface {
 	getSessionRes()
 }

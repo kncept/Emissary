@@ -259,6 +259,15 @@ func (s EventSourceCloseafter) Validate() error {
 	switch s {
 	case "state":
 		return nil
+	default:
+		return errors.Errorf("invalid value: %v", s)
+	}
+}
+
+func (s EventSourceStreamCloseafter) Validate() error {
+	switch s {
+	case "state":
+		return nil
 	case "no":
 		return nil
 	default:
