@@ -98,9 +98,10 @@ func (h *Handler) SearchSnippetGet(ctx context.Context, accountID string, args j
 		list = append(list, result)
 	}
 	return base.GetResult{
-		AccountID: accountID,
-		List:      list,
-		NotFound:  notFound,
+		AccountID:        accountID,
+		List:             list,
+		NotFound:         notFound,
+		NullableNotFound: true,
 	}.Marshal()
 }
 

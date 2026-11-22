@@ -424,6 +424,38 @@ func (t *Tracker) Sync(ctx context.Context, accountID string, snapshots map[Stat
 	})
 }
 
+// Refresh updates the stored fingerprints without advancing the version or
+// appending change entries. It is used after a /set method has already called
+// Record for every affected id: without it the next Sync would see the same
+// storage diff a second time and report a spurious change (RFC 8620 section
+// 5.2 requires /changes to report each change exactly once).
+func (t *Tracker) Refresh(ctx context.Context, accountID string, snapshots map[StateKind]map[string]string) error {
+	return t.mutate(ctx, accountID, func(state *trackerState) (bool, error) {
+		changed := false
+		for kind, current := range snapshots {
+			previous, seen := state.Fingerprints[kind]
+			if seen && snapshotsEqual(previous, current) {
+				continue
+			}
+			state.Fingerprints[kind] = CopySnapshot(current)
+			changed = true
+		}
+		return changed, nil
+	})
+}
+
+func snapshotsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, value := range a {
+		if other, ok := b[key]; !ok || other != value {
+			return false
+		}
+	}
+	return true
+}
+
 // Record appends an explicit change, used for data that has no snapshot to
 // diff (for example a newly created EmailSubmission).
 func (t *Tracker) Record(ctx context.Context, accountID string, kind StateKind, id string, op ChangeOp) error {

@@ -128,13 +128,21 @@ type GetResult struct {
 	List        any
 	NotFound    []string
 	State       *string
+	// NullableNotFound is for methods whose RFC defines notFound as
+	// Id[]|null rather than the RFC 8620 default Id[]. SearchSnippet/get is
+	// the only such method in the advertised profile (RFC 8621 section 5).
+	NullableNotFound bool
 }
 
 // Marshal emits a /get response with arrays (never null) for list and notFound.
 func (r GetResult) Marshal() (json.RawMessage, error) {
 	resp := map[string]any{
-		"list":     r.List,
-		"notFound": append([]string{}, r.NotFound...),
+		"list": r.List,
+	}
+	if r.NullableNotFound && len(r.NotFound) == 0 {
+		resp["notFound"] = nil
+	} else {
+		resp["notFound"] = append([]string{}, r.NotFound...)
 	}
 	if !r.AccountLess {
 		resp["accountId"] = r.AccountID

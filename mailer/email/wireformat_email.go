@@ -13,8 +13,10 @@ import (
 	"net/mail"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kncept/Emissary/mailer/readlimit"
+	"golang.org/x/text/encoding/htmlindex"
 )
 
 // ParseError represents a parsing error with context about what section was being parsed.
@@ -733,16 +735,35 @@ func (wfe *WireFormatEmail) walkBodyStructure(part *BodyPart, textParts, htmlPar
 
 // DecodeCharset converts the given bytes from the specified charset to UTF-8.
 // JMAP body values are always returned as UTF-8 strings.
-func DecodeCharset(data []byte, charset string) string { return decodeCharset(data, charset) }
+func DecodeCharset(data []byte, charset string) string {
+	value, _ := DecodeCharsetWithStatus(data, charset)
+	return value
+}
+
+// DecodeCharsetWithStatus converts the given bytes from the specified charset
+// to UTF-8 and reports whether the conversion was lossless. JMAP exposes the
+// lossless flag as EmailBodyValue.isEncodingProblem (RFC 8621 section 4.2).
+func DecodeCharsetWithStatus(data []byte, charset string) (string, bool) {
+	name := strings.ToLower(strings.TrimSpace(charset))
+	if name == "" || name == "utf-8" || name == "utf8" {
+		value := string(data)
+		return value, utf8.ValidString(value)
+	}
+	encoding, err := htmlindex.Get(name)
+	if err != nil {
+		return string(data), false
+	}
+	decoded, err := encoding.NewDecoder().Bytes(data)
+	if err != nil {
+		return string(data), false
+	}
+	return string(decoded), true
+}
 
 // decodeCharset converts the given bytes from the specified charset to UTF-8.
 func decodeCharset(data []byte, charset string) string {
-	switch strings.ToLower(strings.TrimSpace(charset)) {
-	case "iso-8859-1", "latin1", "latin-1":
-		return latin1String(data)
-	default:
-		return string(data)
-	}
+	value, _ := DecodeCharsetWithStatus(data, charset)
+	return value
 }
 
 // ToWireFormat serializes the WireFormatEmail back to RFC 5322 format.

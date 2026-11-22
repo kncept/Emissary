@@ -1500,7 +1500,7 @@ func TestEmailSetRejectsMalformedAddressEntries(t *testing.T) {
 	}
 }
 
-func TestMailboxQueryClampsNegativePagination(t *testing.T) {
+func TestMailboxQuery_NegativePositionFromEnd_RFC8620_3_9(t *testing.T) {
 	const accountID = "alice@example.com"
 	handler := NewHandler(storage.NewMemoryStorage(), metadata.NewMemoryMetadata(),
 		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
@@ -1525,18 +1525,18 @@ func TestMailboxQueryClampsNegativePagination(t *testing.T) {
 	if len(baseline) == 0 {
 		t.Fatal("MailboxQuery() returned no ids")
 	}
-	if got := idsFor(t, `{"accountId":"alice@example.com","position":-5}`); fmt.Sprint(got) != fmt.Sprint(baseline) {
-		t.Errorf("negative position ids = %v, want %v", got, baseline)
+	if got := idsFor(t, `{"accountId":"alice@example.com","position":-10}`); fmt.Sprint(got) != fmt.Sprint(baseline) {
+		t.Errorf("negative position past start ids = %v, want %v", got, baseline)
 	}
 	if got := idsFor(t, `{"accountId":"alice@example.com","limit":-1}`); len(got) != 0 {
 		t.Errorf("negative limit ids = %v, want none", got)
 	}
-	if got := idsFor(t, `{"accountId":"alice@example.com","position":-1,"limit":1}`); len(got) != 1 || got[0] != baseline[0] {
-		t.Errorf("negative position with limit ids = %v, want [%s]", got, baseline[0])
+	if got := idsFor(t, `{"accountId":"alice@example.com","position":-1,"limit":1}`); len(got) != 1 || got[0] != baseline[len(baseline)-1] {
+		t.Errorf("negative position with limit ids = %v, want [%s]", got, baseline[len(baseline)-1])
 	}
 }
 
-func TestEmailQueryClampsNegativePagination(t *testing.T) {
+func TestEmailQuery_NegativePositionFromEnd_RFC8620_3_9(t *testing.T) {
 	const accountID = "alice@example.com"
 	store := storage.NewMemoryStorage()
 	for _, id := range []string{"e1", "e2"} {
@@ -1571,8 +1571,8 @@ func TestEmailQueryClampsNegativePagination(t *testing.T) {
 	if got := idsFor(t, `{"accountId":"alice@example.com","limit":-1}`); len(got) != 0 {
 		t.Errorf("negative limit ids = %v, want none", got)
 	}
-	if got := idsFor(t, `{"accountId":"alice@example.com","position":-1,"limit":1}`); len(got) != 1 || got[0] != baseline[0] {
-		t.Errorf("negative position with limit ids = %v, want [%s]", got, baseline[0])
+	if got := idsFor(t, `{"accountId":"alice@example.com","position":-1,"limit":1}`); len(got) != 1 || got[0] != baseline[len(baseline)-1] {
+		t.Errorf("negative position with limit ids = %v, want [%s]", got, baseline[len(baseline)-1])
 	}
 }
 

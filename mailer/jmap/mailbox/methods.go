@@ -62,6 +62,9 @@ func (h *Handler) MailboxSet(ctx context.Context, accountID string, args json.Ra
 func (h *Handler) setSpec(accountID string) base.SetSpec {
 	// Track created ids within this call so parent references can resolve.
 	createdServerIDs := make(map[string]string)
+	// RFC 8621 section 2: sibling Mailboxes MUST NOT share a name. Names
+	// created earlier in the same /set call count as existing siblings too.
+	createdNames := make(map[string]bool)
 	// onDestroyRemoveEmails is a method-level argument, not part of any
 	// create/update/destroy record, so the kernel's Extra hook captures it
 	// once before the per-record callbacks run.
@@ -104,6 +107,17 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 			}
 			if name == "" {
 				return fail(base.NewSetError("invalidProperties", "name is required"))
+			}
+			parentID := ""
+			if mc.ParentID != nil {
+				parentID = storage.NormalizeMailboxID(*mc.ParentID)
+			}
+			if err := h.checkMailboxNameAvailable(ctx, accountID, name, parentID); err != nil {
+				return fail(*err)
+			}
+			nameKey := strings.ToLower(parentID) + "\x00" + strings.ToLower(name)
+			if createdNames[nameKey] {
+				return fail(base.AlreadyExists("A mailbox with this name already exists under this parent", ""))
 			}
 			if len([]byte(name)) > maxMailboxNameBytes {
 				return fail(base.InvalidProperties("name exceeds maxSizeMailboxName", "name"))
@@ -165,6 +179,7 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 				}
 			}
 			createdServerIDs[cid] = mb.ID
+			createdNames[nameKey] = true
 			j := h.toJMAPMailbox(ctx, accountID, mb)
 			result, err := json.Marshal(map[string]any{
 				"id":            j.ID,

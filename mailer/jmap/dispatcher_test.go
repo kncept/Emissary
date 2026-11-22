@@ -255,7 +255,8 @@ func TestDispatchRequestResolvesCreationReferencesWithoutRequestCreatedIDs(t *te
 				Name:     "EmailSubmission/set",
 				ClientID: "c2",
 				Arguments: map[string]json.RawMessage{
-					"create": json.RawMessage(`{"sub1":{"emailId":"#create1"}}`),
+					"accountId": json.RawMessage(`"alice@example.com"`),
+					"create":    json.RawMessage(`{"sub1":{"emailId":"#create1"}}`),
 				},
 			},
 		}})
@@ -611,7 +612,9 @@ func TestDispatchRequestCapabilityNotInUsing(t *testing.T) {
 				Using: tc.using,
 				MethodCalls: []Invocation{{
 					Name: tc.method, ClientID: "c1",
-					Arguments: map[string]json.RawMessage{},
+					Arguments: map[string]json.RawMessage{
+						"accountId": json.RawMessage(`"alice@example.com"`),
+					},
 				}},
 			}
 			resp, err := dispatcher.DispatchRequest(context.Background(), "alice@example.com", claims, req)
@@ -706,7 +709,9 @@ func TestDispatchRequestAccountNotSupportedByMethod(t *testing.T) {
 	req := &Request{
 		Using: allUsing,
 		MethodCalls: []Invocation{{
-			Name: MethodEmailSet, ClientID: "c1", Arguments: map[string]json.RawMessage{},
+			Name: MethodEmailSet, ClientID: "c1", Arguments: map[string]json.RawMessage{
+			"accountId": json.RawMessage(`"alice@example.com"`),
+		},
 		}},
 	}
 	resp, err := dispatcher.DispatchRequest(context.Background(), "alice@example.com",

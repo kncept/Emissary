@@ -33,6 +33,11 @@ func PageBoundsForIDs(ids []string, position, limit *int, anchor *string, anchor
 		}
 	} else if position != nil {
 		start = *position
+		// RFC 8620 section 3.9: a negative position is an offset from the
+		// end of the result set, not an invalid argument.
+		if start < 0 {
+			start = len(ids) + start
+		}
 	}
 	if start < 0 {
 		start = 0

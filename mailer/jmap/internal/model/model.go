@@ -8,3 +8,10 @@ type EmailAddress struct {
 	Name  string `json:"name,omitempty"`
 	Email string `json:"email"`
 }
+
+// EmailAddressGroup is the EmailAddressGroup JMAP type defined by RFC 8621
+// section 4.1.2 for the asGroupedAddresses header form.
+type EmailAddressGroup struct {
+	Name      string         `json:"name"`
+	Addresses []EmailAddress `json:"addresses"`
+}

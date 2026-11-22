@@ -374,19 +374,24 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 		}
 
 		requiredCapability, knownMethod := MethodCapability(call.Name)
-		if knownMethod && !usingSet[requiredCapability] {
+		if !knownMethod || !usingSet[requiredCapability] {
+			// RFC 8620 section 3.3: an unrecognised method, or one whose
+			// capability was not opted into, is unknownMethod regardless of
+			// its arguments. Check before account resolution so a missing
+			// accountId cannot mask the more specific error.
 			resp := d.errorResponse(call, fmt.Errorf("unknownMethod: %s", call.Name))
 			appendMethodResponse(&responses, responsesByID, createdIDs, resp)
 			continue
 		}
 
-		// Extract the public, opaque accountId from method arguments, falling
-		// back to the authenticated default. Convert it to the internal
-		// storage account only after authorisation; method handlers continue
-		// to see the email-shaped storage key.
+		// RFC 8620 section 1.6.2 makes accountId mandatory for all account-scoped
+		// methods; it must be supplied by the client rather than defaulted from
+		// the authenticated identity. Convert it to the internal storage account
+		// only after authorisation; method handlers continue to see the
+		// email-shaped storage key.
 		var accountID string
 		if !MethodIsAccountLess(call.Name) {
-			publicAccountID := defaultAccountID
+			var publicAccountID string
 			if call.Arguments != nil {
 				if accountIDRaw, ok := call.Arguments["accountId"]; ok {
 					var extracted string
@@ -397,6 +402,11 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 					}
 					publicAccountID = extracted
 				}
+			}
+			if publicAccountID == "" {
+				resp := d.errorResponse(call, fmt.Errorf("invalidArguments: accountId is required"))
+				appendMethodResponse(&responses, responsesByID, createdIDs, resp)
+				continue
 			}
 			resolved, err := auth.ResolveAccountID(ctx, claims, publicAccountID, d.userMgr)
 			if err != nil {

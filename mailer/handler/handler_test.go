@@ -915,22 +915,34 @@ func createDraftForSend(t *testing.T, h http.Handler, token, accountID, from, to
 // rewritten to the sender's own address at creation time, so submission
 // always sends as the authenticated account (or the masquerade target).
 func TestSendEmailFromVerification(t *testing.T) {
-	h, store, capture := newHandlerForTest(t, "secret")
+	h, _, capture := newHandlerForTest(t, "secret")
 	_, bobToken, _ := login(t, h, "bob@example.com", "anything")
 	_, adminToken, _ := login(t, h, "admin", "secret")
 
 	// An ordinary user's forged From is replaced with their own address,
 	// and the submission succeeds as that address.
 	bobDraft := createDraftForSend(t, h, bobToken, "bob@example.com", "carol@example.com", "dave@example.com")
-	// The stored draft itself carries the locked From.
-	bobClaims := decodeClaims(t, bobToken)
-	bobSID, _ := bobClaims["sid"].(string)
-	storedDraft, err := store.GetDraft(context.Background(), bobSID, bobDraft)
-	if err != nil || storedDraft == nil {
-		t.Fatalf("failed to load stored draft: %v", err)
+	// The draft is an ordinary Email in the Drafts mailbox and is visible
+	// through JMAP; its From has been locked to the authenticated identity.
+	draftResp := jmapRequest(t, h, bobToken, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
+		{"Email/get", map[string]interface{}{
+			"accountId": "bob@example.com",
+			"ids":       []string{bobDraft},
+			"properties": []string{"id", "from", "keywords", "mailboxIds"},
+		}, "get1"},
+	})
+	draftList, _ := firstResult(t, draftResp)["list"].([]interface{})
+	if len(draftList) != 1 {
+		t.Fatalf("Email/get draft list = %v, want one email", draftList)
 	}
-	if got := storedDraft.From.Address; got != "bob@example.com" {
-		t.Errorf("stored draft From = %q, want bob@example.com", got)
+	draftEmail, _ := draftList[0].(map[string]interface{})
+	fromList, _ := draftEmail["from"].([]interface{})
+	if len(fromList) == 0 {
+		t.Fatalf("draft from = %v, want one address", draftEmail["from"])
+	}
+	fromAddr, _ := fromList[0].(map[string]interface{})["email"].(string)
+	if fromAddr != "bob@example.com" {
+		t.Errorf("stored draft From = %q, want bob@example.com", fromAddr)
 	}
 	resp := jmapRequest(t, h, bobToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
 		{"EmailSubmission/set", map[string]interface{}{
@@ -970,13 +982,8 @@ func TestSendEmailFromVerification(t *testing.T) {
 // the JMAP creation reference "#create1" instead of the real (server-assigned)
 // id. Before creation references were resolved this failed with notFound.
 func TestSendEmailWithCreationReference(t *testing.T) {
-	h, store, capture := newHandlerForTest(t, "secret")
+	h, _, capture := newHandlerForTest(t, "secret")
 	_, bobToken, _ := login(t, h, "bob@example.com", "anything")
-	bobClaims := decodeClaims(t, bobToken)
-	bobSID, _ := bobClaims["sid"].(string)
-	if bobSID == "" {
-		t.Fatal("login token has no session id")
-	}
 
 	resp := jmapRequest(t, h, bobToken,
 		[]string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"},
@@ -1064,9 +1071,21 @@ func TestSendEmailWithCreationReference(t *testing.T) {
 		t.Errorf("implicit Email/set updated = %v, want entry for %q", updated, emailID)
 	}
 
-	// The draft is session-scoped and must be removed after a successful send.
-	if _, err := store.GetDraft(context.Background(), bobSID, emailID); !errors.Is(err, storage.ErrNotFound) {
-		t.Errorf("GetDraft() error = %v, want %v", err, storage.ErrNotFound)
+	// A successfully submitted draft is no longer a draft (RFC 8621 7.5).
+	afterResp := jmapRequest(t, h, bobToken, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
+		{"Email/get", map[string]interface{}{
+			"accountId": "bob@example.com",
+			"ids":       []string{emailID},
+			"properties": []string{"id", "from", "keywords", "mailboxIds"},
+		}, "get1"},
+	})
+	afterList, _ := firstResult(t, afterResp)["list"].([]interface{})
+	if len(afterList) != 1 {
+		t.Fatalf("Email/get after submission list = %v, want the submitted email", afterList)
+	}
+	afterEmail, _ := afterList[0].(map[string]interface{})
+	if kw, _ := afterEmail["keywords"].(map[string]interface{}); kw["$draft"] == true {
+		t.Errorf("keywords after submission = %v, want $draft cleared", kw)
 	}
 }
 
@@ -1428,6 +1447,7 @@ func TestRawEmailViaJMAPBlobDownload(t *testing.T) {
 	_, token, _ := login(t, h, "alice@example.com", "")
 	resp := jmapRequest(t, h, token, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
 		{"Email/get", map[string]interface{}{
+			"accountId": "alice@example.com",
 			"ids":        []string{id},
 			"properties": []string{"id", "blobId"},
 		}, "get1"},

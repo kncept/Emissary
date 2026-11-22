@@ -88,7 +88,14 @@ func (v *wireView) buildPart(part *mailemail.BodyPart, parentID string, index in
 	if disposition := strings.TrimSpace(part.Disposition); disposition != "" {
 		wp.jmap.Disposition = &disposition
 	}
-	if cid := strings.TrimSpace(part.Params["cid"]); cid != "" {
+	cid := strings.TrimSpace(part.Params["cid"])
+	if cid == "" {
+		// Content-ID is a standalone MIME header, not a Content-Type
+		// parameter. RFC 8621 section 4.1.4 exposes it without the angle
+		// brackets used on the wire.
+		cid = strings.Trim(strings.TrimSpace(headerValue(part.Headers, "Content-ID")), "<>")
+	}
+	if cid != "" {
 		wp.jmap.CID = &cid
 	}
 	if languages := splitHeaderValues(headerValue(part.Headers, "Content-Language")); len(languages) > 0 {
@@ -203,8 +210,10 @@ func (v *wireView) bodyValues(fetchText, fetchHTML, fetchAll bool, maxBytes int)
 		if !fetch {
 			continue
 		}
-		value := mailemail.DecodeCharset(wp.part.Body, wp.part.Charset)
-		values[id] = truncateBodyValue(value, maxBytes, mediaType)
+		value, lossless := mailemail.DecodeCharsetWithStatus(wp.part.Body, wp.part.Charset)
+		result := truncateBodyValue(value, maxBytes, mediaType)
+		result.IsEncodingProblem = !lossless
+		values[id] = result
 	}
 	return values
 }
@@ -261,6 +270,52 @@ func headerSelection(headers []EmailHeader, request string) any {
 	return parseHeaderForm(matches[len(matches)-1], form)
 }
 
+func jmapAddresses(value string) []model.EmailAddress {
+	parsed, err := mail.ParseAddressList(value)
+	if err != nil {
+		return []model.EmailAddress{}
+	}
+	out := make([]model.EmailAddress, 0, len(parsed))
+	for _, address := range parsed {
+		out = append(out, model.EmailAddress{Name: address.Name, Email: address.Address})
+	}
+	return out
+}
+
+// jmapGroupedAddresses implements RFC 8621 section 4.1.2's
+// asGroupedAddresses form. A group is a display name followed by a colon and
+// a comma-separated address list terminated by a semicolon; addresses outside
+// any named group are returned in a single unnamed group.
+func jmapGroupedAddresses(value string) []model.EmailAddressGroup {
+	groups := make([]model.EmailAddressGroup, 0, 2)
+	var loose []string
+	chunks := strings.Split(value, ";")
+	for _, chunk := range chunks {
+		chunk = strings.TrimSpace(chunk)
+		if chunk == "" {
+			continue
+		}
+		colon := strings.IndexByte(chunk, ':')
+		at := strings.IndexByte(chunk, '@')
+		if colon > 0 && (at < 0 || colon < at) {
+			name := strings.Trim(strings.TrimSpace(chunk[:colon]), "\"")
+			groups = append(groups, model.EmailAddressGroup{
+				Name:      name,
+				Addresses: jmapAddresses(chunk[colon+1:]),
+			})
+			continue
+		}
+		loose = append(loose, chunk)
+	}
+	if len(loose) > 0 {
+		groups = append(groups, model.EmailAddressGroup{
+			Name:      "",
+			Addresses: jmapAddresses(strings.Join(loose, ",")),
+		})
+	}
+	return groups
+}
+
 func parseHeaderRequest(request string) (name, form string, all bool) {
 	rest := strings.TrimPrefix(request, "header:")
 	all = strings.HasSuffix(rest, ":all")
@@ -279,15 +334,9 @@ func parseHeaderForm(value, form string) any {
 	case "text":
 		return mailemail.DecodeHeader(value)
 	case "addresses":
-		parsed, err := mail.ParseAddressList(value)
-		if err != nil {
-			return []model.EmailAddress{}
-		}
-		out := make([]model.EmailAddress, 0, len(parsed))
-		for _, address := range parsed {
-			out = append(out, model.EmailAddress{Name: address.Name, Email: address.Address})
-		}
-		return out
+		return jmapAddresses(value)
+	case "groupedaddresses":
+		return jmapGroupedAddresses(value)
 	case "messageids":
 		out := make([]string, 0)
 		for _, token := range strings.FieldsFunc(value, func(r rune) bool {

@@ -35,6 +35,7 @@ Commands:
   generate:api     Regenerate Go and TypeScript API code from the OpenAPI specs
   check:generated  Fail if committed generated API code is stale
   test             Run the test suite (Go and TypeScript)
+  spectest         Run the external JMAP conformance suite against a local server
   run              Build and run the frontend server
   deploy           Build app assets and deploy all stacks (id, in, client)
   deploy:id        Deploy the email identity stack (SES verification, DKIM, MX, SPF, DMARC)
@@ -167,6 +168,175 @@ test() {
 	(
 		cd frontend
 		npm run test
+	)
+}
+
+# External JMAP conformance suite. The suite is pinned to a commit, patched
+# with this repository's advertised-profile adaptations, and run against a
+# throwaway local server. All credentials are supplied through the environment
+# or generated per run; none are embedded here.
+SPECTEST_SUITE_URL="https://github.com/jmapio/jmap-test-suite.git"
+SPECTEST_SUITE_COMMIT="0f2c117dc5f3621bfa50cb0b8b4d4ac87a4154be"
+
+spectest_login() {
+	local username="$1"
+	local password="$2"
+	local base_url="$3"
+	local body
+	body=$(python3 -c 'import json,sys; print(json.dumps({"username":sys.argv[1],"password":sys.argv[2]}))' "$username" "$password")
+	curl -fsS -X POST "$base_url/api/auth/login" \
+		-H 'Content-Type: application/json' --data-binary "$body" |
+		python3 -c 'import json,sys; print(json.load(sys.stdin)["accessToken"])'
+}
+
+spectest_create_user() {
+	local email="$1"
+	local password="$2"
+	local manager="$3"
+	local admin="$4"
+	local base_url="$5"
+	local body
+	body=$(python3 -c 'import json,sys; print(json.dumps({"email":sys.argv[1],"password":sys.argv[2],"enabled":True,"userManager":sys.argv[3]=="true","systemManager":sys.argv[4]=="true"}))' \
+		"$email" "$password" "$manager" "$manager")
+	curl -fsS -X POST "$base_url/api/user/" \
+		-H "Authorization: Bearer $admin" -H 'Content-Type: application/json' \
+		--data-binary "$body" >/dev/null
+}
+
+spectest() {
+	(
+		set -euo pipefail
+
+		local work_root="${SPECTEST_WORK_DIR:-${TMPDIR:-/tmp}}"
+		work_root="${work_root%/}/emissary-spectest"
+		local suite_dir="$work_root/jmap-test-suite"
+		local users_dir="$work_root/users"
+		local config_file="$work_root/config.json"
+		local report_file="${SPECTEST_REPORT:-$work_root/report.json}"
+		local patch_file="$ROOT_DIR/scripts/spectest/jmap-test-suite.patch"
+		local port="${SPECTEST_PORT:-8099}"
+		local base_url="http://127.0.0.1:$port"
+		local server_pid=""
+
+		cleanup() {
+			if [[ -n "$server_pid" ]]; then
+				kill "$server_pid" 2>/dev/null || true
+				wait "$server_pid" 2>/dev/null || true
+			fi
+			rm -rf "$users_dir"
+		}
+		trap cleanup EXIT
+
+		if ! command -v python3 >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+			echo "spectest requires python3 and curl" >&2
+			return 1
+		fi
+		if [[ ! -f "$patch_file" ]]; then
+			echo "Missing suite profile patch: $patch_file" >&2
+			return 1
+		fi
+
+		local username="${SPECTEST_USERNAME:-spectest-$(generate_guid)@example.com}"
+		local password="${SPECTEST_PASSWORD:-$(generate_guid)}"
+		local jwt_secret="${SPECTEST_JWT_SECRET:-$(generate_guid)}"
+		local secondary_username="${SPECTEST_SECONDARY_USERNAME:-spectest-secondary-$(generate_guid)@example.com}"
+		local secondary_password="${SPECTEST_SECONDARY_PASSWORD:-$(generate_guid)}"
+
+		echo "=== Building local server ==="
+		build_frontend
+		build_backend
+
+		echo ""
+		echo "=== Preparing pinned conformance suite ==="
+		mkdir -p "$work_root" "$users_dir"
+		if [[ ! -d "$suite_dir/.git" ]]; then
+			mkdir -p "$suite_dir"
+			git -C "$suite_dir" init -q
+			git -C "$suite_dir" remote add origin "$SPECTEST_SUITE_URL"
+		fi
+		if ! git -C "$suite_dir" cat-file -e "$SPECTEST_SUITE_COMMIT^{commit}" 2>/dev/null; then
+			git -C "$suite_dir" fetch -q --depth 1 origin "$SPECTEST_SUITE_COMMIT"
+		fi
+		git -C "$suite_dir" checkout -q "$SPECTEST_SUITE_COMMIT"
+		git -C "$suite_dir" checkout -q -- src
+		git -C "$suite_dir" apply "$patch_file"
+		# The pinned suite does not commit a lockfile, so a plain install is
+		# the documented setup (see its README).
+		npm install --prefix "$suite_dir"
+		npm run build --prefix "$suite_dir"
+
+		echo ""
+		echo "=== Starting local server on port $port ==="
+		env USERNAME="$username" PASSWORD="$password" JWT_SECRET="$jwt_secret" \
+			STORAGE=memory SENDER=log RECEIVER=memory METADATA=memory SESSION=memory \
+			USER_MANAGER=filesystem FILESYSTEM_DIR="$users_dir" \
+			PORT="$port" LOG_LEVEL="${SPECTEST_LOG_LEVEL:-ERROR}" \
+			MAX_FILESIZE=10485760 \
+			nohup .build/frontend >"$work_root/server.log" 2>&1 &
+		server_pid=$!
+
+		local ready=0
+		for _ in {1..90}; do
+			local status
+			status=$(curl -s -o /dev/null -w '%{http_code}' "$base_url/.well-known/jmap" 2>/dev/null || true)
+			if [[ "$status" =~ ^[0-9]{3}$ && "$status" != "000" ]]; then
+				ready=1
+				break
+			fi
+			if ! kill -0 "$server_pid" 2>/dev/null; then
+				break
+			fi
+			sleep 0.25
+		done
+		if [[ "$ready" -ne 1 ]]; then
+			echo "Local server did not become ready; see $work_root/server.log" >&2
+			return 1
+		fi
+
+		# The bootstrap administrator can create the two mail users used by
+		# the suite; creating the primary as a real user keeps singleton
+		# methods (VacationResponse) working with the filesystem manager.
+		local admin_token primary_token secondary_token
+		admin_token=$(spectest_login "$username" "$password" "$base_url")
+		spectest_create_user "$username" "$password" true "$admin_token" "$base_url"
+		spectest_create_user "$secondary_username" "$secondary_password" false "$admin_token" "$base_url"
+		primary_token=$(spectest_login "$username" "$password" "$base_url")
+		secondary_token=$(spectest_login "$secondary_username" "$secondary_password" "$base_url")
+
+		python3 - "$config_file" "$base_url" "$username" "$primary_token" \
+			"$secondary_username" "$secondary_token" <<'PY'
+import json, sys
+path, base, username, token, secondary_username, secondary_token = sys.argv[1:]
+config = {
+    "sessionUrl": base + "/.well-known/jmap",
+    "serverInfo": "Emissary local conformance",
+    "users": {
+        "primary": {"username": username, "password": token},
+        "secondary": {"username": secondary_username, "password": secondary_token},
+    },
+    "authMethod": "bearer",
+    "timeout": 30000,
+    "verbose": False,
+}
+with open(path, "w") as out:
+    json.dump(config, out, indent=2)
+PY
+
+		echo ""
+		echo "=== Running conformance suite ==="
+		node "$suite_dir/dist/cli.js" -c "$config_file" -f -o "$report_file" --fail-only
+
+		echo ""
+		python3 - "$report_file" <<'PY'
+import json, sys
+summary = json.load(open(sys.argv[1]))["summary"]
+print(
+    f"JMAP conformance: {summary['passed']} passed, {summary['failed']} failed, "
+    f"{summary['skipped']} skipped "
+    f"(required: {summary['requiredPassed']} passed, {summary['requiredFailed']} failed)"
+)
+PY
+		echo "Report: $report_file"
 	)
 }
 
@@ -389,6 +559,9 @@ main() {
 		;;
 	test)
 		test
+		;;
+	spectest)
+		spectest
 		;;
 	run)
 		run "${@:2}"

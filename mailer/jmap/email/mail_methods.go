@@ -228,6 +228,10 @@ func (h *Handler) EmailParse(ctx context.Context, accountID string, args json.Ra
 		if err != nil {
 			return nil, err
 		}
+		if !mailemail.IsValidRFC5322(raw) {
+			notParsable = append(notParsable, blobID)
+			continue
+		}
 		message, err := mailemail.Parse("", bytes.NewReader(raw))
 		if err != nil {
 			notParsable = append(notParsable, blobID)
@@ -256,7 +260,7 @@ func (h *Handler) EmailParse(ctx context.Context, accountID string, args json.Ra
 		if err := json.Unmarshal(item, &selected); err != nil {
 			return nil, err
 		}
-		for _, property := range []string{"id", "mailboxIds", "keywords", "receivedAt"} {
+		for _, property := range []string{"id", "threadId", "mailboxIds", "keywords", "receivedAt"} {
 			if properties.Has(property) {
 				selected[property] = json.RawMessage("null")
 			} else {
@@ -328,16 +332,25 @@ func (h *Handler) EmailImport(ctx context.Context, accountID string, args json.R
 		}
 		_, raw, err := h.deps.Storage.GetBlob(ctx, accountID, imp.BlobID)
 		if err != nil {
+			// RFC 8621 section 4.8: an id that cannot be found is an
+			// invalid EmailImport property, not a missing result id.
 			if errors.Is(err, storage.ErrNotFound) {
-				notCreated[createID] = base.NewSetError("notFound", "Blob not found")
+				notCreated[createID] = base.NewSetError("invalidProperties", "Blob not found")
 			} else {
 				notCreated[createID] = storeSetError(err, "Failed to read blob")
 			}
 			continue
 		}
+		if !mailemail.IsValidRFC5322(raw) {
+			// The RFC permits either repairing the blob and returning its
+			// new blobId, or rejecting it with invalidEmail. Emissary
+			// rejects rather than silently rewriting uploaded bytes.
+			notCreated[createID] = base.NewSetError("invalidEmail", "Blob is not a valid RFC 5322 message")
+			continue
+		}
 		message, err := mailemail.Parse("", bytes.NewReader(raw))
 		if err != nil {
-			notCreated[createID] = base.NewSetError("invalidProperties", "Blob is not a valid email")
+			notCreated[createID] = base.NewSetError("invalidEmail", "Blob is not a valid email")
 			continue
 		}
 		if existingID := h.duplicateEmailID(ctx, accountID, message.MessageID, raw); existingID != "" {
@@ -350,6 +363,11 @@ func (h *Handler) EmailImport(ctx context.Context, accountID string, args json.R
 			continue
 		}
 		created[createID] = jmapEmail
+	}
+	// storeRawEmail already recorded each creation; refresh the fingerprint
+	// so a later Email/get does not report the same writes as new changes.
+	if err := h.refreshEmailState(ctx, accountID); err != nil {
+		return nil, err
 	}
 	newState, err := h.deps.Changes.State(ctx, accountID, base.StateEmail)
 	if err != nil {
@@ -491,6 +509,16 @@ func (h *Handler) EmailCopy(ctx context.Context, accountID string, args json.Raw
 			if err := h.deps.Changes.Record(ctx, sourceAccount, base.StateEmail, copyReq.ID, base.ChangeDestroy); err != nil {
 				return nil, err
 			}
+		}
+	}
+	// Copy and optional destroy both use explicit Record calls; refresh the
+	// fingerprints so later reads cannot duplicate those changes.
+	if err := h.refreshEmailState(ctx, accountID); err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(sourceAccount, accountID) {
+		if err := h.refreshEmailState(ctx, sourceAccount); err != nil {
+			return nil, err
 		}
 	}
 

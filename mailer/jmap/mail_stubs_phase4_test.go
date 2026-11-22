@@ -283,8 +283,8 @@ func TestEmailImportPhase4(t *testing.T) {
 		t.Fatalf("Email/import(missing blob) error = %v", err)
 	}
 	notCreated := decodeMap(t, raw)["notCreated"].(map[string]any)
-	if e, ok := notCreated["c2"].(map[string]any); !ok || e["type"] != "notFound" {
-		t.Errorf("notCreated = %v, want notFound", notCreated)
+	if e, ok := notCreated["c2"].(map[string]any); !ok || e["type"] != "invalidProperties" {
+		t.Errorf("notCreated = %v, want invalidProperties", notCreated)
 	}
 }
 

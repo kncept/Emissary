@@ -173,8 +173,8 @@ type EmailBodyPart struct {
 // EmailBodyValue represents the fetched value of a JMAP body part.
 type EmailBodyValue struct {
 	Value             string `json:"value"`
-	IsEncodingProblem bool   `json:"isEncodingProblem,omitempty"`
-	IsTruncated       bool   `json:"isTruncated,omitempty"`
+	IsEncodingProblem bool   `json:"isEncodingProblem"`
+	IsTruncated       bool   `json:"isTruncated"`
 }
 
 // EmailHeader represents a JMAP Email header.

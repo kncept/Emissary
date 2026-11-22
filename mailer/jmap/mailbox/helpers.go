@@ -11,6 +11,27 @@ import (
 	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 )
 
+// checkMailboxNameAvailable enforces RFC 8621 section 2: two sibling
+// Mailboxes MUST NOT have the same name. Names are compared case-insensitively
+// because storage normalises mailbox ids from names.
+func (h *Handler) checkMailboxNameAvailable(ctx context.Context, accountID, name, parentID string) *base.SetError {
+	mailboxes, err := h.deps.Storage.ListMailboxes(ctx, accountID)
+	if err != nil {
+		return nil
+	}
+	for _, mb := range mailboxes {
+		existingParent := ""
+		if mb.ParentID != nil {
+			existingParent = storage.NormalizeMailboxID(*mb.ParentID)
+		}
+		if strings.EqualFold(existingParent, parentID) && strings.EqualFold(strings.TrimSpace(mb.Name), strings.TrimSpace(name)) {
+			setErr := base.AlreadyExists("A mailbox with this name already exists under this parent", mb.ID)
+			return &setErr
+		}
+	}
+	return nil
+}
+
 func (h *Handler) getMailboxes(ctx context.Context, accountID string) []Mailbox {
 	stored, err := h.deps.Storage.ListMailboxes(ctx, accountID)
 	if err != nil {

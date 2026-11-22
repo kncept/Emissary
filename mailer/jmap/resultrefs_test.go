@@ -46,13 +46,17 @@ func resultRefRequest(calls ...Invocation) *Request {
 	return &Request{Using: allUsing, MethodCalls: calls}
 }
 
+func resultRefAccountArg() map[string]json.RawMessage {
+	return map[string]json.RawMessage{"accountId": json.RawMessage(`"alice@example.com"`)}
+}
+
 func emailGetWithRef(ref string) Invocation {
+	args := resultRefAccountArg()
+	args["#ids"] = json.RawMessage(ref)
 	return Invocation{
-		Name:     "Email/get",
-		ClientID: "get1",
-		Arguments: map[string]json.RawMessage{
-			"#ids": json.RawMessage(ref),
-		},
+		Name:      "Email/get",
+		ClientID:  "get1",
+		Arguments: args,
 	}
 }
 
@@ -127,7 +131,7 @@ func TestDispatchRequestEnforcesObjectLimitAfterResultReference(t *testing.T) {
 
 	_, err = dispatcher.DispatchRequest(context.Background(), "alice@example.com",
 		&auth.Claims{Subject: "alice@example.com"}, resultRefRequest(
-			Invocation{Name: "Email/query", ClientID: "query1", Arguments: map[string]json.RawMessage{}},
+			Invocation{Name: "Email/query", ClientID: "query1", Arguments: resultRefAccountArg()},
 			emailGetWithRef(`{"resultOf":"query1","name":"Email/query","path":"/ids/*"}`),
 		))
 	var requestErr *RequestError
@@ -150,7 +154,8 @@ func TestDispatchRequestEnforcesObjectLimitAfterResultReference(t *testing.T) {
 				Name:     "Email/get",
 				ClientID: "get1",
 				Arguments: map[string]json.RawMessage{
-					"ids": idsJSON,
+					"accountId": json.RawMessage(`"alice@example.com"`),
+					"ids":       idsJSON,
 				},
 			},
 		))
@@ -179,10 +184,11 @@ func TestDispatchRequestResolvesResultReferenceBeforeCreationID(t *testing.T) {
 				Name:     "Email/set",
 				ClientID: "create",
 				Arguments: map[string]json.RawMessage{
-					"create": json.RawMessage(`{"create1":{"subject":"draft"}}`),
+					"accountId": json.RawMessage(`"alice@example.com"`),
+					"create":    json.RawMessage(`{"create1":{"subject":"draft"}}`),
 				},
 			},
-			Invocation{Name: "Email/query", ClientID: "query1", Arguments: map[string]json.RawMessage{}},
+			Invocation{Name: "Email/query", ClientID: "query1", Arguments: resultRefAccountArg()},
 			emailGetWithRef(`{"resultOf":"query1","name":"Email/query","path":"/ids/*"}`),
 		))
 	if err != nil {
@@ -201,7 +207,7 @@ func TestDispatchRequestResultReferenceUsesFirstResponseForClientID(t *testing.T
 
 	_, err := dispatcher.DispatchRequest(context.Background(), "alice@example.com",
 		&auth.Claims{Subject: "alice@example.com"}, resultRefRequest(
-			Invocation{Name: "EmailSubmission/set", ClientID: "sub1", Arguments: map[string]json.RawMessage{}},
+			Invocation{Name: "EmailSubmission/set", ClientID: "sub1", Arguments: resultRefAccountArg()},
 			emailGetWithRef(`{"resultOf":"sub1","name":"EmailSubmission/set","path":"/ids/*"}`),
 		))
 	if err != nil {
@@ -262,7 +268,7 @@ func TestDispatchRequestInvalidResultReferences(t *testing.T) {
 		{
 			name:         "reference to a later call",
 			ref:          `{"resultOf":"later","name":"Email/query","path":"/ids/*"}`,
-			extraCalls:   []Invocation{{Name: "Email/query", ClientID: "later", Arguments: map[string]json.RawMessage{}}},
+			extraCalls:   []Invocation{{Name: "Email/query", ClientID: "later", Arguments: resultRefAccountArg()}},
 			wantResponse: 3,
 		},
 		{
@@ -279,7 +285,7 @@ func TestDispatchRequestInvalidResultReferences(t *testing.T) {
 			}
 			dispatcher := NewDispatcher(handler, nil)
 			calls := []Invocation{
-				{Name: "Email/query", ClientID: "query1", Arguments: map[string]json.RawMessage{}},
+				{Name: "Email/query", ClientID: "query1", Arguments: resultRefAccountArg()},
 				emailGetWithRef(tt.ref),
 			}
 			calls = append(calls, tt.extraCalls...)
@@ -309,7 +315,7 @@ func TestDispatchRequestDuplicateReferencedArgumentReturnsInvalidArguments(t *te
 	call.Arguments["ids"] = json.RawMessage(`["literal-id"]`)
 	resp, err := dispatcher.DispatchRequest(context.Background(), "alice@example.com",
 		&auth.Claims{Subject: "alice@example.com"}, resultRefRequest(
-			Invocation{Name: "Email/query", ClientID: "query1", Arguments: map[string]json.RawMessage{}},
+			Invocation{Name: "Email/query", ClientID: "query1", Arguments: resultRefAccountArg()},
 			call,
 		))
 	if err != nil {

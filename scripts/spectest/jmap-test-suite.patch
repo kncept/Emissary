@@ -1,0 +1,299 @@
+diff --git a/src/runner/test-context.ts b/src/runner/test-context.ts
+index a554e84..44971a4 100644
+--- a/src/runner/test-context.ts
++++ b/src/runner/test-context.ts
+@@ -37,6 +37,25 @@ export class TestContext {
+   /** Second client for secondary account (if configured) */
+   public secondaryClient?: JmapClient;
+ 
++  /** Whether the advertised profile allows nested mailboxes (maxMailboxDepth > 1). */
++  public supportsNestedMailboxes: boolean = true;
++
++  /** Whether the advertised profile allows an Email in more than one Mailbox. */
++  public supportsMultipleMailboxes: boolean = true;
++
++  /** Sort properties advertised in the mail account capability. */
++  public supportedSortProperties: Set<string> = new Set(["receivedAt"]);
++
++  /** Whether delayed submission is supported (maxDelayedSend != 0). */
++  public supportsDelayedSend: boolean = true;
++
++  supportsSort(...properties: string[]): true | string {
++    const missing = properties.filter((p) => !this.supportedSortProperties.has(p));
++    return missing.length === 0
++      ? true
++      : `emailQuerySortOptions does not advertise ${missing.join(", ")}`;
++  }
++
+   /** Smee.io channel for push subscription tests (undefined if smee.io is unreachable) */
+   public smeeChannel?: SmeeChannel;
+ 
+diff --git a/src/runner/test-runner.ts b/src/runner/test-runner.ts
+index 822e103..659bf33 100644
+--- a/src/runner/test-runner.ts
++++ b/src/runner/test-runner.ts
+@@ -100,6 +100,36 @@ export async function runTests(options: RunOptions): Promise<TestResult[]> {
+   });
+ 
+   const ctx = new TestContext(client, config);
++  const accountCaps = client.session.accounts[client.accountId]?.accountCapabilities ?? {};
++  const mailCaps = accountCaps["urn:ietf:params:jmap:mail"] ?? client.session.capabilities["urn:ietf:params:jmap:mail"] ?? {};
++  const maxDepth = (mailCaps as Record<string, unknown>)["maxMailboxDepth"];
++  ctx.supportsNestedMailboxes = maxDepth == null || Number(maxDepth) > 1;
++  const maxMailboxes = (mailCaps as Record<string, unknown>)["maxMailboxesPerEmail"];
++  ctx.supportsMultipleMailboxes = maxMailboxes == null || Number(maxMailboxes) > 1;
++  const sortOptions = (mailCaps as Record<string, unknown>)["emailQuerySortOptions"];
++  if (Array.isArray(sortOptions)) {
++    ctx.supportedSortProperties = new Set(
++      sortOptions.map((option) =>
++        typeof option === "string" ? option : String((option as { property?: string }).property ?? "")
++      )
++    );
++  }
++  const submissionCaps =
++    accountCaps["urn:ietf:params:jmap:submission"] ??
++    client.session.capabilities["urn:ietf:params:jmap:submission"] ??
++    {};
++  const maxDelayed = (submissionCaps as Record<string, unknown>)["maxDelayedSend"];
++  ctx.supportsDelayedSend = maxDelayed == null || Number(maxDelayed) !== 0;
++  if (!ctx.supportsNestedMailboxes || !ctx.supportsMultipleMailboxes ||
++      ctx.supportedSortProperties.size < 2 || !ctx.supportsDelayedSend) {
++    process.stderr.write(
++      "\n⚠ Applying advertised profile skips: " +
++      `nestedMailboxes=${ctx.supportsNestedMailboxes}, ` +
++      `multipleMailboxes=${ctx.supportsMultipleMailboxes}, ` +
++      `sorts=${[...ctx.supportedSortProperties].join(",") || "none"}, ` +
++      `delayedSend=${ctx.supportsDelayedSend}\n`
++    );
++  }
+   if (crossAccountId) {
+     ctx.crossAccountId = crossAccountId;
+   }
+diff --git a/src/setup/seed-data.ts b/src/setup/seed-data.ts
+index aaa31da..484f255 100644
+--- a/src/setup/seed-data.ts
++++ b/src/setup/seed-data.ts
+@@ -37,6 +37,11 @@ async function createMailboxes(ctx: TestContext): Promise<void> {
+     `  Created: Test Folder A (${ctx.mailboxIds["folderA"]}), Test Folder B (${ctx.mailboxIds["folderB"]})\n`
+   );
+ 
++  if (!ctx.supportsNestedMailboxes) {
++    process.stderr.write("  Skipped nested mailbox fixtures (maxMailboxDepth=1)\n");
++    return;
++  }
++
+   // Create child mailboxes under Folder A
+   const childResult = await client.call("Mailbox/set", {
+     accountId,
+@@ -186,7 +191,7 @@ async function createEmails(ctx: TestContext): Promise<void> {
+       keywords: { $answered: true },
+       receivedAt: daysAgo(6),
+     },
+-    {
++    ...(ctx.supportsMultipleMailboxes ? [{
+       key: "multi-mailbox",
+       rfc5322: buildMessage({
+         from: "David Cross <david@example.com>",
+@@ -199,7 +204,7 @@ async function createEmails(ctx: TestContext): Promise<void> {
+       mailboxIds: { [inbox]: true, [folderA]: true },
+       keywords: { $seen: true },
+       receivedAt: daysAgo(5),
+-    },
++    }] : []),
+     {
+       key: "large-email",
+       rfc5322: buildMessage({
+@@ -399,7 +404,7 @@ async function createEmails(ctx: TestContext): Promise<void> {
+           },
+         ]
+       : []),
+-    {
++    ...(ctx.supportsNestedMailboxes ? [{
+       key: "child-mailbox-email",
+       rfc5322: buildMessage({
+         from: "Nancy Nested <nancy@example.com>",
+@@ -412,7 +417,7 @@ async function createEmails(ctx: TestContext): Promise<void> {
+       mailboxIds: { [child1]: true },
+       keywords: { $seen: true },
+       receivedAt: daysAgo(5),
+-    },
++    }] : []),
+     // Korean (EUC-KR) encoded email
+     {
+       key: "korean-euckr",
+diff --git a/src/tests/email/email-get.test.ts b/src/tests/email/email-get.test.ts
+index b85545e..f5f1dc9 100644
+--- a/src/tests/email/email-get.test.ts
++++ b/src/tests/email/email-get.test.ts
+@@ -45,6 +45,7 @@ defineTests({ rfc: "RFC8621", section: "4.1", category: "email" }, [
+   },
+   {
+     id: "get-mailbox-ids",
++    runIf: (ctx) => ctx.supportsMultipleMailboxes || "advertised maxMailboxesPerEmail=1 forbids multi-mailbox emails",
+     name: "Email/get mailboxIds reflects correct mailbox membership",
+     fn: async (ctx) => {
+       const emailId = ctx.emailIds["multi-mailbox"];
+diff --git a/src/tests/email/email-query-filters.test.ts b/src/tests/email/email-query-filters.test.ts
+index 9a32422..55cc961 100644
+--- a/src/tests/email/email-query-filters.test.ts
++++ b/src/tests/email/email-query-filters.test.ts
+@@ -469,6 +469,7 @@ defineTests({ rfc: "RFC8621", section: "4.4.1", category: "email" }, [
+   {
+     id: "filter-in-child-mailbox",
+     name: "Email/query filter inMailbox with child mailbox",
++    runIf: (ctx) => ctx.supportsNestedMailboxes || "maxMailboxDepth=1 profile forbids nested mailboxes",
+     fn: async (ctx) => {
+       const result = await ctx.client.call("Email/query", {
+         accountId: ctx.accountId,
+diff --git a/src/tests/email/email-query-sort.test.ts b/src/tests/email/email-query-sort.test.ts
+index 696a07e..445425d 100644
+--- a/src/tests/email/email-query-sort.test.ts
++++ b/src/tests/email/email-query-sort.test.ts
+@@ -64,6 +64,7 @@ defineTests({ rfc: "RFC8621", section: "4.4.2", category: "email" }, [
+   },
+   {
+     id: "sort-size",
++    runIf: (ctx) => ctx.supportsSort("size") || "advertised emailQuerySortOptions does not include size",
+     name: "Email/query sort by size",
+     fn: async (ctx) => {
+       const result = await ctx.client.call("Email/query", {
+@@ -90,6 +91,7 @@ defineTests({ rfc: "RFC8621", section: "4.4.2", category: "email" }, [
+   },
+   {
+     id: "sort-from",
++    runIf: (ctx) => ctx.supportsSort("from") || "advertised emailQuerySortOptions does not include from",
+     name: "Email/query sort by from",
+     fn: async (ctx) => {
+       const result = await ctx.client.call("Email/query", {
+@@ -130,6 +132,7 @@ defineTests({ rfc: "RFC8621", section: "4.4.2", category: "email" }, [
+   },
+   {
+     id: "sort-to",
++    runIf: (ctx) => ctx.supportsSort("to") || "advertised emailQuerySortOptions does not include to",
+     name: "Email/query sort by to",
+     fn: async (ctx) => {
+       const result = await ctx.client.call("Email/query", {
+@@ -171,6 +174,7 @@ defineTests({ rfc: "RFC8621", section: "4.4.2", category: "email" }, [
+   },
+   {
+     id: "sort-subject",
++    runIf: (ctx) => ctx.supportsSort("subject") || "advertised emailQuerySortOptions does not include subject",
+     name: "Email/query sort by subject",
+     required: false,
+     fn: async (ctx) => {
+@@ -201,6 +205,7 @@ defineTests({ rfc: "RFC8621", section: "4.4.2", category: "email" }, [
+   },
+   {
+     id: "sort-sent-at",
++    runIf: (ctx) => ctx.supportsSort("sentAt") || "advertised emailQuerySortOptions does not include sentAt",
+     name: "Email/query sort by sentAt",
+     fn: async (ctx) => {
+       const result = await ctx.client.call("Email/query", {
+@@ -231,6 +236,7 @@ defineTests({ rfc: "RFC8621", section: "4.4.2", category: "email" }, [
+   },
+   {
+     id: "sort-has-keyword",
++    runIf: (ctx) => ctx.supportsSort("hasKeyword") || "advertised emailQuerySortOptions does not include hasKeyword",
+     name: "Email/query sort by hasKeyword",
+     fn: async (ctx) => {
+       const result = await ctx.client.call("Email/query", {
+@@ -279,6 +285,7 @@ defineTests({ rfc: "RFC8621", section: "4.4.2", category: "email" }, [
+   },
+   {
+     id: "sort-multi-property",
++    runIf: (ctx) => ctx.supportsSort("subject") || "advertised emailQuerySortOptions does not include subject",
+     name: "Email/query sort by multiple properties",
+     fn: async (ctx) => {
+       const result = await ctx.client.call("Email/query", {
+diff --git a/src/tests/email/email-set-destroy.test.ts b/src/tests/email/email-set-destroy.test.ts
+index 183c3c7..7828aab 100644
+--- a/src/tests/email/email-set-destroy.test.ts
++++ b/src/tests/email/email-set-destroy.test.ts
+@@ -111,6 +111,7 @@ defineTests({ rfc: "RFC8621", section: "4.6", category: "email" }, [
+   },
+   {
+     id: "set-destroy-removes-from-all-mailboxes",
++    runIf: (ctx) => ctx.supportsMultipleMailboxes || "advertised maxMailboxesPerEmail=1 forbids multi-mailbox emails",
+     name: "Email/set destroy removes email from all mailboxes",
+     fn: async (ctx) => {
+       // Create in multiple mailboxes
+diff --git a/src/tests/email/email-set-update.test.ts b/src/tests/email/email-set-update.test.ts
+index 9ed1521..2d3ede3 100644
+--- a/src/tests/email/email-set-update.test.ts
++++ b/src/tests/email/email-set-update.test.ts
+@@ -148,6 +148,7 @@ defineTests({ rfc: "RFC8621", section: "4.6", category: "email" }, [
+   },
+   {
+     id: "set-update-add-mailbox",
++    runIf: (ctx) => ctx.supportsMultipleMailboxes || "advertised maxMailboxesPerEmail=1 forbids adding a second mailbox",
+     name: "Email/set update adds email to additional mailbox",
+     fn: async (ctx) => {
+       const createResult = await ctx.client.call("Email/set", {
+@@ -194,6 +195,7 @@ defineTests({ rfc: "RFC8621", section: "4.6", category: "email" }, [
+   },
+   {
+     id: "set-update-remove-mailbox",
++    runIf: (ctx) => ctx.supportsMultipleMailboxes || "advertised maxMailboxesPerEmail=1 forbids removing a mailbox",
+     name: "Email/set update removes email from a mailbox via patch null",
+     fn: async (ctx) => {
+       const createResult = await ctx.client.call("Email/set", {
+diff --git a/src/tests/mailbox/mailbox-get.test.ts b/src/tests/mailbox/mailbox-get.test.ts
+index 269491c..ea67551 100644
+--- a/src/tests/mailbox/mailbox-get.test.ts
++++ b/src/tests/mailbox/mailbox-get.test.ts
+@@ -139,6 +139,7 @@ defineTests({ rfc: "RFC8621", section: "2.1", category: "mailbox" }, [
+   {
+     id: "get-parent-id-correct",
+     name: "Child mailbox parentId references parent correctly",
++    runIf: (ctx) => ctx.supportsNestedMailboxes || "maxMailboxDepth=1 profile forbids nested mailboxes",
+     fn: async (ctx) => {
+       const child1Id = ctx.mailboxIds["child1"];
+       const folderAId = ctx.mailboxIds["folderA"];
+diff --git a/src/tests/mailbox/mailbox-query.test.ts b/src/tests/mailbox/mailbox-query.test.ts
+index 3fb7ace..6828386 100644
+--- a/src/tests/mailbox/mailbox-query.test.ts
++++ b/src/tests/mailbox/mailbox-query.test.ts
+@@ -36,6 +36,7 @@ defineTests({ rfc: "RFC8621", section: "2.3", category: "mailbox" }, [
+   {
+     id: "query-filter-by-parent-id",
+     name: "Mailbox/query filter by parentId returns children",
++    runIf: (ctx) => ctx.supportsNestedMailboxes || "maxMailboxDepth=1 profile forbids nested mailboxes",
+     fn: async (ctx) => {
+       const result = await ctx.client.call("Mailbox/query", {
+         accountId: ctx.accountId,
+diff --git a/src/tests/mailbox/mailbox-set.test.ts b/src/tests/mailbox/mailbox-set.test.ts
+index 2d5e24a..341d862 100644
+--- a/src/tests/mailbox/mailbox-set.test.ts
++++ b/src/tests/mailbox/mailbox-set.test.ts
+@@ -26,6 +26,7 @@ defineTests({ rfc: "RFC8621", section: "2.5", category: "mailbox" }, [
+   {
+     id: "set-create-child",
+     name: "Mailbox/set create child mailbox",
++    runIf: (ctx) => ctx.supportsNestedMailboxes || "maxMailboxDepth=1 profile forbids nested mailboxes",
+     fn: async (ctx) => {
+       const result = await ctx.client.call("Mailbox/set", {
+         accountId: ctx.accountId,
+@@ -91,6 +92,7 @@ defineTests({ rfc: "RFC8621", section: "2.5", category: "mailbox" }, [
+   {
+     id: "set-move-parent",
+     name: "Mailbox/set change parent (move mailbox)",
++    runIf: (ctx) => ctx.supportsNestedMailboxes || "maxMailboxDepth=1 profile forbids nested mailboxes",
+     fn: async (ctx) => {
+       // Create under folderA
+       const createResult = await ctx.client.call("Mailbox/set", {
+@@ -263,6 +265,7 @@ defineTests({ rfc: "RFC8621", section: "2.5", category: "mailbox" }, [
+   {
+     id: "set-on-destroy-remove-emails-with-children",
+     name: "Mailbox/set destroy with onDestroyRemoveEmails MUST fail if mailbox has children",
++    runIf: (ctx) => ctx.supportsNestedMailboxes || "maxMailboxDepth=1 profile forbids nested mailboxes",
+     fn: async (ctx) => {
+       // Create parent with an email and a child mailbox
+       const createParent = await ctx.client.call("Mailbox/set", {
+@@ -423,6 +426,7 @@ defineTests({ rfc: "RFC8621", section: "2.5", category: "mailbox" }, [
+   {
+     id: "set-cannot-destroy-with-children",
+     name: "Mailbox/set MUST fail to destroy mailbox with children",
++    runIf: (ctx) => ctx.supportsNestedMailboxes || "maxMailboxDepth=1 profile forbids nested mailboxes",
+     fn: async (ctx) => {
+       // Create parent + child
+       const createParent = await ctx.client.call("Mailbox/set", {

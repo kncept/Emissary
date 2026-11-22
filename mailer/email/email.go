@@ -103,21 +103,33 @@ type ListedEmail struct {
 //
 // To parse a raw RFC 5322 message into a UserEmail, use ParseWireFormat()
 // followed by WireFormatEmail.ToUserEmail(), or use the convenience function Parse().
+// Attachment is a binary MIME part supplied by an Email/set create. The data
+// is stored in the rendered message, so the resulting bodyStructure is derived
+// from the bytes rather than from the client's original bodyStructure object.
+type Attachment struct {
+	Type        string `json:"type"`
+	Data        []byte `json:"data"`
+	Name        string `json:"name,omitempty"`
+	Disposition string `json:"disposition,omitempty"`
+	CID         string `json:"cid,omitempty"`
+}
+
 type UserEmail struct {
-	From       Address   `json:"from"`
-	ReplyTo    []Address `json:"replyTo,omitempty"`
-	To         []Address `json:"to"`
-	Cc         []Address `json:"cc,omitempty"`
-	Bcc        []Address `json:"bcc,omitempty"`
-	Subject    string    `json:"subject"`
-	Date       time.Time `json:"date"`
-	Text       string    `json:"text"`
-	HTML       string    `json:"html,omitempty"`
-	Read       bool      `json:"read"`
-	Size       int64     `json:"size,omitempty"`
-	MessageID  string    `json:"messageId,omitempty"`
-	InReplyTo  []string  `json:"inReplyTo,omitempty"`
-	References []string  `json:"references,omitempty"`
+	From        Address      `json:"from"`
+	ReplyTo     []Address    `json:"replyTo,omitempty"`
+	To          []Address    `json:"to"`
+	Cc          []Address    `json:"cc,omitempty"`
+	Bcc         []Address    `json:"bcc,omitempty"`
+	Subject     string       `json:"subject"`
+	Date        time.Time    `json:"date"`
+	Text        string       `json:"text"`
+	HTML        string       `json:"html,omitempty"`
+	Attachments []Attachment `json:"attachments,omitempty"`
+	Read        bool         `json:"read"`
+	Size        int64        `json:"size,omitempty"`
+	MessageID   string       `json:"messageId,omitempty"`
+	InReplyTo   []string     `json:"inReplyTo,omitempty"`
+	References  []string     `json:"references,omitempty"`
 
 	// AutoSubmitted is the RFC 3834 Auto-Submitted header value. "auto-replied"
 	// marks an automatic response so other responders can avoid mail loops.
@@ -347,20 +359,42 @@ func RawFromUserEmail(e *UserEmail) []byte {
 
 	var buf bytes.Buffer
 	buf.WriteString(RenderHeaders(e, HeaderPolicy{}))
+	// A deterministic boundary keeps repeated renderings byte-identical for
+	// stores that render on read, which in turn keeps blobId and size stable
+	// for the same message.
+	seed := e.MessageID + "\x00" + e.Text + "\x00" + e.HTML
+	for _, attachment := range e.Attachments {
+		seed += "\x00" + attachment.Type + "\x00" + attachment.Name + "\x00" + attachment.Disposition + "\x00" + attachment.CID + "\x00" + string(attachment.Data)
+	}
+	sum := sha256.Sum256([]byte(seed))
+	boundary := "emissary_" + hex.EncodeToString(sum[:8])
+
+	if len(e.Attachments) > 0 {
+		buf.WriteString("MIME-Version: 1.0\r\n")
+		buf.WriteString("Content-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n\r\n")
+		if e.HTML != "" {
+			altBoundary := "emissary_alt_" + hex.EncodeToString(sum[8:16])
+			buf.WriteString("--" + boundary + "\r\n")
+			buf.WriteString("Content-Type: multipart/alternative; boundary=\"" + altBoundary + "\"\r\n\r\n")
+			writeMIMEPart(&buf, altBoundary, "text/plain", e.Text)
+			writeMIMEPart(&buf, altBoundary, "text/html", e.HTML)
+			buf.WriteString("--" + altBoundary + "--\r\n")
+		} else {
+			writeMIMEPart(&buf, boundary, "text/plain", e.Text)
+		}
+		for _, attachment := range e.Attachments {
+			writeMIMEAttachment(&buf, boundary, attachment)
+		}
+		buf.WriteString("--" + boundary + "--\r\n")
+		return buf.Bytes()
+	}
 	if e.HTML != "" {
-		// A deterministic boundary keeps repeated renderings byte-identical
-		// for stores that render on read, which in turn keeps blobId and size
-		// stable for the same message.
-		sum := sha256.Sum256([]byte(e.MessageID + "\x00" + e.Text + "\x00" + e.HTML))
-		boundary := "emissary_" + hex.EncodeToString(sum[:8])
 		buf.WriteString("MIME-Version: 1.0\r\n")
 		buf.WriteString("Content-Type: multipart/alternative; boundary=\"" + boundary + "\"\r\n")
 		buf.WriteString("\r\n")
 		writeMIMEPart(&buf, boundary, "text/plain", e.Text)
 		writeMIMEPart(&buf, boundary, "text/html", e.HTML)
-		buf.WriteString("--")
-		buf.WriteString(boundary)
-		buf.WriteString("--\r\n")
+		buf.WriteString("--" + boundary + "--\r\n")
 		return buf.Bytes()
 	}
 	buf.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
@@ -378,6 +412,43 @@ func writeMIMEPart(buf *bytes.Buffer, boundary, contentType, body string) {
 	writeCRLFBody(buf, body)
 }
 
+func writeMIMEAttachment(buf *bytes.Buffer, boundary string, attachment Attachment) {
+	contentType := strings.TrimSpace(attachment.Type)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	buf.WriteString("--" + boundary + "\r\n")
+	buf.WriteString("Content-Type: " + contentType)
+	if name := strings.TrimSpace(attachment.Name); name != "" {
+		buf.WriteString("; name=\"" + mimeQuote(name) + "\"")
+	}
+	buf.WriteString("\r\n")
+	disposition := strings.TrimSpace(attachment.Disposition)
+	if disposition == "" {
+		disposition = "attachment"
+	}
+	buf.WriteString("Content-Disposition: " + disposition)
+	if name := strings.TrimSpace(attachment.Name); name != "" {
+		buf.WriteString("; filename=\"" + mimeQuote(name) + "\"")
+	}
+	buf.WriteString("\r\n")
+	if cid := strings.Trim(strings.TrimSpace(attachment.CID), "<>"); cid != "" {
+		buf.WriteString("Content-ID: <" + cid + ">\r\n")
+	}
+	buf.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
+	encoded := base64.StdEncoding.EncodeToString(attachment.Data)
+	for len(encoded) > 76 {
+		buf.WriteString(encoded[:76] + "\r\n")
+		encoded = encoded[76:]
+	}
+	buf.WriteString(encoded + "\r\n")
+}
+
+func mimeQuote(value string) string {
+	value = strings.ReplaceAll(value, "\\", "\\\\")
+	return strings.ReplaceAll(value, "\"", "\\\"")
+}
+
 // writeCRLFBody normalises client-supplied line endings so the rendered
 // message is valid RFC 5322 and its byte length is stable.
 func writeCRLFBody(buf *bytes.Buffer, body string) {
@@ -385,6 +456,25 @@ func writeCRLFBody(buf *bytes.Buffer, body string) {
 		buf.WriteString(line)
 		buf.WriteString("\r\n")
 	}
+}
+
+// IsValidRFC5322 reports whether raw has the mandatory origination fields of
+// an RFC 5322 message. The general parser is deliberately lenient so it can
+// display broken inbound mail; Email/import and Email/parse need a stricter
+// check before accepting arbitrary uploaded blobs (RFC 8621 sections 4.8/4.9).
+func IsValidRFC5322(raw []byte) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	message, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		return false
+	}
+	// From is the one origination field every accepted message in this
+	// profile must carry. RFC 5322 also requires Date, but clients and the
+	// external conformance suite commonly create minimal messages without
+	// one; the lenient parser already fills a fallback date.
+	return strings.TrimSpace(message.Header.Get("From")) != ""
 }
 
 // Parse reads a raw RFC 5322 message and returns its content as a UserEmail.

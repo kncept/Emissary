@@ -46,18 +46,18 @@ var parsedFormHeaders = map[string]map[string]bool{
 	"comments":          {"text": true},
 	"keywords":          {"text": true},
 	"list-id":           {"text": true},
-	"from":              {"addresses": true},
-	"sender":            {"addresses": true},
-	"reply-to":          {"addresses": true},
-	"to":                {"addresses": true},
-	"cc":                {"addresses": true},
-	"bcc":               {"addresses": true},
-	"resent-from":       {"addresses": true},
-	"resent-sender":     {"addresses": true},
-	"resent-reply-to":   {"addresses": true},
-	"resent-to":         {"addresses": true},
-	"resent-cc":         {"addresses": true},
-	"resent-bcc":        {"addresses": true},
+	"from":              {"addresses": true, "groupedaddresses": true},
+	"sender":            {"addresses": true, "groupedaddresses": true},
+	"reply-to":          {"addresses": true, "groupedaddresses": true},
+	"to":                {"addresses": true, "groupedaddresses": true},
+	"cc":                {"addresses": true, "groupedaddresses": true},
+	"bcc":               {"addresses": true, "groupedaddresses": true},
+	"resent-from":       {"addresses": true, "groupedaddresses": true},
+	"resent-sender":     {"addresses": true, "groupedaddresses": true},
+	"resent-reply-to":   {"addresses": true, "groupedaddresses": true},
+	"resent-to":         {"addresses": true, "groupedaddresses": true},
+	"resent-cc":         {"addresses": true, "groupedaddresses": true},
+	"resent-bcc":        {"addresses": true, "groupedaddresses": true},
 	"message-id":        {"messageids": true},
 	"in-reply-to":       {"messageids": true},
 	"references":        {"messageids": true},
@@ -73,8 +73,8 @@ var parsedFormHeaders = map[string]map[string]bool{
 }
 
 var headerForms = map[string]bool{
-	"raw": true, "text": true, "addresses": true, "messageids": true,
-	"date": true, "urls": true,
+	"raw": true, "text": true, "addresses": true, "groupedaddresses": true,
+	"messageids": true, "date": true, "urls": true,
 }
 
 // dynamicHeaderName validates an RFC 8621 `header:{name}` property and returns

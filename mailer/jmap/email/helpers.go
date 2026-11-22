@@ -3,6 +3,8 @@ package email
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -236,6 +238,27 @@ func (h *Handler) syncEmailState(ctx context.Context, accountID string) (string,
 	return h.syncEmailStateFromListed(ctx, accountID, listed)
 }
 
+// refreshEmailState updates the fingerprint without recording another change.
+// Email/set uses it in Finalize because its create/update/destroy callbacks
+// already called Changes.Record for every affected id; diffing the same write
+// again would report a duplicate change (RFC 8620 section 5.2).
+func (h *Handler) refreshEmailState(ctx context.Context, accountID string) error {
+	listed, err := h.deps.Storage.ListEmails(ctx, accountID, "")
+	if err != nil {
+		return nil
+	}
+	snapshot := make(map[string]string, len(listed))
+	for _, item := range listed {
+		if item == nil || item.Ref == nil || item.Email == nil {
+			continue
+		}
+		snapshot[item.Ref.ID] = emailFingerprint(item, base.EmailMetadata(ctx, h.deps, accountID, item.Ref.ID))
+	}
+	return h.deps.Changes.Refresh(ctx, accountID, map[base.StateKind]map[string]string{
+		base.StateEmail: snapshot,
+	})
+}
+
 // syncEmailStateFromListed avoids a second storage listing when the caller has
 // already loaded the account's full mailbox (Email/get does this).
 func (h *Handler) syncEmailStateFromListed(ctx context.Context, accountID string, listed []*mailemail.ListedEmail) (string, error) {
@@ -268,8 +291,14 @@ func emailFingerprint(listed *mailemail.ListedEmail, meta metadata.EmailMetadata
 	if mailboxID == "" {
 		mailboxID = "inbox"
 	}
-	return fmt.Sprintf("%s|%s|%s|%d|%s|%s", mailboxID, meta.ReceivedAt,
+	// Hash the material: RFC 5322 subjects can contain bytes that are not
+	// valid UTF-8, and JSON persistence would replace those bytes with
+	// U+FFFD, making a fingerprint differ from itself on the next request
+	// (RFC 8620 section 5.1 forbids a state change without a data change).
+	material := fmt.Sprintf("%s|%s|%s|%d|%s|%s", mailboxID, meta.ReceivedAt,
 		strings.Join(keywords, ","), listed.Email.Size, listed.Email.Subject, listed.Email.MessageID)
+	sum := sha256.Sum256([]byte(material))
+	return hex.EncodeToString(sum[:])
 }
 
 func toJMAPAddresses(addresses ...mailemail.Address) []model.EmailAddress {
@@ -836,6 +865,124 @@ func (h *Handler) emailInAccount(ctx context.Context, accountID, id string) bool
 	return false
 }
 
+// extractCreateAttachments resolves the blobId-bearing parts of an Email/set
+// create into binary MIME parts. RFC 8621 section 4.6 stores attachments as
+// regular MIME leaves; the bodyStructure returned by Email/get is derived from
+// those bytes rather than echoing the client's object.
+func (h *Handler) extractCreateAttachments(ctx context.Context, accountID string, createMap map[string]interface{}) ([]mailemail.Attachment, *base.SetError) {
+	var attachments []mailemail.Attachment
+	var total int64
+	fail := func(setErr base.SetError) *base.SetError { return &setErr }
+
+	addFromPart := func(part map[string]interface{}) *base.SetError {
+		blobID, _ := part["blobId"].(string)
+		if strings.TrimSpace(blobID) == "" {
+			return nil
+		}
+		_, data, err := h.deps.Storage.GetBlob(ctx, accountID, blobID)
+		if err != nil {
+			return fail(base.NewSetError("invalidProperties", "Attachment blob not found"))
+		}
+		total += int64(len(data))
+		if total > mailemail.MaxPartSize() {
+			return fail(base.NewSetError("tooLarge", "Attachments exceed the advertised maximum size"))
+		}
+		contentType, _ := part["type"].(string)
+		name, _ := part["name"].(string)
+		disposition, _ := part["disposition"].(string)
+		cid, _ := part["cid"].(string)
+		attachments = append(attachments, mailemail.Attachment{
+			Type:        contentType,
+			Data:        data,
+			Name:        name,
+			Disposition: disposition,
+			CID:         cid,
+		})
+		return nil
+	}
+
+	var walk func(map[string]interface{}) *base.SetError
+	walk = func(part map[string]interface{}) *base.SetError {
+		if part == nil {
+			return nil
+		}
+		if setErr := addFromPart(part); setErr != nil {
+			return setErr
+		}
+		if subParts, ok := part["subParts"].([]interface{}); ok {
+			for _, raw := range subParts {
+				child, ok := raw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if setErr := walk(child); setErr != nil {
+					return setErr
+				}
+			}
+		}
+		return nil
+	}
+
+	if structure, ok := createMap["bodyStructure"].(map[string]interface{}); ok {
+		if setErr := walk(structure); setErr != nil {
+			return nil, setErr
+		}
+	}
+	for _, key := range []string{"attachments", "textBody", "htmlBody"} {
+		parts, ok := createMap[key].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, raw := range parts {
+			part, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if setErr := walk(part); setErr != nil {
+				return nil, setErr
+			}
+		}
+	}
+	return attachments, nil
+}
+
+// collectBodyValuesFromTree walks a bodyStructure tree and returns the first
+// text/plain and text/html values referenced from bodyValues. RFC 8621 section
+// 4.6 permits either textBody/htmlBody or a nested bodyStructure; clients
+// commonly supply only the latter.
+func collectBodyValuesFromTree(part map[string]interface{}, bodyValues map[string]interface{}) (text, html string) {
+	if part == nil {
+		return "", ""
+	}
+	if typeName, _ := part["type"].(string); strings.HasPrefix(strings.ToLower(typeName), "text/") {
+		partID, _ := part["partId"].(string)
+		value, _ := bodyValues[partID].(map[string]interface{})
+		body, _ := value["value"].(string)
+		if strings.EqualFold(typeName, "text/plain") {
+			return body, ""
+		}
+		if strings.EqualFold(typeName, "text/html") {
+			return "", body
+		}
+	}
+	if subParts, ok := part["subParts"].([]interface{}); ok {
+		for _, raw := range subParts {
+			child, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			childText, childHTML := collectBodyValuesFromTree(child, bodyValues)
+			if text == "" {
+				text = childText
+			}
+			if html == "" {
+				html = childHTML
+			}
+		}
+	}
+	return text, html
+}
+
 // extractCreateBodies extracts text/html bodies from a JMAP Email/set create
 // object. It supports both legacy "text"/"html" fields and the standard
 // bodyValues + textBody/htmlBody structure.
@@ -878,6 +1025,21 @@ func extractCreateBodies(createMap map[string]interface{}) (text, html string) {
 	}
 	if hb, ok := createMap["htmlBody"].([]interface{}); ok && html == "" {
 		html = getPart(hb, "text/html")
+	}
+	// RFC 8621 section 4.6 allows a client to supply bodyStructure with
+	// subParts instead of textBody/htmlBody. Walk that tree so both
+	// representations are available to the stored Email.
+	if structure, ok := createMap["bodyStructure"].(map[string]interface{}); ok {
+		parts := []interface{}{structure}
+		if text == "" {
+			text = getPart(parts, "text/plain")
+		}
+		if html == "" {
+			html = getPart(parts, "text/html")
+		}
+		if text == "" && html == "" {
+			text, html = collectBodyValuesFromTree(structure, bodyValues)
+		}
 	}
 	// Fallbacks for common part ids or single-value cases.
 	if text == "" {

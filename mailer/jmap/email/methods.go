@@ -130,8 +130,7 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 			if destroyErr != nil {
 				return destroyErr
 			}
-			_, err := h.syncEmailState(ctx, accountID)
-			return err
+			return h.refreshEmailState(ctx, accountID)
 		},
 		Destroy: func(ctx context.Context, id string) *base.SetError {
 			fail := func(setErr base.SetError) *base.SetError { return &setErr }
@@ -230,6 +229,10 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 			}
 
 			text, html := extractCreateBodies(createMap)
+			attachments, setErr := h.extractCreateAttachments(ctx, accountID, createMap)
+			if setErr != nil {
+				return fail(*setErr)
+			}
 
 			inReplyTo := ""
 			if irt, ok := createMap["inReplyTo"].(string); ok {
@@ -288,19 +291,20 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 			}
 
 			newEmail := &mailemail.UserEmail{
-				From:       mailemail.Address{Address: lockedFrom},
-				ReplyTo:    replyTo,
-				To:         to,
-				Cc:         cc,
-				Bcc:        bcc,
-				Subject:    subject,
-				Date:       now,
-				Text:       text,
-				HTML:       html,
-				Size:       int64(len(text) + len(html)),
-				MessageID:  messageID,
-				InReplyTo:  inReplyToList,
-				References: references,
+				From:        mailemail.Address{Address: lockedFrom},
+				ReplyTo:     replyTo,
+				To:          to,
+				Cc:          cc,
+				Bcc:         bcc,
+				Subject:     subject,
+				Date:        now,
+				Text:        text,
+				HTML:        html,
+				Attachments: attachments,
+				Size:        int64(len(text) + len(html)),
+				MessageID:   messageID,
+				InReplyTo:   inReplyToList,
+				References:  references,
 			}
 			// Render before storage so the same bytes back blobId, size and
 			// the MIME tree returned by a later Email/get.
@@ -314,48 +318,10 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 				return fail(base.AlreadyExists("An email with this Message-ID already exists", existingID))
 			}
 
-			// A session draft is stored separately (durable across lambda
-			// invocations) and is only valid in drafts mailbox context.
-			if claims := auth.ClaimsFromContext(ctx); claims != nil && claims.SID != "" {
-				newID, err := h.deps.Storage.PutDraft(ctx, claims.SID, createID, newEmail)
-				if err != nil {
-					return fail(storeSetError(err, "Failed to create email"))
-				}
-				if _, err := storage.RegisterEmailBlobs(ctx, h.deps.Storage, accountID, rawBytes); err != nil {
-					if cleanupErr := h.deps.Storage.DeleteDraft(ctx, claims.SID, newID); cleanupErr != nil {
-						slog.Error("JMAP: failed to roll back draft after blob registration error", "id", newID, "err", cleanupErr)
-					}
-					return fail(storeSetError(err, "Failed to register draft blob"))
-				}
-				threadID := base.ThreadID(newID, newEmail)
-				meta := metadata.NewEmailMetadata(accountID, newID)
-				meta.ReceivedAt = now.UTC().Format(time.RFC3339)
-				meta.Keywords[metadata.KeywordDraft] = true
-				// Apply requested keywords if provided.
-				if kw, ok := createMap["keywords"].(map[string]interface{}); ok {
-					if patched, ok2, _ := ApplyKeywordPatch(meta, map[string]interface{}{"keywords": kw}); ok2 {
-						meta = patched
-					}
-				}
-				if err := h.deps.Metadata.Save(ctx, meta); err != nil {
-					if cleanupErr := h.deps.Storage.DeleteDraft(ctx, claims.SID, newID); cleanupErr != nil {
-						slog.Error("JMAP: failed to roll back draft after metadata error", "id", newID, "err", cleanupErr)
-					}
-					return fail(storeSetError(err, "Failed to save draft metadata"))
-				}
-				if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, newID, base.ChangeCreate); err != nil {
-					return nil, nil, err
-				}
-				result, err := json.Marshal(map[string]interface{}{
-					"id":         newID,
-					"threadId":   threadID,
-					"blobId":     blobID,
-					"receivedAt": meta.ReceivedAt,
-					"mailboxIds": map[string]bool{"drafts": true},
-				})
-				return result, nil, err
-			}
-
+			// RFC 8621 section 4.6 creates an Email in the requested mailbox.
+			// A draft is just an Email in the Drafts mailbox; storing it in a
+			// separate session-only namespace made it invisible to Email/get,
+			// Email/query and Thread/changes, which is not permitted.
 			newID, err := h.deps.Storage.AddEmail(ctx, accountID, targetMailbox, newEmail, rawBytes)
 			if err != nil {
 				return fail(storeSetError(err, "Failed to create email"))
@@ -388,11 +354,13 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 				return nil, nil, err
 			}
 			result, err := json.Marshal(map[string]interface{}{
-				"id":         newID,
-				"threadId":   threadID,
-				"blobId":     blobID,
-				"receivedAt": meta.ReceivedAt,
-				"mailboxIds": map[string]bool{targetMailbox: true},
+				"id":            newID,
+				"threadId":      threadID,
+				"blobId":        blobID,
+				"size":          len(rawBytes),
+				"hasAttachment": len(attachments) > 0,
+				"receivedAt":    meta.ReceivedAt,
+				"mailboxIds":    map[string]bool{targetMailbox: true},
 			})
 			return result, nil, err
 		},
