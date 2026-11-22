@@ -286,7 +286,19 @@ func toJMAPAddresses(addresses ...mailemail.Address) []model.EmailAddress {
 // toJMAPEmail builds the structural properties and then hydrates every
 // wire-derived property from one parse of the original message bytes.
 func (h *Handler) toJMAPEmail(ctx context.Context, listed *mailemail.ListedEmail) (*JMAPEmail, error) {
-	return h.toJMAPEmailFromRaw(ctx, listed, nil)
+	return h.toJMAPEmailWithThreadID(ctx, listed, "")
+}
+
+// toJMAPEmailWithThreadID uses the thread id from the account-wide grouping so
+// replies in one conversation expose the same immutable threadId. An empty
+// threadID is used only by callers without a stored message list.
+func (h *Handler) toJMAPEmailWithThreadID(ctx context.Context, listed *mailemail.ListedEmail, threadID string) (*JMAPEmail, error) {
+	email, err := h.toJMAPEmailFromRaw(ctx, listed, nil)
+	if err != nil || email == nil || threadID == "" {
+		return email, err
+	}
+	email.ThreadID = threadID
+	return email, nil
 }
 
 // toJMAPEmailFromRaw is toJMAPEmail with an explicit raw source. Email/parse
@@ -454,7 +466,48 @@ func addressesMatch(addresses []mailemail.Address, text string) bool {
 	return false
 }
 
-func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEmail, filter *EmailFilter) bool {
+// threadKeywordContext caches account-wide thread membership and per-email
+// metadata for the duration of one query.
+type threadKeywordContext struct {
+	threadIDs map[string]string
+	members   map[string][]string
+	metadata  map[string]metadata.EmailMetadata
+}
+
+func usesThreadKeywords(filter *EmailFilter) bool {
+	return filter != nil && (filter.AllInThreadHaveKeyword != nil ||
+		filter.SomeInThreadHaveKeyword != nil || filter.NoneInThreadHaveKeyword != nil)
+}
+
+func newThreadKeywordContext(ctx context.Context, deps *base.Deps, accountID string,
+	emails []*mailemail.ListedEmail) (*threadKeywordContext, error) {
+	groups, threadIDs, err := base.GroupThreads(ctx, deps, accountID, emails)
+	if err != nil {
+		return nil, err
+	}
+	context := &threadKeywordContext{
+		threadIDs: threadIDs,
+		members:   make(map[string][]string, len(groups)),
+		metadata:  make(map[string]metadata.EmailMetadata, len(emails)),
+	}
+	for _, group := range groups {
+		context.members[group.ID] = group.EmailIDs
+		for _, id := range group.EmailIDs {
+			context.metadata[id] = base.EmailMetadata(ctx, deps, accountID, id)
+		}
+	}
+	return context, nil
+}
+
+func (c *threadKeywordContext) hasKeyword(emailID, keyword string) bool {
+	if c == nil {
+		return false
+	}
+	return c.metadata[emailID].HasKeyword(keyword)
+}
+
+func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEmail, filter *EmailFilter,
+	threads *threadKeywordContext) bool {
 	if filter == nil {
 		return true
 	}
@@ -512,6 +565,42 @@ func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEma
 		}
 		if filter.NotKeyword != nil && keywords[*filter.NotKeyword] {
 			return false
+		}
+	}
+	if usesThreadKeywords(filter) {
+		if threads == nil {
+			return false
+		}
+		threadID := threads.threadIDs[listed.Ref.ID]
+		members := threads.members[threadID]
+		if len(members) == 0 {
+			return false
+		}
+		if filter.AllInThreadHaveKeyword != nil {
+			for _, id := range members {
+				if !threads.hasKeyword(id, *filter.AllInThreadHaveKeyword) {
+					return false
+				}
+			}
+		}
+		if filter.SomeInThreadHaveKeyword != nil {
+			found := false
+			for _, id := range members {
+				if threads.hasKeyword(id, *filter.SomeInThreadHaveKeyword) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		}
+		if filter.NoneInThreadHaveKeyword != nil {
+			for _, id := range members {
+				if threads.hasKeyword(id, *filter.NoneInThreadHaveKeyword) {
+					return false
+				}
+			}
 		}
 	}
 

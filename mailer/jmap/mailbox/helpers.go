@@ -7,6 +7,7 @@ import (
 
 	"github.com/kncept/Emissary/mailer/components/metadata"
 	"github.com/kncept/Emissary/mailer/components/storage"
+	mailemail "github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 )
 
@@ -79,14 +80,11 @@ func (h *Handler) countThreadsInMailbox(ctx context.Context, accountID, mailboxI
 	if err != nil {
 		return 0
 	}
-	threads := make(map[string]bool, len(emails))
-	for _, e := range emails {
-		if e == nil || e.Ref == nil || e.Email == nil {
-			continue
-		}
-		threads[base.ThreadID(e.Ref.ID, e.Email)] = true
+	_, threadIDs, err := base.GroupThreads(ctx, h.deps, accountID, emails)
+	if err != nil {
+		return 0
 	}
-	return len(threads)
+	return len(threadIDs)
 }
 
 // countUnreadThreadsInMailbox counts distinct threads with at least one
@@ -96,7 +94,7 @@ func (h *Handler) countUnreadThreadsInMailbox(ctx context.Context, accountID, ma
 	if err != nil {
 		return 0
 	}
-	threads := make(map[string]bool, len(emails))
+	unread := make([]*mailemail.ListedEmail, 0, len(emails))
 	for _, e := range emails {
 		if e == nil || e.Ref == nil || e.Email == nil {
 			continue
@@ -105,9 +103,13 @@ func (h *Handler) countUnreadThreadsInMailbox(ctx context.Context, accountID, ma
 		if meta.HasKeyword(metadata.KeywordSeen) || meta.HasKeyword(metadata.KeywordDraft) {
 			continue
 		}
-		threads[base.ThreadID(e.Ref.ID, e.Email)] = true
+		unread = append(unread, e)
 	}
-	return len(threads)
+	_, threadIDs, err := base.GroupThreads(ctx, h.deps, accountID, unread)
+	if err != nil {
+		return 0
+	}
+	return len(threadIDs)
 }
 
 // SyncState refreshes the Mailbox state from the configured mailbox store.

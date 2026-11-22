@@ -84,8 +84,9 @@ func (h *Handler) ThreadChanges(ctx context.Context, accountID string, args json
 	})
 }
 
-// getThreads derives threads from the stored messages. A real implementation
-// would group by the References/In-Reply-To headers.
+// getThreads derives threads from the stored messages using the shared
+// RFC 8621 section 3 grouping kernel. The tracker state remains the durable
+// source of Thread/changes; this only rebuilds the fingerprint snapshot.
 func (h *Handler) getThreads(ctx context.Context, accountID string) ([]Thread, error) {
 	emails, err := h.deps.Storage.ListEmails(ctx, accountID, "")
 	if err != nil {
@@ -93,16 +94,13 @@ func (h *Handler) getThreads(ctx context.Context, accountID string) ([]Thread, e
 		// would look like every thread was destroyed.
 		return nil, err
 	}
-
-	threads := make([]Thread, 0, len(emails))
-	for _, e := range emails {
-		if e == nil || e.Ref == nil || e.Email == nil {
-			continue
-		}
-		threads = append(threads, Thread{
-			ID:       base.ThreadID(e.Ref.ID, e.Email),
-			EmailIDs: []string{e.Ref.ID},
-		})
+	groups, _, err := base.GroupThreads(ctx, h.deps, accountID, emails)
+	if err != nil {
+		return nil, err
+	}
+	threads := make([]Thread, 0, len(groups))
+	for _, group := range groups {
+		threads = append(threads, Thread{ID: group.ID, EmailIDs: group.EmailIDs})
 	}
 	return threads, nil
 }

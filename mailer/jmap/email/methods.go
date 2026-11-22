@@ -57,6 +57,10 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 	if err != nil {
 		return nil, err
 	}
+	_, threadIDs, err := base.GroupThreads(ctx, h.deps, accountID, listed)
+	if err != nil {
+		return nil, err
+	}
 
 	return base.HandleGet(ctx, accountID, args, base.GetSpec[*mailemail.ListedEmail]{
 		Allowed:       allowed,
@@ -81,7 +85,7 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 		State: func(context.Context) (string, error) { return state, nil },
 		Render: func(ctx context.Context, email *mailemail.ListedEmail, properties *base.Selection, _ json.RawMessage) (json.RawMessage, error) {
 			// Hydration failure must never silently omit a requested email.
-			jmapEmail, err := h.toJMAPEmail(ctx, email)
+			jmapEmail, err := h.toJMAPEmailWithThreadID(ctx, email, threadIDs[email.Ref.ID])
 			if err != nil {
 				return nil, err
 			}
@@ -492,7 +496,7 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 // token always describes the same result set.
 func (h *Handler) queryEmailIDs(ctx context.Context, accountID string, filter *EmailFilter, ascending bool) ([]string, error) {
 	mailboxID := ""
-	if filter != nil && filter.InMailbox != nil {
+	if filter != nil && filter.InMailbox != nil && !usesThreadKeywords(filter) {
 		mailboxID = *filter.InMailbox
 	}
 	emails, err := h.deps.Storage.ListEmails(ctx, accountID, mailboxID)
@@ -500,9 +504,20 @@ func (h *Handler) queryEmailIDs(ctx context.Context, accountID string, filter *E
 		return nil, err
 	}
 
+	// Thread-scoped conditions need the account-wide grouping even when the
+	// query is restricted to one mailbox, so build it from every stored email
+	// and let matchesFilter apply inMailbox as usual.
+	var threads *threadKeywordContext
+	if usesThreadKeywords(filter) {
+		threads, err = newThreadKeywordContext(ctx, h.deps, accountID, emails)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	filtered := make([]*mailemail.ListedEmail, 0, len(emails))
 	for _, e := range emails {
-		if h.matchesFilter(ctx, e, filter) {
+		if h.matchesFilter(ctx, e, filter, threads) {
 			filtered = append(filtered, e)
 		}
 	}

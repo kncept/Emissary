@@ -47,9 +47,10 @@ type Handler struct{ deps *base.Deps }
 // New creates an Email method handler.
 func New(deps *base.Deps) *Handler { return &Handler{deps: deps} }
 
-// EmailFilter represents the supported JMAP Email filter conditions. Thread
-// keyword and header conditions are deliberately absent: parseEmailFilter
-// rejects them with unsupportedFilter instead of silently matching everything.
+// EmailFilter represents the JMAP Email filter conditions supported by the
+// account-wide query kernel. Compound and header conditions are added by the
+// shared filter parser in helpers.go; unknown conditions are rejected rather
+// than silently matching everything.
 type EmailFilter struct {
 	InMailbox          *string  `json:"inMailbox,omitempty"`
 	InMailboxOtherThan []string `json:"inMailboxOtherThan,omitempty"`
@@ -59,14 +60,19 @@ type EmailFilter struct {
 	MaxSize            *int     `json:"maxSize,omitempty"`
 	HasKeyword         *string  `json:"hasKeyword,omitempty"`
 	NotKeyword         *string  `json:"notKeyword,omitempty"`
-	HasAttachment      *bool    `json:"hasAttachment,omitempty"`
-	Text               *string  `json:"text,omitempty"`
-	From               *string  `json:"from,omitempty"`
-	To                 *string  `json:"to,omitempty"`
-	Cc                 *string  `json:"cc,omitempty"`
-	Bcc                *string  `json:"bcc,omitempty"`
-	Subject            *string  `json:"subject,omitempty"`
-	Body               *string  `json:"body,omitempty"`
+	// Thread-scoped keyword conditions are evaluated against the grouped
+	// Thread, not just the candidate email (RFC 8621 section 4.4.1).
+	AllInThreadHaveKeyword  *string `json:"allInThreadHaveKeyword,omitempty"`
+	SomeInThreadHaveKeyword *string `json:"someInThreadHaveKeyword,omitempty"`
+	NoneInThreadHaveKeyword *string `json:"noneInThreadHaveKeyword,omitempty"`
+	HasAttachment           *bool   `json:"hasAttachment,omitempty"`
+	Text                    *string `json:"text,omitempty"`
+	From                    *string `json:"from,omitempty"`
+	To                      *string `json:"to,omitempty"`
+	Cc                      *string `json:"cc,omitempty"`
+	Bcc                     *string `json:"bcc,omitempty"`
+	Subject                 *string `json:"subject,omitempty"`
+	Body                    *string `json:"body,omitempty"`
 
 	// before/after are parsed once by parseEmailFilter so a malformed date is
 	// an invalidArguments error rather than a silently skipped condition.
@@ -77,22 +83,25 @@ type EmailFilter struct {
 // supportedEmailFilterFields is the allow-list used to reject filter
 // conditions that are declared by RFC 8621 but not implemented here.
 var supportedEmailFilterFields = map[string]bool{
-	"inMailbox":          true,
-	"inMailboxOtherThan": true,
-	"before":             true,
-	"after":              true,
-	"minSize":            true,
-	"maxSize":            true,
-	"hasKeyword":         true,
-	"notKeyword":         true,
-	"hasAttachment":      true,
-	"text":               true,
-	"from":               true,
-	"to":                 true,
-	"cc":                 true,
-	"bcc":                true,
-	"subject":            true,
-	"body":               true,
+	"inMailbox":               true,
+	"inMailboxOtherThan":      true,
+	"before":                  true,
+	"after":                   true,
+	"minSize":                 true,
+	"maxSize":                 true,
+	"hasKeyword":              true,
+	"notKeyword":              true,
+	"allInThreadHaveKeyword":  true,
+	"someInThreadHaveKeyword": true,
+	"noneInThreadHaveKeyword": true,
+	"hasAttachment":           true,
+	"text":                    true,
+	"from":                    true,
+	"to":                      true,
+	"cc":                      true,
+	"bcc":                     true,
+	"subject":                 true,
+	"body":                    true,
 }
 
 // JMAPEmail represents a JMAP Email object. RFC 8621 section 1.1 requires a

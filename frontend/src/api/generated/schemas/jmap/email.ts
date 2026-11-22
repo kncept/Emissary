@@ -69,7 +69,7 @@ import type { UTCDate } from './uTCDate';
 export interface Email {
   id: Id;
   blobId?: Id;
-  /** Stable digest of the email identity and its RFC 5322 threading headers, falling back to canonical content when those headers are absent. Emissary currently groups one email per thread, so Thread/emailIds contains exactly one id; the thread id is distinct from the email id and does not change when the email moves. */
+  /** Stable digest of the account-local Thread. Emails sharing a normalized Message-ID in Message-ID/In-Reply-To/References and the same subject (after stripping reply/forward/list prefixes and white space) share a thread id, including transitive reply chains. Emails without matching headers keep a digest derived from their immutable email id and content. The id is distinct from the email id and does not change when the email moves. */
   threadId?: Id;
   mailboxIds?: IdBooleanMap;
   keywords?: StringBooleanMap;
