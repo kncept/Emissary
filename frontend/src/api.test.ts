@@ -167,34 +167,93 @@ describe('auth api', () => {
   });
 
   describe('getRawEmail', () => {
-    it('requests the raw message with the stored token and returns its text', async () => {
+    const session = {
+      username: 'alice@example.com',
+      apiUrl: '/api/jmap/',
+      downloadUrl: '/download/{accountId}/{blobId}/{name}?type={type}',
+      primaryAccounts: { 'urn:ietf:params:jmap:mail': 'acct_alice' },
+    };
+
+    it('resolves blobId via Email/get and downloads from the Session template', async () => {
       const { getRawEmail } = await importApi();
       window.localStorage.setItem(TOKEN_KEY, 'abc123');
-      const fetchMock = vi.fn(async () => createMockResponse('From: a@example.com\r\n\r\nBody\r\n', {
-        status: 200,
-        ok: true,
-      }));
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/.well-known/jmap') return createMockResponse(session);
+        if (url === '/api/jmap/') {
+          return createMockResponse({
+            methodResponses: [[
+              'Email/get',
+              { accountId: 'acct_alice', list: [{ id: 'e1', blobId: 'blob-1' }] },
+              'raw1',
+            ]],
+            sessionState: 's1',
+          });
+        }
+        if (url === '/download/acct_alice/blob-1/message.eml?type=message%2Frfc822') {
+          return createMockResponse('From: a@example.com\r\n\r\nBody\r\n');
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
       vi.stubGlobal('fetch', fetchMock);
 
-      const result = await getRawEmail('users/alice@example.com/inbox/e1.eml');
+      const result = await getRawEmail('e1');
 
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      const [url, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-      expect(url).toBe('/api/email/raw?id=users%2Falice%40example.com%2Finbox%2Fe1.eml');
-      const headers = options.headers as Headers;
-      expect(headers.get('Authorization')).toBe('Bearer abc123');
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+      expect(urls).toEqual([
+        '/.well-known/jmap',
+        '/api/jmap/',
+        '/download/acct_alice/blob-1/message.eml?type=message%2Frfc822',
+      ]);
+      for (const call of fetchMock.mock.calls) {
+        const headers = (call[1] as RequestInit).headers as Headers;
+        expect(headers.get('Authorization')).toBe('Bearer abc123');
+      }
       expect(result).toBe('From: a@example.com\r\n\r\nBody\r\n');
     });
 
-    it('surfaces the server error message', async () => {
+    it('reports a missing email without attempting a download', async () => {
       const { getRawEmail } = await importApi();
       window.localStorage.setItem(TOKEN_KEY, 'abc123');
-      vi.stubGlobal('fetch', vi.fn(async () => createMockResponse({ error: 'email not found' }, {
-        status: 404,
-        ok: false,
-      })));
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/.well-known/jmap') return createMockResponse(session);
+        if (url === '/api/jmap/') {
+          return createMockResponse({
+            methodResponses: [['Email/get', { accountId: 'acct_alice', list: [] }, 'raw1']],
+            sessionState: 's1',
+          });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal('fetch', fetchMock);
 
-      await expect(getRawEmail('missing.eml')).rejects.toThrow('email not found');
+      await expect(getRawEmail('missing')).rejects.toThrow('email not found');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('surfaces the blob download error message', async () => {
+      const { getRawEmail } = await importApi();
+      window.localStorage.setItem(TOKEN_KEY, 'abc123');
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/.well-known/jmap') return createMockResponse(session);
+        if (url === '/api/jmap/') {
+          return createMockResponse({
+            methodResponses: [[
+              'Email/get',
+              { accountId: 'acct_alice', list: [{ id: 'e1', blobId: 'blob-1' }] },
+              'raw1',
+            ]],
+            sessionState: 's1',
+          });
+        }
+        return createMockResponse({ detail: 'Blob not found' }, { status: 404, ok: false });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(getRawEmail('e1')).rejects.toThrow('Blob not found');
     });
   });
 
@@ -526,29 +585,48 @@ describe('auth api', () => {
           return options ? (options.headers as Headers).get('Authorization') : null;
         });
 
-    it('refreshes and retries a REST request with the new access token', async () => {
+    it('refreshes and retries a JMAP blob download with the new access token', async () => {
       const { getRawEmail } = await importApi();
       window.localStorage.setItem(TOKEN_KEY, 'old-token');
       window.localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-1');
-      let rawAttempt = 0;
+      let downloadAttempt = 0;
+      const downloadURL = '/download/acct_alice/blob-1/message.eml?type=message%2Frfc822';
       const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
         const url = String(input);
         if (url === '/api/auth/refresh') return createMockResponse(refreshedTokens);
-        if (url.startsWith('/api/email/raw')) {
-          rawAttempt += 1;
-          return rawAttempt === 1
-            ? createMockResponse({ error: 'unauthorized' }, { status: 401, ok: false })
+        if (url === '/.well-known/jmap') {
+          return createMockResponse({
+            ...jmapSession,
+            apiUrl: '/api/jmap/',
+            downloadUrl: '/download/{accountId}/{blobId}/{name}?type={type}',
+            primaryAccounts: { 'urn:ietf:params:jmap:mail': 'acct_alice' },
+          });
+        }
+        if (url === '/api/jmap/') {
+          return createMockResponse({
+            methodResponses: [[
+              'Email/get',
+              { accountId: 'acct_alice', list: [{ id: 'e1', blobId: 'blob-1' }] },
+              'raw1',
+            ]],
+            sessionState: 's1',
+          });
+        }
+        if (url === downloadURL) {
+          downloadAttempt += 1;
+          return downloadAttempt === 1
+            ? createMockResponse({ detail: 'unauthorized' }, { status: 401, ok: false })
             : createMockResponse('From: alice@example.com\r\n\r\nBody');
         }
         throw new Error(`Unexpected fetch: ${url}`);
       });
       vi.stubGlobal('fetch', fetchMock);
 
-      const result = await getRawEmail('e1.eml');
+      const result = await getRawEmail('e1');
 
       expect(result).toContain('Body');
       expect(fetchMock.mock.calls.filter((call) => String(call[0]) === '/api/auth/refresh')).toHaveLength(1);
-      expect(authHeadersFor(fetchMock, '/api/email/raw?id=e1.eml')).toEqual([
+      expect(authHeadersFor(fetchMock, downloadURL)).toEqual([
         'Bearer old-token',
         'Bearer new-token',
       ]);

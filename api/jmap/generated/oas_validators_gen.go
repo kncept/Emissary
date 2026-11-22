@@ -231,6 +231,14 @@ func (s *CoreCapability) Validate() error {
 	return nil
 }
 
+func (s *DownloadBinaryForbidden) Validate() error {
+	alias := (*ProblemDetails)(s)
+	if err := alias.Validate(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *DownloadBinaryNotFound) Validate() error {
 	alias := (*ProblemDetails)(s)
 	if err := alias.Validate(); err != nil {
@@ -247,14 +255,6 @@ func (s *DownloadBinaryUnauthorized) Validate() error {
 	return nil
 }
 
-func (s *EventSourceBadRequest) Validate() error {
-	alias := (*ProblemDetails)(s)
-	if err := alias.Validate(); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (s EventSourceCloseafter) Validate() error {
 	switch s {
 	case "state":
@@ -264,30 +264,6 @@ func (s EventSourceCloseafter) Validate() error {
 	default:
 		return errors.Errorf("invalid value: %v", s)
 	}
-}
-
-func (s *EventSourceForbidden) Validate() error {
-	alias := (*ProblemDetails)(s)
-	if err := alias.Validate(); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (s *EventSourceTooManyRequests) Validate() error {
-	alias := (*ProblemDetails)(s)
-	if err := alias.Validate(); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (s *EventSourceUnauthorized) Validate() error {
-	alias := (*ProblemDetails)(s)
-	if err := alias.Validate(); err != nil {
-		return err
-	}
-	return nil
 }
 
 func (s ID) Validate() error {
@@ -829,6 +805,14 @@ func (s UnsignedInt) Validate() error {
 }
 
 func (s *UploadBinaryBadRequest) Validate() error {
+	alias := (*ProblemDetails)(s)
+	if err := alias.Validate(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *UploadBinaryRequestEntityTooLarge) Validate() error {
 	alias := (*ProblemDetails)(s)
 	if err := alias.Validate(); err != nil {
 		return err

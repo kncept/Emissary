@@ -5,8 +5,8 @@ import { getEmail, getRawEmail, markRead, markFlagged, deleteEmail } from '../ap
 import type { Email } from '../types.ts';
 import ConfirmDialog from './ConfirmDialog.tsx';
 
-// Save the raw message as a .eml file using a temporary object URL. A normal
-// link cannot set the Authorization header required by the raw endpoint.
+// Save the raw message as a .eml file using a temporary object URL. The JMAP
+// downloadUrl requires an Authorization header, which a normal link cannot set.
 function downloadRawMime(raw: string, id: string): void {
   const basename = id.split('/').pop() || 'email.eml';
   const safeName = basename.replace(/[^A-Za-z0-9._-]/g, '_');

@@ -64,6 +64,6 @@ func (UnimplementedHandler) GetSession(ctx context.Context) (r GetSessionRes, _ 
 // echoed in the response `type` property.
 //
 // POST /upload/{accountId}
-func (UnimplementedHandler) UploadBinary(ctx context.Context, req UploadBinaryReq, params UploadBinaryParams) (r UploadBinaryRes, _ error) {
+func (UnimplementedHandler) UploadBinary(ctx context.Context, req *UploadBinaryReqWithContentType, params UploadBinaryParams) (r UploadBinaryRes, _ error) {
 	return r, ht.ErrNotImplemented
 }

@@ -47,7 +47,7 @@ type Handler interface {
 	// echoed in the response `type` property.
 	//
 	// POST /upload/{accountId}
-	UploadBinary(ctx context.Context, req UploadBinaryReq, params UploadBinaryParams) (UploadBinaryRes, error)
+	UploadBinary(ctx context.Context, req *UploadBinaryReqWithContentType, params UploadBinaryParams) (UploadBinaryRes, error)
 }
 
 // Server implements http server based on OpenAPI v3 specification and

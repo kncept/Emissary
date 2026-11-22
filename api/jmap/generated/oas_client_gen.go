@@ -68,7 +68,7 @@ type Invoker interface {
 	// echoed in the response `type` property.
 	//
 	// POST /upload/{accountId}
-	UploadBinary(ctx context.Context, request UploadBinaryReq, params UploadBinaryParams) (UploadBinaryRes, error)
+	UploadBinary(ctx context.Context, request *UploadBinaryReqWithContentType, params UploadBinaryParams) (UploadBinaryRes, error)
 }
 
 // Client implements OAS client.
@@ -178,21 +178,10 @@ func (c *Client) sendApiRequest(ctx context.Context, request *JmapRequest) (res 
 		type bitset = [1]uint8
 		var satisfied bitset
 		{
-			stage = "Security:BasicAuth"
-			switch err := c.securityBasicAuth(ctx, ApiRequestOperation, r); {
-			case err == nil: // if NO error
-				satisfied[0] |= 1 << 0
-			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
-				// Skip this security.
-			default:
-				return res, errors.Wrap(err, "security \"BasicAuth\"")
-			}
-		}
-		{
 			stage = "Security:BearerAuth"
 			switch err := c.securityBearerAuth(ctx, ApiRequestOperation, r); {
 			case err == nil: // if NO error
-				satisfied[0] |= 1 << 1
+				satisfied[0] |= 1 << 0
 			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
 				// Skip this security.
 			default:
@@ -204,7 +193,6 @@ func (c *Client) sendApiRequest(ctx context.Context, request *JmapRequest) (res 
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
-				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -388,21 +376,10 @@ func (c *Client) sendDownloadBinary(ctx context.Context, params DownloadBinaryPa
 		type bitset = [1]uint8
 		var satisfied bitset
 		{
-			stage = "Security:BasicAuth"
-			switch err := c.securityBasicAuth(ctx, DownloadBinaryOperation, r); {
-			case err == nil: // if NO error
-				satisfied[0] |= 1 << 0
-			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
-				// Skip this security.
-			default:
-				return res, errors.Wrap(err, "security \"BasicAuth\"")
-			}
-		}
-		{
 			stage = "Security:BearerAuth"
 			switch err := c.securityBearerAuth(ctx, DownloadBinaryOperation, r); {
 			case err == nil: // if NO error
-				satisfied[0] |= 1 << 1
+				satisfied[0] |= 1 << 0
 			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
 				// Skip this security.
 			default:
@@ -414,7 +391,6 @@ func (c *Client) sendDownloadBinary(ctx context.Context, params DownloadBinaryPa
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
-				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -609,21 +585,10 @@ func (c *Client) sendEventSource(ctx context.Context, params EventSourceParams) 
 		type bitset = [1]uint8
 		var satisfied bitset
 		{
-			stage = "Security:BasicAuth"
-			switch err := c.securityBasicAuth(ctx, EventSourceOperation, r); {
-			case err == nil: // if NO error
-				satisfied[0] |= 1 << 0
-			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
-				// Skip this security.
-			default:
-				return res, errors.Wrap(err, "security \"BasicAuth\"")
-			}
-		}
-		{
 			stage = "Security:BearerAuth"
 			switch err := c.securityBearerAuth(ctx, EventSourceOperation, r); {
 			case err == nil: // if NO error
-				satisfied[0] |= 1 << 1
+				satisfied[0] |= 1 << 0
 			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
 				// Skip this security.
 			default:
@@ -635,7 +600,6 @@ func (c *Client) sendEventSource(ctx context.Context, params EventSourceParams) 
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
-				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -735,21 +699,10 @@ func (c *Client) sendGetSession(ctx context.Context) (res GetSessionRes, err err
 		type bitset = [1]uint8
 		var satisfied bitset
 		{
-			stage = "Security:BasicAuth"
-			switch err := c.securityBasicAuth(ctx, GetSessionOperation, r); {
-			case err == nil: // if NO error
-				satisfied[0] |= 1 << 0
-			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
-				// Skip this security.
-			default:
-				return res, errors.Wrap(err, "security \"BasicAuth\"")
-			}
-		}
-		{
 			stage = "Security:BearerAuth"
 			switch err := c.securityBearerAuth(ctx, GetSessionOperation, r); {
 			case err == nil: // if NO error
-				satisfied[0] |= 1 << 1
+				satisfied[0] |= 1 << 0
 			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
 				// Skip this security.
 			default:
@@ -761,7 +714,6 @@ func (c *Client) sendGetSession(ctx context.Context) (res GetSessionRes, err err
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
-				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -805,12 +757,12 @@ func (c *Client) sendGetSession(ctx context.Context) (res GetSessionRes, err err
 // echoed in the response `type` property.
 //
 // POST /upload/{accountId}
-func (c *Client) UploadBinary(ctx context.Context, request UploadBinaryReq, params UploadBinaryParams) (UploadBinaryRes, error) {
+func (c *Client) UploadBinary(ctx context.Context, request *UploadBinaryReqWithContentType, params UploadBinaryParams) (UploadBinaryRes, error) {
 	res, err := c.sendUploadBinary(ctx, request, params)
 	return res, err
 }
 
-func (c *Client) sendUploadBinary(ctx context.Context, request UploadBinaryReq, params UploadBinaryParams) (res UploadBinaryRes, err error) {
+func (c *Client) sendUploadBinary(ctx context.Context, request *UploadBinaryReqWithContentType, params UploadBinaryParams) (res UploadBinaryRes, err error) {
 	otelAttrs := []attribute.KeyValue{
 		otelogen.OperationID("uploadBinary"),
 		semconv.HTTPRequestMethodKey.String("POST"),
@@ -885,21 +837,10 @@ func (c *Client) sendUploadBinary(ctx context.Context, request UploadBinaryReq, 
 		type bitset = [1]uint8
 		var satisfied bitset
 		{
-			stage = "Security:BasicAuth"
-			switch err := c.securityBasicAuth(ctx, UploadBinaryOperation, r); {
-			case err == nil: // if NO error
-				satisfied[0] |= 1 << 0
-			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
-				// Skip this security.
-			default:
-				return res, errors.Wrap(err, "security \"BasicAuth\"")
-			}
-		}
-		{
 			stage = "Security:BearerAuth"
 			switch err := c.securityBearerAuth(ctx, UploadBinaryOperation, r); {
 			case err == nil: // if NO error
-				satisfied[0] |= 1 << 1
+				satisfied[0] |= 1 << 0
 			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
 				// Skip this security.
 			default:
@@ -911,7 +852,6 @@ func (c *Client) sendUploadBinary(ctx context.Context, request UploadBinaryReq, 
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
-				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {

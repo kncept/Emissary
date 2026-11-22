@@ -62,7 +62,6 @@ servers:
     host:
       default: example.com
 security:
-- basicAuth: []
 - bearerAuth: []
 tags:
 - name: Session
@@ -108,7 +107,7 @@ paths:
         '401':
           description: Authentication required
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
   /eventsource:
@@ -174,27 +173,27 @@ paths:
         '400':
           description: Invalid types, closeafter or ping argument
           content:
-            application/json:
+            text/plain:
               schema:
-                $ref: '#/components/schemas/ProblemDetails'
+                type: string
         '401':
           description: Authentication required
           content:
-            application/json:
+            text/plain:
               schema:
-                $ref: '#/components/schemas/ProblemDetails'
+                type: string
         '403':
           description: Account not accessible
           content:
-            application/json:
+            text/plain:
               schema:
-                $ref: '#/components/schemas/ProblemDetails'
+                type: string
         '429':
           description: Too many concurrent connections
           content:
-            application/json:
+            text/plain:
               schema:
-                $ref: '#/components/schemas/ProblemDetails'
+                type: string
   /api/jmap/:
     post:
       tags:
@@ -260,9 +259,9 @@ paths:
           $ref: '#/components/schemas/Id'
       requestBody:
         required: true
-        description: Raw file contents. The Content-Type is the file media type.
+        description: Raw file contents. The request Content-Type is the file media type and is echoed in the response.
         content:
-          application/octet-stream:
+          '*/*':
             schema:
               type: string
               format: binary
@@ -276,13 +275,19 @@ paths:
         '400':
           description: Upload failed
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
         '401':
           description: Authentication required
           content:
-            application/json:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '413':
+          description: Upload exceeded maxSizeUpload (RFC 7807 problem details)
+          content:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
         '429':
@@ -335,20 +340,23 @@ paths:
         '401':
           description: Authentication required
           content:
-            application/json:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Unreferenced blob is not owned by the caller
+          content:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
         '404':
           description: Blob not found
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
 components:
   securitySchemes:
-    basicAuth:
-      type: http
-      scheme: basic
     bearerAuth:
       type: http
       scheme: bearer
@@ -3029,6 +3037,11 @@ components:
             $ref: '#/components/schemas/SetError'
           nullable: true
       additionalProperties: true
+x-jmap-capabilities:
+- urn:ietf:params:jmap:core
+- urn:ietf:params:jmap:mail
+- urn:ietf:params:jmap:submission
+- urn:ietf:params:jmap:vacationresponse
 x-jmap-methods:
 - name: Core/echo
   capability: urn:ietf:params:jmap:core

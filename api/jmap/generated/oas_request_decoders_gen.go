@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-faster/errors"
 	"github.com/go-faster/jx"
+	ht "github.com/ogen-go/ogen/http"
 	"github.com/ogen-go/ogen/ogenerrors"
 	"github.com/ogen-go/ogen/validate"
 )
@@ -94,7 +95,7 @@ func (s *Server) decodeApiRequestRequest(r *http.Request) (
 }
 
 func (s *Server) decodeUploadBinaryRequest(r *http.Request) (
-	req UploadBinaryReq,
+	req *UploadBinaryReqWithContentType,
 	rawBody []byte,
 	close func() error,
 	rerr error,
@@ -119,10 +120,14 @@ func (s *Server) decodeUploadBinaryRequest(r *http.Request) (
 		return req, rawBody, close, errors.Wrap(err, "parse media type")
 	}
 	switch {
-	case ct == "application/octet-stream":
+	case ht.MatchContentType("*/*", ct):
 		reader := r.Body
 		request := UploadBinaryReq{Data: reader}
-		return request, rawBody, close, nil
+		wrapped := UploadBinaryReqWithContentType{
+			ContentType: ct,
+			Content:     request,
+		}
+		return &wrapped, rawBody, close, nil
 	default:
 		return req, rawBody, close, validate.InvalidContentType(ct)
 	}

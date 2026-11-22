@@ -110,6 +110,18 @@ var methodCapabilities = map[string]string{
 	MethodVacationResponseSet: CapabilityVacationResponse,
 }
 
+// AllCapabilities returns the capability URNs advertised by the Session. The
+// OpenAPI x-jmap-capabilities manifest is checked against this list so the
+// Session and the specification cannot drift apart.
+func AllCapabilities() []string {
+	return []string{
+		CapabilityCore,
+		CapabilityMail,
+		CapabilitySubmission,
+		CapabilityVacationResponse,
+	}
+}
+
 // MethodCapability returns the capability that must be opted into before the
 // named method may be dispatched. Unknown methods are left to the dispatcher's
 // unknownMethod path.

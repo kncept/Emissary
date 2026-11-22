@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"net/http"
 
+	"github.com/go-faster/errors"
 	"github.com/go-faster/jx"
 	ht "github.com/ogen-go/ogen/http"
 )
@@ -25,11 +26,17 @@ func encodeApiRequestRequest(
 }
 
 func encodeUploadBinaryRequest(
-	req UploadBinaryReq,
+	req *UploadBinaryReqWithContentType,
 	r *http.Request,
 ) error {
-	const contentType = "application/octet-stream"
-	body := req
-	ht.SetBody(r, body, contentType)
-	return nil
+	contentType := req.ContentType
+	if contentType != "" && !ht.MatchContentType("*/*", contentType) {
+		return errors.Errorf("%q does not match mask %q", contentType, "*/*")
+	}
+	{
+		req := req.Content
+		body := req
+		ht.SetBody(r, body, contentType)
+		return nil
+	}
 }

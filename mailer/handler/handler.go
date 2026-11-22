@@ -75,6 +75,14 @@ const (
 	// variables (RFC 8620 section 7.3).
 	jmapEventSourceURLTemplate = "/eventsource?types={types}&closeafter={closeafter}&ping={ping}"
 
+	// Registered JMAP routes. Tests compare this list with api/jmap.yaml so
+	// a route cannot drift out of the OpenAPI contract unnoticed.
+	jmapSessionRoute     = "GET /.well-known/jmap"
+	jmapEventSourceRoute = "GET /eventsource"
+	jmapAPIRoute         = "POST /api/jmap/"
+	jmapUploadRoute      = "POST /upload/{accountId}"
+	jmapDownloadRoute    = "GET /download/{accountId}/{blobId}/{name}"
+
 	// jmapUnreferencedBlobQuotaLimit names the separate quota applied to
 	// blobs that no JMAP object references yet (RFC 8620 section 6).
 	jmapUnreferencedBlobQuotaLimit = "unreferencedBlobQuota"
@@ -306,23 +314,19 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 		})
 	})
 
-	mux.Handle("GET /.well-known/jmap", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle(jmapSessionRoute, requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPSession(w, r, maxFileSize)
 	})))
-	mux.Handle("GET /eventsource", requireEventSourceAuth(authenticator, http.HandlerFunc(pushHub.ServeHTTP)))
-	mux.Handle("POST /api/jmap/", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle(jmapEventSourceRoute, requireEventSourceAuth(authenticator, http.HandlerFunc(pushHub.ServeHTTP)))
+	mux.Handle(jmapAPIRoute, requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPAPIRequest(w, r, dispatcher, maxFileSize, pushHub, requestSlots)
 	})))
-	mux.Handle("POST /upload/{accountId}", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle(jmapUploadRoute, requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPUpload(w, r, blobLifecycle, userManager, maxFileSize, uploadSlots)
 		flushPushState(r, pushHub)
 	})))
-	mux.Handle("GET /download/{accountId}/{blobId}/{name}", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle(jmapDownloadRoute, requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPDownload(w, r, emailStore, userManager)
-	})))
-
-	mux.Handle("GET /api/email/raw", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleRawEmail(w, r, emailStore)
 	})))
 
 	mux.Handle("GET /api/user/autocomplete", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -971,61 +975,6 @@ func jmapDownloadFilename(name string) string {
 		return "blob"
 	}
 	return name
-}
-
-// handleRawEmail serves the original RFC 5322 message for a single email. The
-// id is passed as a query parameter for compatibility with legacy delivered
-// object keys; current opaque ids are also safe as URL path segments.
-// accountId may be provided; when omitted it is derived from a legacy delivered
-// key or defaults to the authenticated user for opaque ids.
-func handleRawEmail(w http.ResponseWriter, r *http.Request, store storage.Storage) {
-	id := strings.TrimSpace(r.URL.Query().Get("id"))
-	if id == "" {
-		writeError(w, http.StatusBadRequest, "id is required")
-		return
-	}
-
-	claims := auth.ClaimsFromContext(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-
-	accountID := strings.TrimSpace(r.URL.Query().Get("accountId"))
-	if accountID == "" {
-		if derived, _, ok := email.MailboxFromID(id); ok && derived != "" {
-			accountID = derived
-		} else {
-			accountID = claims.Subject
-		}
-	}
-	if accountID == "" {
-		writeError(w, http.StatusBadRequest, "accountId is required")
-		return
-	}
-	if !claims.EmissaryUserManagement && !strings.EqualFold(accountID, claims.Subject) {
-		writeError(w, http.StatusForbidden, "insufficient permissions")
-		return
-	}
-
-	raw, err := store.GetEmailRaw(r.Context(), accountID, id)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "email not found")
-			return
-		}
-		logRequestError(r, "load raw email", err)
-		writeError(w, http.StatusInternalServerError, "failed to load raw email")
-		return
-	}
-
-	w.Header().Set("Content-Type", "message/rfc822")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(raw); err != nil {
-		logRequestWarn(r, "write raw email", err)
-	}
 }
 
 func handleLogout(authenticator *auth.Authenticator, store storage.PushSubscriptionStore, pushHub *push.Hub) http.HandlerFunc {

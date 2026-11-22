@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -1403,91 +1402,73 @@ func TestJMAPAccountIdValidationAdmin(t *testing.T) {
 	}
 }
 
-func TestRawEmailEndpoint(t *testing.T) {
+// TestRawEmailViaJMAPBlobDownload verifies that raw RFC 5322 bytes are fetched
+// the JMAP way: Email/get yields an opaque blobId, then downloadUrl serves it.
+// The legacy /api/email/raw endpoint has been removed (RESOLVED-4).
+func TestRawEmailViaJMAPBlobDownload(t *testing.T) {
 	h, store, _ := newHandlerForTest(t, "secret")
-	const id = "users/alice@example.com/inbox/20261109T100000_ses-id.eml"
-	addEmail(store, id, "sender@example.com", "alice@example.com")
-	rawURL := "/api/email/raw?id=" + url.QueryEscape(id)
-
-	t.Run("requires authentication", func(t *testing.T) {
-		w := request(t, h, http.MethodGet, rawURL, "", "")
-		if w.Code != http.StatusUnauthorized {
-			t.Errorf("status = %d, want 401", w.Code)
-		}
-	})
-
-	t.Run("returns the raw message to the owning account", func(t *testing.T) {
-		_, token, _ := login(t, h, "alice@example.com", "")
-		w := request(t, h, http.MethodGet, rawURL, "", token)
-		if w.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
-		}
-		if got := w.Header().Get("Content-Type"); got != "message/rfc822" {
-			t.Errorf("Content-Type = %q, want message/rfc822", got)
-		}
-		body := w.Body.String()
-		for _, want := range []string{"From: sender@example.com", "To: alice@example.com", "Subject: subject " + id, "body " + id} {
-			if !strings.Contains(body, want) {
-				t.Errorf("raw body = %q, want it to contain %q", body, want)
-			}
-		}
-	})
-
-	t.Run("rejects another account", func(t *testing.T) {
-		_, token, _ := login(t, h, "bob@example.com", "")
-		w := request(t, h, http.MethodGet, rawURL, "", token)
-		if w.Code != http.StatusForbidden {
-			t.Errorf("status = %d, want 403 (body %s)", w.Code, w.Body.String())
-		}
-	})
-
-	t.Run("allows a user manager", func(t *testing.T) {
-		_, token, _ := login(t, h, "admin", "secret")
-		w := request(t, h, http.MethodGet, rawURL, "", token)
-		if w.Code != http.StatusOK {
-			t.Errorf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
-		}
-	})
-
-	t.Run("returns 404 for a missing message", func(t *testing.T) {
-		_, token, _ := login(t, h, "alice@example.com", "")
-		missing := "/api/email/raw?id=" + url.QueryEscape("users/alice@example.com/inbox/missing.eml")
-		w := request(t, h, http.MethodGet, missing, "", token)
-		if w.Code != http.StatusNotFound {
-			t.Errorf("status = %d, want 404 (body %s)", w.Code, w.Body.String())
-		}
-	})
-
-	t.Run("requires an id", func(t *testing.T) {
-		_, token, _ := login(t, h, "alice@example.com", "")
-		w := request(t, h, http.MethodGet, "/api/email/raw", "", token)
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("status = %d, want 400 (body %s)", w.Code, w.Body.String())
-		}
-	})
-}
-
-func TestRawEmailEndpointAcceptsOpaqueID(t *testing.T) {
-	h, store, _ := newHandlerForTest(t, "secret")
-	const raw = "From: sender@example.com\r\nTo: alice@example.com\r\nSubject: opaque raw\r\n\r\nbody"
+	const raw = "From: sender@example.com\r\nTo: alice@example.com\r\nSubject: raw via blob\r\n\r\nbody"
 	id, err := store.AddEmail(context.Background(), "alice@example.com", "inbox", &email.UserEmail{
 		From:    email.Address{Address: "sender@example.com"},
 		To:      []email.Address{{Address: "alice@example.com"}},
-		Subject: "opaque raw",
+		Subject: "raw via blob",
 	}, []byte(raw))
 	if err != nil {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
-	if strings.ContainsAny(id, "/+=") || strings.Contains(id, ".") {
+	// Delivery registers the wire bytes as a JMAP blob; the fixture must do
+	// the same so Email.blobId resolves through downloadUrl.
+	if _, err := storage.RegisterEmailBlobs(context.Background(), store, "alice@example.com", []byte(raw)); err != nil {
+		t.Fatalf("RegisterEmailBlobs() error = %v", err)
+	}
+	if strings.ContainsAny(id, "/+=") {
 		t.Fatalf("AddEmail() id = %q, want URL-safe opaque id", id)
 	}
+
 	_, token, _ := login(t, h, "alice@example.com", "")
-	w := request(t, h, http.MethodGet, "/api/email/raw?id="+url.QueryEscape(id), "", token)
+	resp := jmapRequest(t, h, token, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
+		{"Email/get", map[string]interface{}{
+			"ids":        []string{id},
+			"properties": []string{"id", "blobId"},
+		}, "get1"},
+	})
+
+	responses, _ := resp["methodResponses"].([]interface{})
+	if len(responses) != 1 {
+		t.Fatalf("methodResponses = %v, want one response", responses)
+	}
+	call, _ := responses[0].([]interface{})
+	if len(call) < 2 || call[0] != "Email/get" {
+		t.Fatalf("response = %v, want Email/get", responses[0])
+	}
+	args, _ := call[1].(map[string]interface{})
+	list, _ := args["list"].([]interface{})
+	if len(list) != 1 {
+		t.Fatalf("list = %v, want one email", list)
+	}
+	item, _ := list[0].(map[string]interface{})
+	blobID, _ := item["blobId"].(string)
+	accountID, _ := args["accountId"].(string)
+	if blobID == "" || accountID == "" {
+		t.Fatalf("Email/get response = %v, want blobId and accountId", args)
+	}
+
+	target := "/download/" + accountID + "/" + blobID + "/message.eml?type=message/rfc822"
+	w := request(t, h, http.MethodGet, target, "", token)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
 	}
+	if got := w.Header().Get("Content-Type"); !strings.HasPrefix(got, "message/rfc822") {
+		t.Errorf("Content-Type = %q, want message/rfc822", got)
+	}
 	if got := w.Body.String(); got != raw {
 		t.Errorf("raw body = %q, want %q", got, raw)
+	}
+
+	// The removed route must not be resurrected by accident.
+	legacy := request(t, h, http.MethodGet, "/api/email/raw?id="+id, "", token)
+	if legacy.Code != http.StatusNotFound {
+		t.Errorf("legacy raw endpoint status = %d, want 404", legacy.Code)
 	}
 }
 

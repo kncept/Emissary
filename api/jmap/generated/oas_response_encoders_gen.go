@@ -95,7 +95,7 @@ func encodeDownloadBinaryResponse(response DownloadBinaryRes, w http.ResponseWri
 		return nil
 
 	case *DownloadBinaryUnauthorized:
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(401)
 
 		e := new(jx.Encoder)
@@ -106,8 +106,20 @@ func encodeDownloadBinaryResponse(response DownloadBinaryRes, w http.ResponseWri
 
 		return nil
 
+	case *DownloadBinaryForbidden:
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(403)
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
 	case *DownloadBinaryNotFound:
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(404)
 
 		e := new(jx.Encoder)
@@ -140,48 +152,56 @@ func encodeEventSourceResponse(response EventSourceRes, w http.ResponseWriter, s
 		return nil
 
 	case *EventSourceBadRequest:
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(400)
 
-		e := new(jx.Encoder)
-		response.Encode(e)
-		if _, err := e.WriteTo(w); err != nil {
+		writer := w
+		if closer, ok := response.Data.(io.Closer); ok {
+			defer closer.Close()
+		}
+		if _, err := io.Copy(writer, response); err != nil {
 			return errors.Wrap(err, "write")
 		}
 
 		return nil
 
 	case *EventSourceUnauthorized:
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(401)
 
-		e := new(jx.Encoder)
-		response.Encode(e)
-		if _, err := e.WriteTo(w); err != nil {
+		writer := w
+		if closer, ok := response.Data.(io.Closer); ok {
+			defer closer.Close()
+		}
+		if _, err := io.Copy(writer, response); err != nil {
 			return errors.Wrap(err, "write")
 		}
 
 		return nil
 
 	case *EventSourceForbidden:
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(403)
 
-		e := new(jx.Encoder)
-		response.Encode(e)
-		if _, err := e.WriteTo(w); err != nil {
+		writer := w
+		if closer, ok := response.Data.(io.Closer); ok {
+			defer closer.Close()
+		}
+		if _, err := io.Copy(writer, response); err != nil {
 			return errors.Wrap(err, "write")
 		}
 
 		return nil
 
 	case *EventSourceTooManyRequests:
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(429)
 
-		e := new(jx.Encoder)
-		response.Encode(e)
-		if _, err := e.WriteTo(w); err != nil {
+		writer := w
+		if closer, ok := response.Data.(io.Closer); ok {
+			defer closer.Close()
+		}
+		if _, err := io.Copy(writer, response); err != nil {
 			return errors.Wrap(err, "write")
 		}
 
@@ -207,7 +227,7 @@ func encodeGetSessionResponse(response GetSessionRes, w http.ResponseWriter, spa
 		return nil
 
 	case *ProblemDetails:
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(401)
 
 		e := new(jx.Encoder)
@@ -238,7 +258,7 @@ func encodeUploadBinaryResponse(response UploadBinaryRes, w http.ResponseWriter,
 		return nil
 
 	case *UploadBinaryBadRequest:
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(400)
 
 		e := new(jx.Encoder)
@@ -250,8 +270,20 @@ func encodeUploadBinaryResponse(response UploadBinaryRes, w http.ResponseWriter,
 		return nil
 
 	case *UploadBinaryUnauthorized:
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(401)
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *UploadBinaryRequestEntityTooLarge:
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(413)
 
 		e := new(jx.Encoder)
 		response.Encode(e)

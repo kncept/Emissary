@@ -139,22 +139,22 @@ export type eventSourceResponse200 = {
 }
 
 export type eventSourceResponse400 = {
-  data: ProblemDetails
+  data: string
   status: 400
 }
 
 export type eventSourceResponse401 = {
-  data: ProblemDetails
+  data: string
   status: 401
 }
 
 export type eventSourceResponse403 = {
-  data: ProblemDetails
+  data: string
   status: 403
 }
 
 export type eventSourceResponse429 = {
-  data: ProblemDetails
+  data: string
   status: 429
 }
 
@@ -204,10 +204,10 @@ export const eventSource = async (params?: EventSourceParams, options?: RequestI
   }
 )
 
-  const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
+
   const body = [204, 205, 304].includes(res.status) ? null : await res.text();
 
-  const data: eventSourceResponse['data'] = body ? (contentType.includes('json') ? JSON.parse(body) : body) : {}
+  const data: eventSourceResponse['data'] = body !== null ? body : ''
   return { data, status: res.status, headers: res.headers } as eventSourceResponse
 }
 
@@ -297,6 +297,11 @@ export type uploadBinaryResponse401 = {
   status: 401
 }
 
+export type uploadBinaryResponse413 = {
+  data: ProblemDetails
+  status: 413
+}
+
 export type uploadBinaryResponse429 = {
   data: ProblemDetails
   status: 429
@@ -305,7 +310,7 @@ export type uploadBinaryResponse429 = {
 export type uploadBinaryResponseSuccess = (uploadBinaryResponse200) & {
   headers: Headers;
 };
-export type uploadBinaryResponseError = (uploadBinaryResponse400 | uploadBinaryResponse401 | uploadBinaryResponse429) & {
+export type uploadBinaryResponseError = (uploadBinaryResponse400 | uploadBinaryResponse401 | uploadBinaryResponse413 | uploadBinaryResponse429) & {
   headers: Headers;
 };
 
@@ -331,7 +336,7 @@ export const uploadBinary = async (accountId: Id,
   {
     ...options,
     method: 'POST',
-    headers: getHeaders({ 'Content-Type': 'application/octet-stream' }, options?.headers),
+    headers: getHeaders({ 'Content-Type': '*/*' }, options?.headers),
     body: uploadBinaryBody
   }
 )
@@ -355,6 +360,11 @@ export type downloadBinaryResponse401 = {
   status: 401
 }
 
+export type downloadBinaryResponse403 = {
+  data: ProblemDetails
+  status: 403
+}
+
 export type downloadBinaryResponse404 = {
   data: ProblemDetails
   status: 404
@@ -363,7 +373,7 @@ export type downloadBinaryResponse404 = {
 export type downloadBinaryResponseSuccess = (downloadBinaryResponse200) & {
   headers: Headers;
 };
-export type downloadBinaryResponseError = (downloadBinaryResponse401 | downloadBinaryResponse404) & {
+export type downloadBinaryResponseError = (downloadBinaryResponse401 | downloadBinaryResponse403 | downloadBinaryResponse404) & {
   headers: Headers;
 };
 

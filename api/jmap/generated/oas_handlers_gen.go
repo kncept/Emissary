@@ -115,23 +115,6 @@ func (s *Server) handleApiRequestRequest(args [0]string, argsEscaped bool, w htt
 		type bitset = [1]uint8
 		var satisfied bitset
 		{
-			sctx, ok, err := s.securityBasicAuth(ctx, ApiRequestOperation, r)
-			if err != nil {
-				err = &ogenerrors.SecurityError{
-					OperationContext: opErrContext,
-					Security:         "BasicAuth",
-					Err:              err,
-				}
-				defer recordError("Security:BasicAuth", err)
-				s.cfg.ErrorHandler(ctx, w, r, err)
-				return
-			}
-			if ok {
-				satisfied[0] |= 1 << 0
-				ctx = sctx
-			}
-		}
-		{
 			sctx, ok, err := s.securityBearerAuth(ctx, ApiRequestOperation, r)
 			if err != nil {
 				err = &ogenerrors.SecurityError{
@@ -144,7 +127,7 @@ func (s *Server) handleApiRequestRequest(args [0]string, argsEscaped bool, w htt
 				return
 			}
 			if ok {
-				satisfied[0] |= 1 << 1
+				satisfied[0] |= 1 << 0
 				ctx = sctx
 			}
 		}
@@ -153,7 +136,6 @@ func (s *Server) handleApiRequestRequest(args [0]string, argsEscaped bool, w htt
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
-				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -322,23 +304,6 @@ func (s *Server) handleDownloadBinaryRequest(args [3]string, argsEscaped bool, w
 		type bitset = [1]uint8
 		var satisfied bitset
 		{
-			sctx, ok, err := s.securityBasicAuth(ctx, DownloadBinaryOperation, r)
-			if err != nil {
-				err = &ogenerrors.SecurityError{
-					OperationContext: opErrContext,
-					Security:         "BasicAuth",
-					Err:              err,
-				}
-				defer recordError("Security:BasicAuth", err)
-				s.cfg.ErrorHandler(ctx, w, r, err)
-				return
-			}
-			if ok {
-				satisfied[0] |= 1 << 0
-				ctx = sctx
-			}
-		}
-		{
 			sctx, ok, err := s.securityBearerAuth(ctx, DownloadBinaryOperation, r)
 			if err != nil {
 				err = &ogenerrors.SecurityError{
@@ -351,7 +316,7 @@ func (s *Server) handleDownloadBinaryRequest(args [3]string, argsEscaped bool, w
 				return
 			}
 			if ok {
-				satisfied[0] |= 1 << 1
+				satisfied[0] |= 1 << 0
 				ctx = sctx
 			}
 		}
@@ -360,7 +325,6 @@ func (s *Server) handleDownloadBinaryRequest(args [3]string, argsEscaped bool, w
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
-				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -543,23 +507,6 @@ func (s *Server) handleEventSourceRequest(args [0]string, argsEscaped bool, w ht
 		type bitset = [1]uint8
 		var satisfied bitset
 		{
-			sctx, ok, err := s.securityBasicAuth(ctx, EventSourceOperation, r)
-			if err != nil {
-				err = &ogenerrors.SecurityError{
-					OperationContext: opErrContext,
-					Security:         "BasicAuth",
-					Err:              err,
-				}
-				defer recordError("Security:BasicAuth", err)
-				s.cfg.ErrorHandler(ctx, w, r, err)
-				return
-			}
-			if ok {
-				satisfied[0] |= 1 << 0
-				ctx = sctx
-			}
-		}
-		{
 			sctx, ok, err := s.securityBearerAuth(ctx, EventSourceOperation, r)
 			if err != nil {
 				err = &ogenerrors.SecurityError{
@@ -572,7 +519,7 @@ func (s *Server) handleEventSourceRequest(args [0]string, argsEscaped bool, w ht
 				return
 			}
 			if ok {
-				satisfied[0] |= 1 << 1
+				satisfied[0] |= 1 << 0
 				ctx = sctx
 			}
 		}
@@ -581,7 +528,6 @@ func (s *Server) handleEventSourceRequest(args [0]string, argsEscaped bool, w ht
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
-				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -765,23 +711,6 @@ func (s *Server) handleGetSessionRequest(args [0]string, argsEscaped bool, w htt
 		type bitset = [1]uint8
 		var satisfied bitset
 		{
-			sctx, ok, err := s.securityBasicAuth(ctx, GetSessionOperation, r)
-			if err != nil {
-				err = &ogenerrors.SecurityError{
-					OperationContext: opErrContext,
-					Security:         "BasicAuth",
-					Err:              err,
-				}
-				defer recordError("Security:BasicAuth", err)
-				s.cfg.ErrorHandler(ctx, w, r, err)
-				return
-			}
-			if ok {
-				satisfied[0] |= 1 << 0
-				ctx = sctx
-			}
-		}
-		{
 			sctx, ok, err := s.securityBearerAuth(ctx, GetSessionOperation, r)
 			if err != nil {
 				err = &ogenerrors.SecurityError{
@@ -794,7 +723,7 @@ func (s *Server) handleGetSessionRequest(args [0]string, argsEscaped bool, w htt
 				return
 			}
 			if ok {
-				satisfied[0] |= 1 << 1
+				satisfied[0] |= 1 << 0
 				ctx = sctx
 			}
 		}
@@ -803,7 +732,6 @@ func (s *Server) handleGetSessionRequest(args [0]string, argsEscaped bool, w htt
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
-				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -956,23 +884,6 @@ func (s *Server) handleUploadBinaryRequest(args [1]string, argsEscaped bool, w h
 		type bitset = [1]uint8
 		var satisfied bitset
 		{
-			sctx, ok, err := s.securityBasicAuth(ctx, UploadBinaryOperation, r)
-			if err != nil {
-				err = &ogenerrors.SecurityError{
-					OperationContext: opErrContext,
-					Security:         "BasicAuth",
-					Err:              err,
-				}
-				defer recordError("Security:BasicAuth", err)
-				s.cfg.ErrorHandler(ctx, w, r, err)
-				return
-			}
-			if ok {
-				satisfied[0] |= 1 << 0
-				ctx = sctx
-			}
-		}
-		{
 			sctx, ok, err := s.securityBearerAuth(ctx, UploadBinaryOperation, r)
 			if err != nil {
 				err = &ogenerrors.SecurityError{
@@ -985,7 +896,7 @@ func (s *Server) handleUploadBinaryRequest(args [1]string, argsEscaped bool, w h
 				return
 			}
 			if ok {
-				satisfied[0] |= 1 << 1
+				satisfied[0] |= 1 << 0
 				ctx = sctx
 			}
 		}
@@ -994,7 +905,6 @@ func (s *Server) handleUploadBinaryRequest(args [1]string, argsEscaped bool, w h
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
-				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -1061,7 +971,7 @@ func (s *Server) handleUploadBinaryRequest(args [1]string, argsEscaped bool, w h
 		}
 
 		type (
-			Request  = UploadBinaryReq
+			Request  = *UploadBinaryReqWithContentType
 			Params   = UploadBinaryParams
 			Response = UploadBinaryRes
 		)

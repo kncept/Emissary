@@ -85,17 +85,27 @@ async function getAccountId(session: Session): Promise<string> {
   return session.username;
 }
 
+// An administrator masquerading as another user targets that account for every
+// method call, regardless of the Session's personal primary account.
+async function resolveAccountId(session: Session): Promise<string> {
+  const masqueradeAs = window.localStorage.getItem(MASQUERADE_AS_KEY);
+  return masqueradeAs || await getAccountId(session);
+}
+
+// RFC 6570 level-1 substitution; all variables are simple string values.
+function expandURITemplate(template: string, values: Record<string, string>): string {
+  return template.replace(/\{([A-Za-z0-9_]+)\}/g, (_match, name: string) =>
+    encodeURIComponent(values[name] ?? '')
+  );
+}
+
 async function jmapRequest(
   using: string[],
   methodCalls: JmapMethodCall[]
 ): Promise<Map<string, JmapMethodResponse>> {
   const session = await getJmapSession();
-  
-  // Check for masquerade target - when admin is masquerading as another user,
-  // use the masquerade target as the accountId
-  const masqueradeAs = window.localStorage.getItem(MASQUERADE_AS_KEY);
-  const accountId = masqueradeAs || await getAccountId(session);
-  
+  const accountId = await resolveAccountId(session);
+
   const request = createJmapRequest(using, methodCalls);
   for (const call of request.methodCalls) {
     if (call[1] && typeof call[1] === 'object' && call[1] !== null) {
@@ -282,6 +292,50 @@ export async function getEmail(id: string): Promise<Email> {
   }
 
   return email;
+}
+
+/**
+ * Fetches the original RFC 5322 bytes the JMAP way: Email/get exposes the
+ * message as a blobId, and the Session's downloadUrl serves that blob.
+ */
+export async function getRawEmail(id: string): Promise<string> {
+  const responses = await jmapRequest(['urn:ietf:params:jmap:mail'], [
+    {
+      method: 'Email/get',
+      args: { ids: [id], properties: ['id', 'blobId'] },
+      id: 'raw1',
+    },
+  ]);
+
+  const getResponse = responses.get('raw1');
+  if (!getResponse || getResponse.method === 'error') {
+    throw new Error('Failed to load raw email MIME');
+  }
+  const list = getResponse.args.list as Array<Record<string, unknown>> | undefined;
+  const found = list?.find((item) => item.id === id);
+  const blobId = found?.blobId as string | undefined;
+  if (!blobId) {
+    throw new Error('email not found');
+  }
+
+  const session = await getJmapSession();
+  const accountId =
+    (getResponse.args.accountId as string | undefined) || await resolveAccountId(session);
+  const url = expandURITemplate(session.downloadUrl, {
+    accountId,
+    blobId,
+    name: 'message.eml',
+    type: 'message/rfc822',
+  });
+
+  const response = await authenticatedFetch(url);
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    const message = (data as { detail?: string; error?: string }).detail
+      || (data as { error?: string }).error;
+    throw new Error(message || 'Failed to load raw email MIME');
+  }
+  return response.text();
 }
 
 export async function markRead(id: string, read: boolean): Promise<void> {

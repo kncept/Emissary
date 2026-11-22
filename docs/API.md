@@ -103,7 +103,6 @@ not generated from `users.yaml`: it is served directly by the configured
 | `POST` | `/api/jmap/` | Bearer | JMAP batch API endpoint for all mail operations. |
 | `POST` | `/upload/{accountId}` | Bearer | Upload binary data (attachments). |
 | `GET` | `/download/{accountId}/{blobId}/{name}` | Bearer | Download binary data. |
-| `GET` | `/api/email/raw` | Bearer | Get the original RFC 5322 message for one email id. |
 
 \* Requires `EmissaryUserManagement` JWT claim and an Emissary-mastered user manager (`ddb`, `filesystem` or `s3`). A user cannot delete their own account (`403 Forbidden`).
 
@@ -214,18 +213,19 @@ point in the delivery pipeline.
 
 ### View/Download raw MIME
 
-`GET /api/email/raw?id=<email-id>` returns the original RFC 5322 bytes of a
-message (all headers, MIME parts and transfer encodings) with a
-`message/rfc822` content type. The JMAP `Email/get` representation is parsed
-and intentionally drops non-text parts, so it cannot be used to reconstruct
-the wire format. The id is passed as a query parameter for compatibility with
-legacy delivered object keys; current opaque ids are safe in either location.
+Raw MIME is fetched through JMAP, not a bespoke endpoint:
 
-The account that owns the message is derived from a legacy delivered object key
-or from the authenticated account for opaque ids. Users may only
-read raw messages from their own account; callers with `EmissaryUserManagement`
-may read any account, matching JMAP masquerade behavior. Missing messages
-return `404`, and malformed or unauthorized ids return `400`/`403`.
+1. `Email/get` with `properties: ["id", "blobId"]` returns the opaque `blobId`
+   of the complete RFC 5322 message.
+2. Fetch the Session's `downloadUrl` template, substituting `accountId`,
+   `blobId`, `name` and `type=message/rfc822`, to receive the exact stored
+   bytes with a `message/rfc822` content type.
+
+The `blobId` is an RFC 8620 `Id` (URL-safe), so it is safe in the download
+path. The account is the one returned by `Email/get`; normal users can only
+resolve messages in their own account, while `EmissaryUserManagement` callers
+may masquerade. Missing emails or blobs return `404`, unauthorized accounts
+return `403`.
 
 The web UI uses this endpoint for both the "View MIME" modal and the
 "Download" button.

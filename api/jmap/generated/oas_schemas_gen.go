@@ -170,42 +170,6 @@ type ApiRequestUnauthorized ProblemDetails
 
 func (*ApiRequestUnauthorized) apiRequestRes() {}
 
-type BasicAuth struct {
-	Username string
-	Password string
-	Roles    []string
-}
-
-// GetUsername returns the value of Username.
-func (s *BasicAuth) GetUsername() string {
-	return s.Username
-}
-
-// GetPassword returns the value of Password.
-func (s *BasicAuth) GetPassword() string {
-	return s.Password
-}
-
-// GetRoles returns the value of Roles.
-func (s *BasicAuth) GetRoles() []string {
-	return s.Roles
-}
-
-// SetUsername sets the value of Username.
-func (s *BasicAuth) SetUsername(val string) {
-	s.Username = val
-}
-
-// SetPassword sets the value of Password.
-func (s *BasicAuth) SetPassword(val string) {
-	s.Password = val
-}
-
-// SetRoles sets the value of Roles.
-func (s *BasicAuth) SetRoles(val []string) {
-	s.Roles = val
-}
-
 type BearerAuth struct {
 	Token string
 	Roles []string
@@ -345,6 +309,10 @@ func (s *CoreCapabilityAdditional) init() CoreCapabilityAdditional {
 	return m
 }
 
+type DownloadBinaryForbidden ProblemDetails
+
+func (*DownloadBinaryForbidden) downloadBinaryRes() {}
+
 type DownloadBinaryNotFound ProblemDetails
 
 func (*DownloadBinaryNotFound) downloadBinaryRes() {}
@@ -369,7 +337,19 @@ type DownloadBinaryUnauthorized ProblemDetails
 
 func (*DownloadBinaryUnauthorized) downloadBinaryRes() {}
 
-type EventSourceBadRequest ProblemDetails
+type EventSourceBadRequest struct {
+	Data io.Reader
+}
+
+// Read reads data from the Data reader.
+//
+// Kept to satisfy the io.Reader interface.
+func (s EventSourceBadRequest) Read(p []byte) (n int, err error) {
+	if s.Data == nil {
+		return 0, io.EOF
+	}
+	return s.Data.Read(p)
+}
 
 func (*EventSourceBadRequest) eventSourceRes() {}
 
@@ -414,7 +394,19 @@ func (s *EventSourceCloseafter) UnmarshalText(data []byte) error {
 	}
 }
 
-type EventSourceForbidden ProblemDetails
+type EventSourceForbidden struct {
+	Data io.Reader
+}
+
+// Read reads data from the Data reader.
+//
+// Kept to satisfy the io.Reader interface.
+func (s EventSourceForbidden) Read(p []byte) (n int, err error) {
+	if s.Data == nil {
+		return 0, io.EOF
+	}
+	return s.Data.Read(p)
+}
 
 func (*EventSourceForbidden) eventSourceRes() {}
 
@@ -434,11 +426,35 @@ func (s EventSourceOK) Read(p []byte) (n int, err error) {
 
 func (*EventSourceOK) eventSourceRes() {}
 
-type EventSourceTooManyRequests ProblemDetails
+type EventSourceTooManyRequests struct {
+	Data io.Reader
+}
+
+// Read reads data from the Data reader.
+//
+// Kept to satisfy the io.Reader interface.
+func (s EventSourceTooManyRequests) Read(p []byte) (n int, err error) {
+	if s.Data == nil {
+		return 0, io.EOF
+	}
+	return s.Data.Read(p)
+}
 
 func (*EventSourceTooManyRequests) eventSourceRes() {}
 
-type EventSourceUnauthorized ProblemDetails
+type EventSourceUnauthorized struct {
+	Data io.Reader
+}
+
+// Read reads data from the Data reader.
+//
+// Kept to satisfy the io.Reader interface.
+func (s EventSourceUnauthorized) Read(p []byte) (n int, err error) {
+	if s.Data == nil {
+		return 0, io.EOF
+	}
+	return s.Data.Read(p)
+}
 
 func (*EventSourceUnauthorized) eventSourceRes() {}
 
@@ -1684,6 +1700,36 @@ func (s UploadBinaryReq) Read(p []byte) (n int, err error) {
 	}
 	return s.Data.Read(p)
 }
+
+// UploadBinaryReqWithContentType wraps UploadBinaryReq with Content-Type.
+type UploadBinaryReqWithContentType struct {
+	ContentType string
+	Content     UploadBinaryReq
+}
+
+// GetContentType returns the value of ContentType.
+func (s *UploadBinaryReqWithContentType) GetContentType() string {
+	return s.ContentType
+}
+
+// GetContent returns the value of Content.
+func (s *UploadBinaryReqWithContentType) GetContent() UploadBinaryReq {
+	return s.Content
+}
+
+// SetContentType sets the value of ContentType.
+func (s *UploadBinaryReqWithContentType) SetContentType(val string) {
+	s.ContentType = val
+}
+
+// SetContent sets the value of Content.
+func (s *UploadBinaryReqWithContentType) SetContent(val UploadBinaryReq) {
+	s.Content = val
+}
+
+type UploadBinaryRequestEntityTooLarge ProblemDetails
+
+func (*UploadBinaryRequestEntityTooLarge) uploadBinaryRes() {}
 
 type UploadBinaryTooManyRequests ProblemDetails
 
