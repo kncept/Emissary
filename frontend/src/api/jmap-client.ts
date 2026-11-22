@@ -2,6 +2,7 @@ import type {
   JmapRequest,
   JmapResponse,
   Session,
+  Identity,
   Invocation,
   VacationResponse,
   VacationResponseUpdate,
@@ -431,6 +432,38 @@ export async function deleteEmail(id: string): Promise<void> {
   }
 }
 
+/**
+ * Resolves the Identity to send from through Identity/get rather than relying
+ * on a hardcoded id. The default identity is the one the server marks as
+ * non-deletable; older servers that omit mayDelete still return its id in the
+ * list. A missing or unusable identity is an error, never a silent fallback to
+ * a guessed id.
+ */
+async function discoverIdentityId(): Promise<string> {
+  const responses = await jmapRequest(['urn:ietf:params:jmap:mail'], [
+    {
+      method: 'Identity/get',
+      args: {},
+      id: 'identityGet',
+    },
+  ]);
+
+  const response = responses.get('identityGet');
+  if (!response || response.method === 'error') {
+    throw new Error('Failed to discover sending identities');
+  }
+  const list = response.args.list;
+  if (!Array.isArray(list)) {
+    throw new Error('Invalid Identity/get response');
+  }
+  const identities = list as Identity[];
+  const identity = identities.find((candidate) => candidate.mayDelete === false) ?? identities[0];
+  if (!identity?.id) {
+    throw new Error('No sending identity is available');
+  }
+  return identity.id;
+}
+
 export async function sendEmail(data: SendEmailRequest): Promise<{ success: boolean; message?: string }> {
   const createId = 'create1';
   const submissionId = 'submission1';
@@ -444,8 +477,8 @@ export async function sendEmail(data: SendEmailRequest): Promise<{ success: bool
   const cc = parseAddressList(data.cc || '');
   const bcc = parseAddressList(data.bcc || '');
 
-  // The server locks the From address to the authenticated account (or the
-  // masquerade target), so no From is supplied here.
+  // The server derives the From address from the selected Identity, so no
+  // From is supplied here.
   const createArgs: Record<string, unknown> = {
     mailboxIds: { drafts: true },
     keywords: { $draft: true },
@@ -490,8 +523,9 @@ export async function sendEmail(data: SendEmailRequest): Promise<{ success: bool
   // The envelope covers every recipient; Bcc appears only here, never in the
   // message headers. mailFrom is never sent - the server owns the sender.
   const envelopeRecipients = [...to, ...cc, ...bcc];
+  const identityId = await discoverIdentityId();
   const submission: Record<string, unknown> = {
-    identityId: 'primary',
+    identityId,
     emailId: `#${createId}`,
   };
   if (envelopeRecipients.length > 0) {

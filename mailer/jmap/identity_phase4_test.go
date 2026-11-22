@@ -127,23 +127,24 @@ func TestIdentityPhase4SetGetChanges(t *testing.T) {
 		t.Fatalf("after clear = %+v, want replyTo cleared", clearResp.List)
 	}
 
-	// Creation and destruction of the singleton are rejected.
+	// The default identity cannot be destroyed, but new identities can be
+	// created (RFC 8621 section 6.3).
 	rejectArgs := json.RawMessage(fmt.Sprintf(
-		`{"accountId":%q,"create":{"other":{}},"destroy":["primary"]}`,
+		`{"accountId":%q,"create":{"other":{"email":"other@example.com"}},"destroy":["primary"]}`,
 		accountID))
 	rejectResult, err := handler.IdentitySet(ctx, accountID, rejectArgs)
 	if err != nil {
-		t.Fatalf("IdentitySet(reject) error = %v", err)
+		t.Fatalf("IdentitySet(mixed) error = %v", err)
 	}
 	var rejectResp struct {
-		NotCreated   map[string]struct{ Type string } `json:"notCreated"`
+		Created      map[string]struct{ ID string }   `json:"created"`
 		NotDestroyed map[string]struct{ Type string } `json:"notDestroyed"`
 	}
 	if err := json.Unmarshal(rejectResult, &rejectResp); err != nil {
-		t.Fatalf("unmarshal reject response: %v", err)
+		t.Fatalf("unmarshal mixed response: %v", err)
 	}
-	if rejectResp.NotCreated["other"].Type != "alreadyExists" || rejectResp.NotDestroyed["primary"].Type != "forbidden" {
-		t.Fatalf("reject response = %+v", rejectResp)
+	if rejectResp.Created["other"].ID == "" || rejectResp.NotDestroyed["primary"].Type != "forbidden" {
+		t.Fatalf("mixed response = %+v", rejectResp)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/kncept/Emissary/mailer/components/storage"
 	mailemail "github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/identity"
+	jmapidentity "github.com/kncept/Emissary/mailer/jmap/identity"
 	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 )
 
@@ -156,11 +157,16 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 			notCreated[createID] = base.InvalidProperties(base.SetErrorNames(names), names...)
 			continue
 		}
-		// The profile exposes exactly one synthetic identity. A missing or
-		// unknown identityId cannot be honoured, so reject it rather than
-		// silently attributing the submission to "primary".
-		if submission.IdentityID != "primary" {
-			notCreated[createID] = base.NewSetError("invalidProperties", "the only valid identityId is \"primary\"")
+		// Resolve the Identity from the same durable collection Identity/get
+		// serves. A missing or unknown id is never silently attributed to
+		// "primary": each account may now own several verified identities.
+		fromIdentity, lookupErr := jmapidentity.Lookup(ctx, h.deps, accountID, submission.IdentityID)
+		if lookupErr != nil {
+			if errors.Is(lookupErr, jmapidentity.ErrIdentityNotFound) {
+				notCreated[createID] = base.NewSetError("notFound", "Identity not found")
+			} else {
+				notCreated[createID] = base.NewSetError("serverFail", "Could not resolve Identity")
+			}
 			continue
 		}
 
@@ -201,12 +207,12 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 			continue
 		}
 
-		// The From address is locked to the authenticated user: submissions
-		// send as the caller's own account, or as the target account when a
-		// User Manager (EmissaryUserManagement) masquerades as a different
-		// accountId. A client-supplied sender (the envelope mailFrom or the
-		// draft's From header) is ignored.
-		from, masquerading := base.LockedFrom(ctx, accountID)
+		// The From address comes from the selected Identity, never from the
+		// client-supplied envelope or draft header. Because identities are
+		// loaded for the target account, a masquerading caller is still limited
+		// to addresses owned by that account.
+		_, masquerading := base.LockedFrom(ctx, accountID)
+		from := fromIdentity.Email
 		if !strings.Contains(from, "@") {
 			// An account without an email address (for example the built-in
 			// "admin" account) cannot send mail.
@@ -220,10 +226,10 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 		}
 		from = parsed.Address
 
-		// A locked From still has to belong to one of the account's verified
-		// email identities. SES identities are the source of truth; rejecting
-		// here keeps a misconfigured account from quietly sending as an
-		// unverified address (or, with the log sender, disappearing entirely).
+		// The identity's From still has to belong to a verified email
+		// identity. SES identities are the source of truth; rejecting here
+		// keeps a misconfigured account from quietly sending as an unverified
+		// address (or, with the log sender, disappearing entirely).
 		if h.deps.FromValidator != nil {
 			if err := h.deps.FromValidator.Validate(ctx, from); err != nil {
 				if errors.Is(err, identity.ErrNotAllowed) {

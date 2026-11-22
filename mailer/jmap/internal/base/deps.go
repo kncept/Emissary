@@ -41,8 +41,9 @@ type Deps struct {
 	Changes       *Tracker
 	// Submissions is the durable RFC 8621 EmailSubmission record store.
 	Submissions *storage.SubmissionStore
-	// Identities is the durable singleton Identity override store.
-	Identities *storage.IdentityStore
+	// Identities is the durable multi-Identity collection. It also exposes the
+	// legacy singleton overrides for accounts that have not migrated yet.
+	Identities *storage.IdentityCollectionStore
 	// VacationStore holds the VacationResponse singleton. It is shared with the
 	// inbound receiver so a JMAP /set is visible to auto-reply processing even
 	// when the user manager has no durable store of its own.
@@ -64,7 +65,7 @@ func NewDeps(store storage.Storage, meta metadata.MetadataStore, userMgr userman
 		Sender:        mailSender,
 		Changes:       NewTracker(store),
 		Submissions:   storage.NewSubmissionStore(store),
-		Identities:    storage.NewIdentityStore(store),
+		Identities:    storage.NewIdentityCollectionStore(store),
 		VacationStore: usermanager.VacationStoreFor(userMgr),
 		HTTPClient:    &http.Client{Timeout: 10 * time.Second},
 	}

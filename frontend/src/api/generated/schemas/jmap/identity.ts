@@ -54,7 +54,9 @@ import type { Id } from './id';
 
 /**
  * An Identity object. Only `id` is always returned: a `/get` call may
- * request any subset of the other properties.
+ * request any subset of the other properties. An account may own several
+ * Identities; the default identity is immutable and has `mayDelete=false`.
+ * `email` is immutable and unique per account.
  */
 export interface Identity {
   id: Id;

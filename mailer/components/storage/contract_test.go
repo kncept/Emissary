@@ -244,6 +244,54 @@ func TestStorageContractIdentity(t *testing.T) {
 	}
 }
 
+// TestStorageContractIdentityCollection exercises the CAS-protected multi-
+// Identity collection on every backend. A stale revision must never overwrite
+// a concurrent create, update or destroy.
+func TestStorageContractIdentityCollection(t *testing.T) {
+	ctx := context.Background()
+	accountID := contractAccountID()
+
+	for _, backend := range contractBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			store := NewIdentityCollectionStore(backend.open(t))
+
+			entries, revision, err := store.Load(ctx, accountID)
+			if err != nil || len(entries) != 0 || revision != "" {
+				t.Fatalf("empty load = %+v / %q / %v", entries, revision, err)
+			}
+
+			entries["a"] = IdentityEntry{ID: "a", Email: "a@example.com", MayDelete: true}
+			revision, err = store.Save(ctx, accountID, entries, revision)
+			if err != nil || revision == "" {
+				t.Fatalf("Save() = %q / %v, want a revision", revision, err)
+			}
+
+			stale := map[string]IdentityEntry{"b": {ID: "b", Email: "b@example.com"}}
+			if _, err := store.Save(ctx, accountID, stale, ""); !errors.Is(err, ErrIdentityConflict) {
+				t.Fatalf("stale save error = %v, want ErrIdentityConflict", err)
+			}
+
+			loaded, loadedRevision, err := store.Load(ctx, accountID)
+			if err != nil || loadedRevision != revision {
+				t.Fatalf("Load() = %+v / %q / %v", loaded, loadedRevision, err)
+			}
+			if len(loaded) != 1 || loaded["a"].Email != "a@example.com" {
+				t.Fatalf("loaded = %+v, want identity a", loaded)
+			}
+
+			loaded["b"] = IdentityEntry{ID: "b", Email: "b@example.com", MayDelete: true}
+			delete(loaded, "a")
+			if _, err := store.Save(ctx, accountID, loaded, revision); err != nil {
+				t.Fatalf("conditional save error = %v", err)
+			}
+			loaded, _, err = store.Load(ctx, accountID)
+			if err != nil || len(loaded) != 1 || loaded["b"].Email != "b@example.com" {
+				t.Fatalf("after update = %+v / %v, want identity b only", loaded, err)
+			}
+		})
+	}
+}
+
 func TestStorageContractMailboxes(t *testing.T) {
 	ctx := context.Background()
 	accountID := contractAccountID()

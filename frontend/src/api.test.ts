@@ -394,8 +394,11 @@ describe('auth api', () => {
   });
 
   describe('sendEmail body formats', () => {
-    function stubJmapFetch() {
-      const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    function stubJmapFetch(
+      identityId = 'discovered-identity',
+      extraIdentities: { id: string; mayDelete?: boolean }[] = [],
+    ) {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         if (url === '/.well-known/jmap') {
           return createMockResponse({
@@ -405,6 +408,26 @@ describe('auth api', () => {
           });
         }
         if (url === '/api/') {
+          const request = JSON.parse(String(init?.body ?? '{}')) as {
+            methodCalls?: [string, Record<string, unknown>, string][];
+          };
+          if (request.methodCalls?.some((call) => call[0] === 'Identity/get')) {
+            return createMockResponse({
+              methodResponses: [[
+                'Identity/get',
+                {
+                  accountId: 'test@example.com',
+                  list: [
+                    ...extraIdentities,
+                    { id: identityId, email: 'test@example.com', mayDelete: false },
+                  ],
+                  notFound: [],
+                },
+                'identityGet',
+              ]],
+              sessionState: '1',
+            });
+          }
           return createMockResponse({
             methodResponses: [
               ['Email/set', { accountId: 'test@example.com', created: { create1: { id: 'draft1' } }, notCreated: {} }, 'emailCreate'],
@@ -420,18 +443,22 @@ describe('auth api', () => {
     }
 
     async function sentJmapBody(fetchMock: ReturnType<typeof stubJmapFetch>) {
-      const apiCall = fetchMock.mock.calls.find((call) => call[0] === '/api/');
+      const apiCall = fetchMock.mock.calls.find((call) => {
+        if (call[0] !== '/api/') return false;
+        const body = JSON.parse(String(call[1]?.body));
+        return body.methodCalls.some((methodCall: [string]) => methodCall[0] === 'Email/set');
+      });
       return JSON.parse(String(apiCall?.[1]?.body));
     }
 
     async function sentCreateArgs(fetchMock: ReturnType<typeof stubJmapFetch>) {
       const body = await sentJmapBody(fetchMock);
-      return body.methodCalls[0][1].create.create1;
+      return body.methodCalls.find((call: [string]) => call[0] === 'Email/set')[1].create.create1;
     }
 
     async function sentSubmissionArgs(fetchMock: ReturnType<typeof stubJmapFetch>) {
       const body = await sentJmapBody(fetchMock);
-      return body.methodCalls[1][1];
+      return body.methodCalls.find((call: [string]) => call[0] === 'EmailSubmission/set')[1];
     }
 
     beforeEach(() => {
@@ -505,6 +532,43 @@ describe('auth api', () => {
         { email: 'erin@example.com' },
       ]);
       expect(submission.create.submission1.envelope.mailFrom).toBeUndefined();
+    });
+
+    it('uses the identity discovered through Identity/get', async () => {
+      const { sendEmail } = await importApi();
+      const fetchMock = stubJmapFetch('work-identity');
+
+      await sendEmail({
+        to: 'bob@example.com',
+        subject: 'Hi',
+        body: 'Hello',
+        format: 'plain',
+      });
+
+      const identityCall = fetchMock.mock.calls.find((call) => {
+        if (call[0] !== '/api/') return false;
+        const body = JSON.parse(String(call[1]?.body));
+        return body.methodCalls.some((methodCall: [string]) => methodCall[0] === 'Identity/get');
+      });
+      expect(identityCall).toBeDefined();
+      const submission = await sentSubmissionArgs(fetchMock);
+      expect(submission.create.submission1.identityId).toBe('work-identity');
+      expect(submission.create.submission1.identityId).not.toBe('primary');
+    });
+
+    it('prefers the non-deletable identity when several are returned', async () => {
+      const { sendEmail } = await importApi();
+      const fetchMock = stubJmapFetch('main-identity', [{ id: 'alias-identity', mayDelete: true }]);
+
+      await sendEmail({
+        to: 'bob@example.com',
+        subject: 'Hi',
+        body: 'Hello',
+        format: 'plain',
+      });
+
+      const submission = await sentSubmissionArgs(fetchMock);
+      expect(submission.create.submission1.identityId).toBe('main-identity');
     });
 
     it('carries the reply/forward thread headers into the draft', async () => {
