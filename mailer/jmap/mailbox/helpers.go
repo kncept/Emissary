@@ -40,54 +40,10 @@ func (h *Handler) toJMAPMailbox(ctx context.Context, accountID string, mb storag
 		TotalEmails:   count,
 		UnreadEmails:  unread,
 		TotalThreads:  threads,
-		UnreadThreads: 0, // not tracked separately
-		MyRights:      rightsForRole(role),
+		UnreadThreads: h.countUnreadThreadsInMailbox(ctx, accountID, mb.ID),
+		MyRights:      base.RightsForRole(role),
 		IsSubscribed:  mb.IsSubscribed,
 	}
-}
-
-func rightsForRole(role string) MailboxRights {
-	// Defaults: readable, can hold messages and be used for organization.
-	r := MailboxRights{
-		MayReadItems:   true,
-		MayAddItems:    true,
-		MayRemoveItems: true,
-		MaySetSeen:     true,
-		MaySetKeywords: true,
-		MayCreateChild: false,
-		MayRename:      true,
-		MayDelete:      true,
-		MaySubmit:      true,
-	}
-	switch role {
-	case "inbox":
-		r.MayRename = false
-		r.MayDelete = false
-		r.MaySubmit = true
-	case "drafts":
-		r.MayRename = false
-		r.MayDelete = false
-		r.MaySubmit = true
-	case "sent":
-		r.MayRename = false
-		r.MayDelete = false
-		r.MayAddItems = true
-		r.MayRemoveItems = true
-		r.MaySubmit = false
-	case "trash":
-		r.MayRename = false
-		r.MayDelete = false
-		r.MaySubmit = false
-	case "archive":
-		r.MayRename = false
-		r.MayDelete = false
-		r.MaySubmit = true
-	case "junk":
-		r.MayRename = false
-		r.MayDelete = false
-		r.MaySubmit = false
-	}
-	return r
 }
 
 func (h *Handler) countEmailsInMailbox(ctx context.Context, accountID, mailboxID string) int {
@@ -119,8 +75,39 @@ func (h *Handler) CountUnreadInMailbox(ctx context.Context, accountID, mailboxID
 }
 
 func (h *Handler) countThreadsInMailbox(ctx context.Context, accountID, mailboxID string) int {
-	// For now, each email is its own thread
-	return h.countEmailsInMailbox(ctx, accountID, mailboxID)
+	emails, err := h.deps.Storage.ListEmails(ctx, accountID, mailboxID)
+	if err != nil {
+		return 0
+	}
+	threads := make(map[string]bool, len(emails))
+	for _, e := range emails {
+		if e == nil || e.Ref == nil || e.Email == nil {
+			continue
+		}
+		threads[base.ThreadID(e.Ref.ID, e.Email)] = true
+	}
+	return len(threads)
+}
+
+// countUnreadThreadsInMailbox counts distinct threads with at least one
+// unread, non-draft message, matching the Mailbox/unreadThreads definition.
+func (h *Handler) countUnreadThreadsInMailbox(ctx context.Context, accountID, mailboxID string) int {
+	emails, err := h.deps.Storage.ListEmails(ctx, accountID, mailboxID)
+	if err != nil {
+		return 0
+	}
+	threads := make(map[string]bool, len(emails))
+	for _, e := range emails {
+		if e == nil || e.Ref == nil || e.Email == nil {
+			continue
+		}
+		meta := base.EmailMetadata(ctx, h.deps, accountID, e.Ref.ID)
+		if meta.HasKeyword(metadata.KeywordSeen) || meta.HasKeyword(metadata.KeywordDraft) {
+			continue
+		}
+		threads[base.ThreadID(e.Ref.ID, e.Email)] = true
+	}
+	return len(threads)
 }
 
 // SyncState refreshes the Mailbox state from the configured mailbox store.

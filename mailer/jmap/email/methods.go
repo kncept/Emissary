@@ -56,7 +56,7 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 			if err != nil {
 				continue
 			}
-			jmapEmail.setBodyValues(listed.Email, fetchText, fetchHTML, req.MaxBodyValueBytes)
+			jmapEmail.setBodyValues(fetchText, fetchHTML, req.FetchAllBodyValues, req.MaxBodyValueBytes)
 			item, err := jmapEmail.filtered(properties, bodyProperties)
 			if err != nil {
 				return nil, err
@@ -76,7 +76,7 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 			if err != nil {
 				continue
 			}
-			jmapEmail.setBodyValues(e.Email, fetchText, fetchHTML, req.MaxBodyValueBytes)
+			jmapEmail.setBodyValues(fetchText, fetchHTML, req.FetchAllBodyValues, req.MaxBodyValueBytes)
 			item, err := jmapEmail.filtered(properties, bodyProperties)
 			if err != nil {
 				return nil, err
@@ -129,7 +129,9 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 	notDestroyed := make(map[string]interface{})
 
 	// Handle destroy. Verify the message belongs to the requested account so
-	// a crafted id cannot delete another user's mail.
+	// a crafted id cannot delete another user's mail. Metadata is removed
+	// first; if storage deletion then fails, the original metadata is restored
+	// so neither store is left half-updated.
 	for _, id := range req.Destroy {
 		listed, err := h.deps.Storage.GetEmail(ctx, accountID, id)
 		if err != nil || listed == nil || listed.Ref == nil || !strings.EqualFold(listed.Ref.AccountID, accountID) {
@@ -142,29 +144,33 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 		}
 		mb, mbErr := h.deps.Storage.GetMailbox(ctx, accountID, mbID)
 		if mbErr == nil {
-			if rights := rightsForRole(roleOf(mb)); !rights.MayRemoveItems {
+			if rights := base.RightsForRole(roleOf(mb)); !rights.MayRemoveItems {
 				notDestroyed[id] = setErr("forbidden", "May not remove items from this mailbox")
 				continue
 			}
 		}
+		originalMeta := base.EmailMetadata(ctx, h.deps, accountID, id)
 		if err := h.deps.Metadata.Delete(ctx, accountID, id); err != nil {
 			slog.Error("JMAP: failed to delete email metadata", "account", accountID, "id", id, "err", err)
 			notDestroyed[id] = setErr("serverFail", "Failed to delete email metadata")
 			continue
 		}
 		if err := h.deps.Storage.DeleteEmail(ctx, accountID, id); err != nil {
+			if restoreErr := h.deps.Metadata.Save(ctx, originalMeta); restoreErr != nil {
+				slog.Error("JMAP: failed to restore email metadata", "account", accountID, "id", id, "err", restoreErr)
+			}
 			if errors.Is(err, storage.ErrNotFound) {
 				notDestroyed[id] = setErr("notFound", "Email not found")
 			} else {
 				slog.Error("JMAP: failed to delete email", "account", accountID, "id", id, "err", err)
 				notDestroyed[id] = setErr("serverFail", "Failed to delete email")
 			}
-		} else {
-			if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, id, base.ChangeDestroy); err != nil {
-				return nil, err
-			}
-			destroyed = append(destroyed, id)
+			continue
 		}
+		if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, id, base.ChangeDestroy); err != nil {
+			return nil, err
+		}
+		destroyed = append(destroyed, id)
 	}
 
 	// Handle create
@@ -250,7 +256,7 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			notCreated[createID] = setErr("invalidProperties", "Target mailbox not found")
 			continue
 		}
-		if rights := rightsForRole(roleOf(mb)); !rights.MayAddItems {
+		if rights := base.RightsForRole(roleOf(mb)); !rights.MayAddItems {
 			notCreated[createID] = setErr("forbidden", "May not add items to this mailbox")
 			continue
 		}
@@ -275,6 +281,10 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			InReplyTo:  inReplyToList,
 			References: references,
 		}
+		// Render before storage so the same bytes back blobId, size and the
+		// MIME tree returned by a later Email/get.
+		raw := mailemail.RawFromUserEmail(newEmail)
+		blobID := storage.BlobID(raw)
 
 		// A session draft is stored separately (durable across lambda
 		// invocations) and is only valid in drafts mailbox context.
@@ -284,6 +294,7 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 				notCreated[createID] = setErr("serverFail", "Failed to create email")
 				continue
 			}
+			threadID := base.ThreadID(newID, newEmail)
 			meta := metadata.NewEmailMetadata(accountID, newID)
 			meta.ReceivedAt = now.UTC().Format(time.RFC3339)
 			meta.Keywords[metadata.KeywordDraft] = true
@@ -301,18 +312,25 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			}
 			created[createID] = map[string]interface{}{
 				"id":         newID,
-				"threadId":   newID,
-				"blobId":     newID,
+				"threadId":   threadID,
+				"blobId":     blobID,
 				"receivedAt": meta.ReceivedAt,
 				"mailboxIds": map[string]bool{"drafts": true},
 			}
 			continue
 		}
 
-		newID, err := h.deps.Storage.AddEmail(ctx, accountID, targetMailbox, newEmail, nil)
+		newID, err := h.deps.Storage.AddEmail(ctx, accountID, targetMailbox, newEmail, raw)
 		if err != nil {
 			notCreated[createID] = setErr("serverFail", "Failed to create email")
 			continue
+		}
+		threadID := base.ThreadID(newID, newEmail)
+		// Registration is best effort: the message is already durable and the
+		// blob id is content-derived, so a blob-store outage cannot create a
+		// second copy of the email.
+		if _, err := storage.RegisterEmailBlobs(ctx, h.deps.Storage, accountID, raw); err != nil {
+			slog.Warn("JMAP: failed to register created email blob", "account", accountID, "id", newID, "err", err)
 		}
 		meta := metadata.NewEmailMetadata(accountID, newID)
 		meta.ReceivedAt = now.UTC().Format(time.RFC3339)
@@ -330,14 +348,26 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 		}
 		created[createID] = map[string]interface{}{
 			"id":         newID,
-			"threadId":   newID,
-			"blobId":     newID,
+			"threadId":   threadID,
+			"blobId":     blobID,
 			"receivedAt": meta.ReceivedAt,
 			"mailboxIds": map[string]bool{targetMailbox: true},
 		}
 	}
 
-	// Handle update
+	// Handle update. All validation for a single Email happens before any
+	// mutation, so an invalid patch cannot leave an email half-updated (for
+	// example moved to another mailbox with unchanged keywords).
+	type emailUpdate struct {
+		id             string
+		currentMailbox string
+		targetMailbox  string
+		mailboxChanged bool
+		draft          bool
+		meta           metadata.EmailMetadata
+	}
+	plans := make([]emailUpdate, 0, len(req.Update))
+
 	for id, raw := range req.Update {
 		var updateMap map[string]interface{}
 		if err := json.Unmarshal(raw, &updateMap); err != nil {
@@ -357,13 +387,7 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 						notUpdated[id] = setErr(errType, "Invalid keyword update")
 						continue
 					}
-					if err := h.deps.Metadata.Save(ctx, patched); err != nil {
-						slog.Error("JMAP: failed to save draft metadata", "account", accountID, "id", id, "err", err)
-						notUpdated[id] = setErr("serverFail", "Failed to save email metadata")
-					} else {
-						_ = h.deps.Changes.Record(ctx, accountID, base.StateEmail, id, base.ChangeUpdate)
-						updated[id] = nil
-					}
+					plans = append(plans, emailUpdate{id: id, draft: true, meta: patched})
 					continue
 				}
 			}
@@ -426,6 +450,7 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			continue
 		}
 
+		// Validate the move and the keyword patch before mutating anything.
 		if mailboxChanged {
 			srcMb, srcErr := h.deps.Storage.GetMailbox(ctx, accountID, currentMailbox)
 			dstMb, dstErr := h.deps.Storage.GetMailbox(ctx, accountID, targetMailbox)
@@ -434,50 +459,57 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 				continue
 			}
 			if srcErr == nil {
-				if rights := rightsForRole(roleOf(srcMb)); !rights.MayRemoveItems {
+				if rights := base.RightsForRole(roleOf(srcMb)); !rights.MayRemoveItems {
 					notUpdated[id] = setErr("forbidden", "May not remove items from source mailbox")
 					continue
 				}
 			}
-			if rights := rightsForRole(roleOf(dstMb)); !rights.MayAddItems {
+			if rights := base.RightsForRole(roleOf(dstMb)); !rights.MayAddItems {
 				notUpdated[id] = setErr("forbidden", "May not add items to target mailbox")
-				continue
-			}
-			if _, err := h.deps.Storage.MoveEmail(ctx, accountID, id, targetMailbox); err != nil {
-				if errors.Is(err, storage.ErrNotFound) {
-					notUpdated[id] = setErr("notFound", "Email not found")
-				} else {
-					slog.Error("JMAP: failed to move email", "account", accountID, "id", id, "from", currentMailbox, "to", targetMailbox, "err", err)
-					notUpdated[id] = setErr("serverFail", "Failed to move email")
-				}
 				continue
 			}
 		}
 
-		// Keyword/metadata patch.
-		meta := base.EmailMetadata(ctx, h.deps, accountID, id)
-		patched, ok, errType := ApplyKeywordPatch(meta, updateMap)
+		patched, ok, errType := ApplyKeywordPatch(base.EmailMetadata(ctx, h.deps, accountID, id), updateMap)
 		if !ok {
-			// TODO: validate keywords before applying mailbox move. Currently we accept
-			// the move but reject the keyword update, leaving the email in the new mailbox
-			// with unchanged keywords. A stricter approach would validate first and reject
-			// the entire update if keywords are invalid. This simpler approach matches
-			// the current semantics where mailboxIds and keywords are independent patches.
 			notUpdated[id] = setErr(errType, "Invalid keyword update")
-			if mailboxChanged {
-				_ = h.deps.Changes.Record(ctx, accountID, base.StateEmail, id, base.ChangeUpdate)
-			}
 			continue
 		}
-		if err := h.deps.Metadata.Save(ctx, patched); err != nil {
-			slog.Error("JMAP: failed to save email metadata", "account", accountID, "id", id, "err", err)
-			notUpdated[id] = setErr("serverFail", "Failed to save email metadata")
-		} else {
-			if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, id, base.ChangeUpdate); err != nil {
-				return nil, err
+		plans = append(plans, emailUpdate{
+			id:             id,
+			currentMailbox: currentMailbox,
+			targetMailbox:  targetMailbox,
+			mailboxChanged: mailboxChanged,
+			meta:           patched,
+		})
+	}
+
+	// Apply validated updates one Email at a time. A failed metadata write is
+	// rolled back by moving the message back to its original mailbox.
+	for _, plan := range plans {
+		if plan.mailboxChanged {
+			if _, err := h.deps.Storage.MoveEmail(ctx, accountID, plan.id, plan.targetMailbox); err != nil {
+				if errors.Is(err, storage.ErrNotFound) {
+					notUpdated[plan.id] = setErr("notFound", "Email not found")
+				} else {
+					slog.Error("JMAP: failed to move email", "account", accountID, "id", plan.id, "from", plan.currentMailbox, "to", plan.targetMailbox, "err", err)
+					notUpdated[plan.id] = setErr("serverFail", "Failed to move email")
+				}
+				continue
 			}
-			updated[id] = nil
 		}
+		if err := h.deps.Metadata.Save(ctx, plan.meta); err != nil {
+			slog.Error("JMAP: failed to save email metadata", "account", accountID, "id", plan.id, "err", err)
+			if plan.mailboxChanged {
+				_, _ = h.deps.Storage.MoveEmail(ctx, accountID, plan.id, plan.currentMailbox)
+			}
+			notUpdated[plan.id] = setErr("serverFail", "Failed to save email metadata")
+			continue
+		}
+		if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, plan.id, base.ChangeUpdate); err != nil {
+			return nil, err
+		}
+		updated[plan.id] = nil
 	}
 
 	newState, err := h.syncEmailState(ctx, accountID)
@@ -507,46 +539,6 @@ func roleOf(mb storage.Mailbox) string {
 		return ""
 	}
 	return strings.ToLower(strings.TrimSpace(*mb.Role))
-}
-
-func rightsForRole(role string) struct {
-	MayReadItems   bool
-	MayAddItems    bool
-	MayRemoveItems bool
-	MaySetSeen     bool
-	MaySetKeywords bool
-	MayCreateChild bool
-	MayRename      bool
-	MayDelete      bool
-	MaySubmit      bool
-} {
-	// Mirror mailbox package semantics for enforcement in Email/set.
-	r := struct {
-		MayReadItems   bool
-		MayAddItems    bool
-		MayRemoveItems bool
-		MaySetSeen     bool
-		MaySetKeywords bool
-		MayCreateChild bool
-		MayRename      bool
-		MayDelete      bool
-		MaySubmit      bool
-	}{true, true, true, true, true, false, true, true, true}
-	switch strings.ToLower(role) {
-	case "inbox":
-		r.MayRename, r.MayDelete = false, false
-	case "drafts":
-		r.MayRename, r.MayDelete = false, false
-	case "sent":
-		r.MayRename, r.MayDelete, r.MaySubmit = false, false, false
-	case "trash":
-		r.MayRename, r.MayDelete, r.MaySubmit = false, false, false
-	case "archive":
-		r.MayRename, r.MayDelete = false, false
-	case "junk":
-		r.MayRename, r.MayDelete, r.MaySubmit = false, false, false
-	}
-	return r
 }
 
 func (h *Handler) EmailChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
@@ -627,7 +619,7 @@ func (h *Handler) queryEmailIDs(ctx context.Context, accountID string, filter *E
 
 	filtered := make([]*mailemail.ListedEmail, 0, len(emails))
 	for _, e := range emails {
-		if h.matchesFilter(e, filter) {
+		if h.matchesFilter(ctx, e, filter) {
 			filtered = append(filtered, e)
 		}
 	}

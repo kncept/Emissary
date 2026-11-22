@@ -407,6 +407,17 @@ func (r *Receiver) deliverToRecipient(ctx context.Context, recipient string, mes
 		return fmt.Errorf("failed to save metadata for %s: %w", id, err)
 	}
 
+	// Make the raw message downloadable through Email.blobId. Blob registration
+	// is best effort: delivery has already succeeded and a blob failure must not
+	// trigger a retry that would deliver the same message twice.
+	blobRaw := raw
+	if len(blobRaw) == 0 {
+		blobRaw = email.RawFromUserEmail(message)
+	}
+	if _, err := storage.RegisterEmailBlobs(ctx, r.cfg.Storage, recipient, blobRaw); err != nil {
+		slog.Warn("Receiver: could not register email blob", "id", id, "err", err)
+	}
+
 	// Push state is best effort: the message is already durable, so a failure
 	// here must not trigger a Lambda retry that would deliver it twice. Clients
 	// still discover the new mail through the normal Email state token.

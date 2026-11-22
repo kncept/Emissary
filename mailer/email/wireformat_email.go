@@ -575,6 +575,10 @@ func parseMessageIDList(value string) []string {
 	return result
 }
 
+// DecodeHeader decodes MIME encoded-words (RFC 2047). It is exported so JMAP
+// can expose parsed header forms without duplicating the MIME decoder.
+func DecodeHeader(value string) string { return decodeHeader(value) }
+
 // decodeHeader decodes MIME encoded-words (RFC 2047).
 func decodeHeader(value string) string {
 	if value == "" {
@@ -726,6 +730,10 @@ func (wfe *WireFormatEmail) walkBodyStructure(part *BodyPart, textParts, htmlPar
 		*htmlParts = append(*htmlParts, content)
 	}
 }
+
+// DecodeCharset converts the given bytes from the specified charset to UTF-8.
+// JMAP body values are always returned as UTF-8 strings.
+func DecodeCharset(data []byte, charset string) string { return decodeCharset(data, charset) }
 
 // decodeCharset converts the given bytes from the specified charset to UTF-8.
 func decodeCharset(data []byte, charset string) string {

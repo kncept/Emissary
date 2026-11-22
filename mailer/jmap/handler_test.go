@@ -546,14 +546,16 @@ func TestEmailSetStoresHTMLBodyAndEmailGetReturnsIt(t *testing.T) {
 		t.Fatalf("Email/get returned %d messages, want 1", len(getResp.List))
 	}
 	msg := getResp.List[0]
-	if len(msg.TextBody) != 1 || msg.TextBody[0].PartID == nil || *msg.TextBody[0].PartID != "text1" {
-		t.Fatalf("textBody = %+v, want part text1", msg.TextBody)
+	// Part ids come from the parsed MIME tree (root 1, children 1.1/1.2),
+	// not from client-supplied creation ids.
+	if len(msg.TextBody) != 1 || msg.TextBody[0].PartID == nil || *msg.TextBody[0].PartID != "1.1" {
+		t.Fatalf("textBody = %+v, want part 1.1", msg.TextBody)
 	}
-	if len(msg.HTMLBody) != 1 || msg.HTMLBody[0].PartID == nil || *msg.HTMLBody[0].PartID != "html1" {
-		t.Fatalf("htmlBody = %+v, want part html1", msg.HTMLBody)
+	if len(msg.HTMLBody) != 1 || msg.HTMLBody[0].PartID == nil || *msg.HTMLBody[0].PartID != "1.2" {
+		t.Fatalf("htmlBody = %+v, want part 1.2", msg.HTMLBody)
 	}
-	if got := msg.BodyValues["html1"].Value; got != "<p>hello</p>" {
-		t.Fatalf("html1 body value = %q, want %q", got, "<p>hello</p>")
+	if got := msg.BodyValues["1.2"].Value; got != "<p>hello</p>" {
+		t.Fatalf("part 1.2 body value = %q, want %q", got, "<p>hello</p>")
 	}
 }
 
@@ -1327,7 +1329,7 @@ func TestApplyKeywordPatch(t *testing.T) {
 		{name: "replace", patch: map[string]interface{}{"keywords": map[string]interface{}{"$junk": true, "$seen": false}}, want: []string{metadata.KeywordJunk}, wantOK: true},
 		{name: "normalize", patch: map[string]interface{}{"keywords/$ANSWERED": true}, want: []string{metadata.KeywordSeen, metadata.KeywordFlagged, metadata.KeywordAnswered}, wantOK: true},
 		{name: "unknown property ignored", patch: map[string]interface{}{"mailboxIds": map[string]interface{}{"inbox": true}}, want: []string{metadata.KeywordSeen, metadata.KeywordFlagged}, wantOK: true},
-		{name: "receivedAt is read-only", patch: map[string]interface{}{"receivedAt": "1999-01-01T00:00:00Z"}, want: []string{metadata.KeywordSeen, metadata.KeywordFlagged}, wantOK: true},
+		{name: "receivedAt is read-only", patch: map[string]interface{}{"receivedAt": "1999-01-01T00:00:00Z"}, wantErr: "invalidProperties"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

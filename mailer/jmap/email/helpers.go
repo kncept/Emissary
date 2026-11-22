@@ -1,6 +1,7 @@
 package email
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,22 +12,21 @@ import (
 
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/components/metadata"
+	"github.com/kncept/Emissary/mailer/components/storage"
 	mailemail "github.com/kncept/Emissary/mailer/email"
 	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 	"github.com/kncept/Emissary/mailer/jmap/internal/model"
 )
 
-func (m *JMAPEmail) setBodyValues(e *mailemail.UserEmail, fetchText, fetchHTML bool, maxBytes int) {
-	values := map[string]EmailBodyValue{}
-	if fetchText && e.Text != "" {
-		values["text1"] = truncateBodyValue(e.Text, maxBytes, "text/plain")
+// setBodyValues fetches exactly the requested body value selectors. Part ids
+// are the real MIME part ids from the wire view, and fetchAll covers any text
+// part regardless of its media subtype (RFC 8621 bodyProperties fetchAll).
+func (m *JMAPEmail) setBodyValues(fetchText, fetchHTML, fetchAll bool, maxBytes int) {
+	if m.wire == nil {
+		m.BodyValues = map[string]EmailBodyValue{}
+		return
 	}
-	if fetchHTML && e.HTML != "" {
-		values["html1"] = truncateBodyValue(e.HTML, maxBytes, "text/html")
-	}
-	if len(values) > 0 {
-		m.BodyValues = values
-	}
+	m.BodyValues = m.wire.bodyValues(fetchText, fetchHTML, fetchAll, maxBytes)
 }
 
 // truncateBodyValue enforces maxBodyValueBytes without splitting a UTF-8
@@ -53,8 +53,9 @@ func truncateBodyValue(value string, maxBytes int, contentType string) EmailBody
 }
 
 // filtered applies bodyProperties to every returned EmailBodyPart and then
-// properties to the Email object itself. State calculation and body-value
-// fetching happen before this so they are independent of the selection.
+// properties to the Email object itself. Dynamic header properties are
+// injected from the parsed wire view before selection, so only requested
+// header:{name} fields can appear in the response.
 func (m *JMAPEmail) filtered(properties, bodyProperties *base.Selection) (json.RawMessage, error) {
 	raw, err := json.Marshal(m)
 	if err != nil {
@@ -64,22 +65,119 @@ func (m *JMAPEmail) filtered(properties, bodyProperties *base.Selection) (json.R
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return nil, err
 	}
+	if err := injectHeaderProperties(obj, properties); err != nil {
+		return nil, err
+	}
 	for _, key := range []string{"bodyStructure", "textBody", "htmlBody", "attachments"} {
 		value, ok := obj[key]
 		if !ok {
 			continue
 		}
-		filtered, err := bodyProperties.FilterRaw(value)
+		value, err = injectBodyHeaders(value, bodyProperties)
 		if err != nil {
 			return nil, err
 		}
-		obj[key] = filtered
+		obj[key], err = filterBodyPart(value, bodyProperties)
+		if err != nil {
+			return nil, err
+		}
 	}
 	selected, err := json.Marshal(obj)
 	if err != nil {
 		return nil, err
 	}
 	return properties.FilterRaw(selected)
+}
+
+// injectBodyHeaders adds dynamic header properties to every node of a MIME
+// tree (a single part or an array of parts) before bodyProperties filtering.
+func injectBodyHeaders(raw json.RawMessage, sel *base.Selection) (json.RawMessage, error) {
+	if sel == nil || len(sel.DynamicNames()) == 0 {
+		return raw, nil
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return raw, nil
+	}
+	switch trimmed[0] {
+	case '[':
+		var items []json.RawMessage
+		if err := json.Unmarshal(trimmed, &items); err != nil {
+			return nil, err
+		}
+		for i, item := range items {
+			filtered, err := injectBodyHeaders(item, sel)
+			if err != nil {
+				return nil, err
+			}
+			items[i] = filtered
+		}
+		return json.Marshal(items)
+	case '{':
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(trimmed, &obj); err != nil {
+			return nil, err
+		}
+		if err := injectHeaderProperties(obj, sel); err != nil {
+			return nil, err
+		}
+		if subParts, ok := obj["subParts"]; ok {
+			filtered, err := injectBodyHeaders(subParts, sel)
+			if err != nil {
+				return nil, err
+			}
+			obj["subParts"] = filtered
+		}
+		return json.Marshal(obj)
+	default:
+		return raw, nil
+	}
+}
+
+// filterBodyPart selects bodyProperties recursively. The "headers" array is
+// an array of EmailHeader objects, not EmailBodyParts, so it is passed through
+// unmodified when requested instead of being filtered as a body part.
+func filterBodyPart(raw json.RawMessage, sel *base.Selection) (json.RawMessage, error) {
+	if sel == nil {
+		return raw, nil
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return raw, nil
+	}
+	switch trimmed[0] {
+	case '[':
+		var items []json.RawMessage
+		if err := json.Unmarshal(trimmed, &items); err != nil {
+			return nil, err
+		}
+		for i, item := range items {
+			filtered, err := filterBodyPart(item, sel)
+			if err != nil {
+				return nil, err
+			}
+			items[i] = filtered
+		}
+		return json.Marshal(items)
+	case '{':
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(trimmed, &obj); err != nil {
+			return nil, err
+		}
+		if subParts, ok := obj["subParts"]; ok {
+			filtered, err := filterBodyPart(subParts, sel)
+			if err != nil {
+				return nil, err
+			}
+			obj["subParts"] = filtered
+		}
+		if !sel.Has("headers") {
+			delete(obj, "headers")
+		}
+		return json.Marshal(sel.Apply(obj))
+	default:
+		return raw, nil
+	}
 }
 
 // jmapAddressList converts a JMAP address property (to, cc, bcc) into internal
@@ -174,92 +272,119 @@ func emailFingerprint(listed *mailemail.ListedEmail, meta metadata.EmailMetadata
 		strings.Join(keywords, ","), listed.Email.Size, listed.Email.Subject, listed.Email.MessageID)
 }
 
+func toJMAPAddresses(addresses ...mailemail.Address) []model.EmailAddress {
+	out := make([]model.EmailAddress, 0, len(addresses))
+	for _, address := range addresses {
+		out = append(out, model.EmailAddress{
+			Name:  mailemail.DecodeHeader(address.Name),
+			Email: address.Address,
+		})
+	}
+	return out
+}
+
+// toJMAPEmail builds the structural properties and then hydrates every
+// wire-derived property from one parse of the original message bytes.
 func (h *Handler) toJMAPEmail(ctx context.Context, listed *mailemail.ListedEmail) (*JMAPEmail, error) {
+	if listed == nil {
+		return nil, fmt.Errorf("missing email")
+	}
+	if listed.Email == nil {
+		listed.Email = &mailemail.UserEmail{}
+	}
+	if listed.Ref == nil {
+		listed.Ref = &mailemail.EmailRef{}
+	}
 	e := listed.Email
 	id := listed.Ref.ID
+	accountID := listed.Ref.AccountID
+	meta := base.EmailMetadata(ctx, h.deps, accountID, id)
 
-	meta := base.EmailMetadata(ctx, h.deps, listed.Ref.AccountID, id)
 	keywords := make(map[string]bool, len(meta.Keywords))
 	for keyword, enabled := range meta.Keywords {
 		if enabled {
 			keywords[keyword] = true
 		}
 	}
-
 	mailboxID := listed.Ref.MailboxID
 	if mailboxID == "" {
 		mailboxID = "inbox"
 	}
-	mailboxIDs := map[string]bool{mailboxID: true}
-
-	from := []model.EmailAddress{{Name: e.From.Name, Email: e.From.Address}}
-	to := make([]model.EmailAddress, len(e.To))
-	for i, addr := range e.To {
-		to[i] = model.EmailAddress{Name: addr.Name, Email: addr.Address}
-	}
-	cc := make([]model.EmailAddress, len(e.Cc))
-	for i, addr := range e.Cc {
-		cc[i] = model.EmailAddress{Name: addr.Name, Email: addr.Address}
-	}
-	bcc := make([]model.EmailAddress, len(e.Bcc))
-	for i, addr := range e.Bcc {
-		bcc[i] = model.EmailAddress{Name: addr.Name, Email: addr.Address}
-	}
-	replyTo := make([]model.EmailAddress, len(e.ReplyTo))
-	for i, addr := range e.ReplyTo {
-		replyTo[i] = model.EmailAddress{Name: addr.Name, Email: addr.Address}
-	}
-
-	preview := e.Text
-	if len(preview) > 200 {
-		preview = preview[:200]
-	}
-	preview = strings.ReplaceAll(preview, "\n", " ")
-	preview = strings.TrimSpace(preview)
-
-	textPartID := "text1"
-	htmlPartID := "html1"
-	textBody := []EmailBodyPart{}
-	htmlBody := []EmailBodyPart{}
-	if e.Text != "" {
-		textBody = append(textBody, EmailBodyPart{PartID: &textPartID, Type: "text/plain", Size: len(e.Text)})
-	}
-	if e.HTML != "" {
-		htmlBody = append(htmlBody, EmailBodyPart{PartID: &htmlPartID, Type: "text/html", Size: len(e.HTML)})
-	}
-
-	receivedAt := base.ReceivedAtFromMetadata(meta, e.Date).UTC().Format(time.RFC3339)
 	sentAt := e.Date.UTC().Format(time.RFC3339)
+	preview := strings.TrimSpace(strings.ReplaceAll(e.Text, "\n", " "))
+	if len(preview) > 256 {
+		preview = preview[:256]
+	}
 
-	return &JMAPEmail{
-		ID:            id,
-		BlobID:        id,
-		ThreadID:      id,
-		MailboxIDs:    mailboxIDs,
-		Keywords:      keywords,
-		Size:          int(e.Size),
-		ReceivedAt:    receivedAt,
-		MessageID:     messageIDs(e.MessageID),
-		InReplyTo:     e.InReplyTo,
-		References:    e.References,
-		Sender:        from,
-		From:          from,
-		To:            to,
-		Cc:            cc,
-		Bcc:           bcc,
-		ReplyTo:       replyTo,
-		Subject:       e.Subject,
-		SentAt:        &sentAt,
-		HasAttachment: false,
-		Preview:       preview,
-		TextBody:      textBody,
-		HTMLBody:      htmlBody,
-		Attachments:   []EmailBodyPart{},
-		Headers:       []EmailHeader{},
-	}, nil
+	m := &JMAPEmail{
+		ID:         id,
+		ThreadID:   base.ThreadID(id, e),
+		MailboxIDs: map[string]bool{mailboxID: true},
+		Keywords:   keywords,
+		Size:       int(e.Size),
+		ReceivedAt: base.ReceivedAtFromMetadata(meta, e.Date).UTC().Format(time.RFC3339),
+		MessageID:  messageIDs(e.MessageID),
+		InReplyTo:  nonEmpty(e.InReplyTo...),
+		References: nonEmpty(e.References...),
+		Sender:     []model.EmailAddress{},
+		From:       toJMAPAddresses(e.From),
+		To:         toJMAPAddresses(e.To...),
+		Cc:         toJMAPAddresses(e.Cc...),
+		Bcc:        toJMAPAddresses(e.Bcc...),
+		ReplyTo:    toJMAPAddresses(e.ReplyTo...),
+		Subject:    mailemail.DecodeHeader(e.Subject),
+		SentAt:     &sentAt,
+		Preview:    preview,
+	}
+	m.hydrate(ctx, h.deps, accountID, id, e)
+	return m, nil
 }
 
-func (h *Handler) matchesFilter(listed *mailemail.ListedEmail, filter *EmailFilter) bool {
+func nonEmpty(values ...string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+// hydrate fills the properties derived from the retained wire format. A store
+// without raw bytes falls back to the same renderer used for new messages, so
+// blobId, size and the MIME tree always describe the bytes the server keeps.
+func (m *JMAPEmail) hydrate(ctx context.Context, deps *base.Deps, accountID, id string, fallback *mailemail.UserEmail) {
+	var raw []byte
+	if deps != nil && deps.Storage != nil {
+		fetched, err := deps.Storage.GetEmailRaw(ctx, accountID, id)
+		if err == nil {
+			raw = fetched
+		}
+	}
+	if len(raw) == 0 {
+		raw = mailemail.RawFromUserEmail(fallback)
+	}
+	view := newWireView(id, raw)
+	m.wire = view
+	m.BlobID = storage.BlobID(raw)
+	m.Size = len(raw)
+	if view.root != nil {
+		m.BodyStructure = &view.root.jmap
+	}
+	m.TextBody = view.textBody
+	m.HTMLBody = view.htmlBody
+	m.Attachments = view.attached
+	m.Headers = view.headers
+	m.HasAttachment = len(view.attached) > 0
+	if sender := addressHeader(view.headers, "Sender"); len(sender) > 0 {
+		m.Sender = sender
+	} else if len(m.Sender) == 0 {
+		// RFC 8621 section 4.1.1: when Sender is absent, From is the sender.
+		m.Sender = append([]model.EmailAddress(nil), m.From...)
+	}
+}
+
+func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEmail, filter *EmailFilter) bool {
 	if filter == nil {
 		return true
 	}
@@ -290,10 +415,23 @@ func (h *Handler) matchesFilter(listed *mailemail.ListedEmail, filter *EmailFilt
 		}
 	}
 
-	if filter.MinSize != nil && int(e.Size) < *filter.MinSize {
+	// JMAP size is the length of the stored RFC 5322 message, not the
+	// convenience length on the parsed UserEmail.
+	emailSize := e.Size
+	has := false
+	if filter.MinSize != nil || filter.MaxSize != nil || filter.HasAttachment != nil {
+		if raw, err := h.deps.Storage.GetEmailRaw(ctx, listed.Ref.AccountID, listed.Ref.ID); err == nil {
+			emailSize = int64(len(raw))
+			has = len(newWireView(listed.Ref.ID, raw).attached) > 0
+		}
+	}
+	if filter.MinSize != nil && emailSize < int64(*filter.MinSize) {
 		return false
 	}
-	if filter.MaxSize != nil && int(e.Size) > *filter.MaxSize {
+	if filter.MaxSize != nil && emailSize > int64(*filter.MaxSize) {
+		return false
+	}
+	if filter.HasAttachment != nil && has != *filter.HasAttachment {
 		return false
 	}
 
@@ -455,8 +593,12 @@ func ApplyKeywordPatch(current metadata.EmailMetadata, patch map[string]interfac
 			continue
 		}
 		if !strings.HasPrefix(prop, "keywords/") {
-			// Ignore properties we do not manage (for example mailboxIds handled elsewhere)
-			// rather than failing the whole update.
+			// mailboxIds and its patches are applied by the caller. Every
+			// other patch property is unknown and must fail the whole update
+			// rather than being silently ignored (RFC 8620 section 3.9).
+			if prop != "mailboxIds" && !strings.HasPrefix(prop, "mailboxIds/") {
+				return updated, false, "invalidProperties"
+			}
 			continue
 		}
 		normalized, valid := metadata.NormalizeKeyword(strings.TrimPrefix(prop, "keywords/"))

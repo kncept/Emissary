@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -103,6 +104,80 @@ type BlobStore interface {
 func BlobID(data []byte) string {
 	sum := sha256.Sum256(data)
 	return email.EncodeID(string(sum[:]))
+}
+
+// RegisterEmailBlob stores the raw RFC 5322 bytes of a message as an immutable
+// blob and pins it, so Email.blobId resolves through the normal JMAP download
+// path for as long as the message exists. Calls are idempotent: content
+// addressing makes a repeat upload a no-op, and an already pinned blob keeps
+// its single permanent email reference. The pin is deliberately not released
+// by Email/set destroy, because the same digest may back another message.
+func RegisterEmailBlob(ctx context.Context, store BlobStore, accountID string, raw []byte) (string, error) {
+	return registerBlob(ctx, store, accountID, emailBlobType, raw)
+}
+
+// RegisterEmailBlobs registers both the whole message and each decoded MIME
+// leaf, so Email.blobId and every EmailBodyPart.blobId resolve through the
+// ordinary JMAP download endpoint. It is idempotent and returns the message
+// blob id even if one part registration fails.
+func RegisterEmailBlobs(ctx context.Context, store BlobStore, accountID string, raw []byte) (string, error) {
+	messageID, err := RegisterEmailBlob(ctx, store, accountID, raw)
+	if err != nil {
+		return "", err
+	}
+	parsed := email.ParseWireFormat("", bytes.NewReader(raw))
+	var firstErr error
+	var walk func(*email.BodyPart)
+	walk = func(part *email.BodyPart) {
+		if part == nil {
+			return
+		}
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(part.MediaType)), "multipart/") {
+			for _, child := range part.Parts {
+				walk(child)
+			}
+			return
+		}
+		if len(part.Body) == 0 {
+			return
+		}
+		contentType := strings.TrimSpace(part.MediaType)
+		if contentType == "" {
+			contentType = defaultBlobType
+		}
+		if _, partErr := registerBlob(ctx, store, accountID, contentType, part.Body); partErr != nil && firstErr == nil {
+			firstErr = partErr
+		}
+	}
+	walk(parsed.BodyStructure)
+	return messageID, firstErr
+}
+
+// registerBlob stores immutable bytes and pins them with a single permanent
+// reference. Existing pins are left alone so repeated delivery of an identical
+// email cannot inflate the reference count.
+func registerBlob(ctx context.Context, store BlobStore, accountID, contentType string, data []byte) (string, error) {
+	if store == nil || len(data) == 0 {
+		return "", errors.New("email blob requires a store and bytes")
+	}
+	id := BlobID(data)
+	meta, err := store.GetBlobMeta(ctx, accountID, id)
+	if err == nil {
+		if !meta.IsPinned() {
+			_, err = store.AddBlobRefs(ctx, accountID, id, 1)
+		}
+		return id, err
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return "", err
+	}
+	if _, err := store.PutBlob(ctx, accountID, contentType, data); err != nil {
+		return "", err
+	}
+	if _, err := store.AddBlobRefs(ctx, accountID, id, 1); err != nil {
+		return "", err
+	}
+	return id, nil
 }
 
 func canonicalBlobAccount(accountID string) (string, error) {

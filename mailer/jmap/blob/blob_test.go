@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -66,6 +67,77 @@ func callBlobCopy(t *testing.T, h *Handler, ctx context.Context, args string) co
 		t.Fatalf("decode BlobCopy() response: %v (raw %s)", err, raw)
 	}
 	return result
+}
+
+func TestEmailBackedBlobDownload(t *testing.T) {
+	_, _, store, ctx := newBlobTest(t)
+	raw := []byte(strings.Join([]string{
+		"From: sender@example.com",
+		"To: alice@example.com",
+		"Subject: Blob fixture",
+		"MIME-Version: 1.0",
+		`Content-Type: multipart/mixed; boundary="b"`,
+		"",
+		"--b",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		"body",
+		"--b",
+		`Content-Type: text/plain; name="note.txt"`,
+		`Content-Disposition: attachment; filename="note.txt"`,
+		"",
+		"attachment bytes",
+		"--b--",
+		"",
+	}, "\r\n"))
+	id, err := store.AddEmail(ctx, blobAlice, "inbox", &mailemail.UserEmail{
+		From:    mailemail.Address{Address: "sender@example.com"},
+		To:      []mailemail.Address{{Address: blobAlice}},
+		Subject: "Blob fixture",
+		Text:    "body",
+	}, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messageBlobID, err := storage.RegisterEmailBlobs(ctx, store, blobAlice, raw)
+	if err != nil {
+		t.Fatalf("RegisterEmailBlobs() error = %v", err)
+	}
+	if messageBlobID != storage.BlobID(raw) {
+		t.Fatalf("message blob id = %q, want %q", messageBlobID, storage.BlobID(raw))
+	}
+
+	cases := []struct {
+		name string
+		id   string
+		want string
+	}{
+		{"whole email", messageBlobID, string(raw)},
+		{"attachment", storage.BlobID([]byte("attachment bytes")), "attachment bytes"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			meta, reader, err := store.OpenBlob(ctx, blobAlice, tc.id)
+			if err != nil {
+				t.Fatalf("OpenBlob() error = %v", err)
+			}
+			defer reader.Close()
+			data, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatalf("read blob: %v", err)
+			}
+			if string(data) != tc.want {
+				t.Errorf("blob bytes = %q, want %q", data, tc.want)
+			}
+			if meta.Size != int64(len(tc.want)) {
+				t.Errorf("blob size = %d, want %d", meta.Size, len(tc.want))
+			}
+		})
+	}
+	// The message itself must remain intact after opening its blobs.
+	if _, err := store.GetEmail(ctx, blobAlice, id); err != nil {
+		t.Errorf("GetEmail() after blob download: %v", err)
+	}
 }
 
 func TestBlobCopyCopiesBetweenAccountsAndDestroysOriginal(t *testing.T) {

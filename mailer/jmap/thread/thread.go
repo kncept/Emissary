@@ -133,8 +133,11 @@ func (h *Handler) getThreads(ctx context.Context, accountID string) ([]Thread, e
 
 	threads := make([]Thread, 0, len(emails))
 	for _, e := range emails {
+		if e == nil || e.Ref == nil || e.Email == nil {
+			continue
+		}
 		threads = append(threads, Thread{
-			ID:       e.Ref.ID,
+			ID:       base.ThreadID(e.Ref.ID, e.Email),
 			EmailIDs: []string{e.Ref.ID},
 		})
 	}

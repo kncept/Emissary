@@ -70,7 +70,9 @@ type EmailFilter struct {
 	Header                  []string `json:"header,omitempty"`
 }
 
-// JMAPEmail represents a JMAP Email object.
+// JMAPEmail represents a JMAP Email object. RFC 8621 section 1.1 requires a
+// server that advertises mail to return every property (null where the RFC
+// permits it), so the standard properties deliberately have no omitempty.
 type JMAPEmail struct {
 	ID            string                    `json:"id"`
 	BlobID        string                    `json:"blobId"`
@@ -79,41 +81,46 @@ type JMAPEmail struct {
 	Keywords      map[string]bool           `json:"keywords"`
 	Size          int                       `json:"size"`
 	ReceivedAt    string                    `json:"receivedAt"`
-	MessageID     []string                  `json:"messageId,omitempty"`
-	InReplyTo     []string                  `json:"inReplyTo,omitempty"`
-	References    []string                  `json:"references,omitempty"`
-	Sender        []model.EmailAddress      `json:"sender,omitempty"`
-	From          []model.EmailAddress      `json:"from,omitempty"`
-	To            []model.EmailAddress      `json:"to,omitempty"`
-	Cc            []model.EmailAddress      `json:"cc,omitempty"`
-	Bcc           []model.EmailAddress      `json:"bcc,omitempty"`
-	ReplyTo       []model.EmailAddress      `json:"replyTo,omitempty"`
-	Subject       string                    `json:"subject,omitempty"`
-	SentAt        *string                   `json:"sentAt,omitempty"`
+	MessageID     []string                  `json:"messageId"`
+	InReplyTo     []string                  `json:"inReplyTo"`
+	References    []string                  `json:"references"`
+	Sender        []model.EmailAddress      `json:"sender"`
+	From          []model.EmailAddress      `json:"from"`
+	To            []model.EmailAddress      `json:"to"`
+	Cc            []model.EmailAddress      `json:"cc"`
+	Bcc           []model.EmailAddress      `json:"bcc"`
+	ReplyTo       []model.EmailAddress      `json:"replyTo"`
+	Subject       string                    `json:"subject"`
+	SentAt        *string                   `json:"sentAt"`
 	HasAttachment bool                      `json:"hasAttachment"`
 	Preview       string                    `json:"preview"`
-	BodyStructure *EmailBodyPart            `json:"bodyStructure,omitempty"`
-	BodyValues    map[string]EmailBodyValue `json:"bodyValues,omitempty"`
-	TextBody      []EmailBodyPart           `json:"textBody,omitempty"`
-	HTMLBody      []EmailBodyPart           `json:"htmlBody,omitempty"`
-	Attachments   []EmailBodyPart           `json:"attachments,omitempty"`
-	Headers       []EmailHeader             `json:"headers,omitempty"`
+	BodyStructure *EmailBodyPart            `json:"bodyStructure"`
+	BodyValues    map[string]EmailBodyValue `json:"bodyValues"`
+	TextBody      []EmailBodyPart           `json:"textBody"`
+	HTMLBody      []EmailBodyPart           `json:"htmlBody"`
+	Attachments   []EmailBodyPart           `json:"attachments"`
+	Headers       []EmailHeader             `json:"headers"`
+
+	// wire is the parsed RFC 5322 source of the derived properties. It is not
+	// serialised; only explicitly selected JMAP properties are returned.
+	wire *wireView
 }
 
-// EmailBodyPart represents a JMAP Email body part.
+// EmailBodyPart represents a JMAP Email body part. RFC 8621 section 4.1.4 lists
+// every field as present-and-nullable, so none use omitempty.
 type EmailBodyPart struct {
-	PartID      *string         `json:"partId,omitempty"`
-	BlobID      *string         `json:"blobId,omitempty"`
+	PartID      *string         `json:"partId"`
+	BlobID      *string         `json:"blobId"`
 	Type        string          `json:"type"`
 	Size        int             `json:"size"`
-	Name        *string         `json:"name,omitempty"`
-	Charset     *string         `json:"charset,omitempty"`
-	Disposition *string         `json:"disposition,omitempty"`
-	CID         *string         `json:"cid,omitempty"`
-	Language    []string        `json:"language,omitempty"`
-	Location    *string         `json:"location,omitempty"`
-	SubParts    []EmailBodyPart `json:"subParts,omitempty"`
-	Headers     []EmailHeader   `json:"headers,omitempty"`
+	Name        *string         `json:"name"`
+	Charset     *string         `json:"charset"`
+	Disposition *string         `json:"disposition"`
+	CID         *string         `json:"cid"`
+	Language    []string        `json:"language"`
+	Location    *string         `json:"location"`
+	SubParts    []EmailBodyPart `json:"subParts"`
+	Headers     []EmailHeader   `json:"headers"`
 }
 
 // EmailBodyValue represents the fetched value of a JMAP body part.

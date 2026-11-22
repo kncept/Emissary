@@ -3,7 +3,9 @@ package email
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -313,9 +315,10 @@ func DecodeID(id string) (string, error) {
 
 // RawFromUserEmail builds a minimal RFC 5322 message from a parsed email. It
 // is intended for messages that have no original wire bytes to retain (for
-// example messages created through JMAP). It is a best-effort rendering, not
-// a byte-exact copy of the original wire format; inbound delivery passes the
-// staging bytes to Storage.AddEmail instead so they can be stored verbatim.
+// example messages created through JMAP). The rendered bytes are stored and
+// parsed back by the storage layer, so the MIME tree JMAP exposes is the one
+// that was actually saved. Inbound delivery passes the original staging bytes
+// to Storage.AddEmail instead so they remain byte-exact.
 func RawFromUserEmail(e *UserEmail) []byte {
 	if e == nil {
 		return nil
@@ -323,12 +326,44 @@ func RawFromUserEmail(e *UserEmail) []byte {
 
 	var buf bytes.Buffer
 	buf.WriteString(RenderHeaders(e, HeaderPolicy{}))
+	if e.HTML != "" {
+		// A deterministic boundary keeps repeated renderings byte-identical
+		// for stores that render on read, which in turn keeps blobId and size
+		// stable for the same message.
+		sum := sha256.Sum256([]byte(e.MessageID + "\x00" + e.Text + "\x00" + e.HTML))
+		boundary := "emissary_" + hex.EncodeToString(sum[:8])
+		buf.WriteString("MIME-Version: 1.0\r\n")
+		buf.WriteString("Content-Type: multipart/alternative; boundary=\"" + boundary + "\"\r\n")
+		buf.WriteString("\r\n")
+		writeMIMEPart(&buf, boundary, "text/plain", e.Text)
+		writeMIMEPart(&buf, boundary, "text/html", e.HTML)
+		buf.WriteString("--")
+		buf.WriteString(boundary)
+		buf.WriteString("--\r\n")
+		return buf.Bytes()
+	}
+	buf.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
 	buf.WriteString("\r\n")
-	buf.WriteString(e.Text)
-	if !strings.HasSuffix(e.Text, "\r\n") {
+	writeCRLFBody(&buf, e.Text)
+	return buf.Bytes()
+}
+
+func writeMIMEPart(buf *bytes.Buffer, boundary, contentType, body string) {
+	buf.WriteString("--")
+	buf.WriteString(boundary)
+	buf.WriteString("\r\nContent-Type: ")
+	buf.WriteString(contentType)
+	buf.WriteString("; charset=utf-8\r\n\r\n")
+	writeCRLFBody(buf, body)
+}
+
+// writeCRLFBody normalises client-supplied line endings so the rendered
+// message is valid RFC 5322 and its byte length is stable.
+func writeCRLFBody(buf *bytes.Buffer, body string) {
+	for _, line := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
+		buf.WriteString(line)
 		buf.WriteString("\r\n")
 	}
-	return buf.Bytes()
 }
 
 // Parse reads a raw RFC 5322 message and returns its content as a UserEmail.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"reflect"
+	"sort"
 	"strings"
 )
 
@@ -50,6 +51,29 @@ func ParseSelection(args json.RawMessage, key string, model any, dynamicPrefix s
 		return nil, Errorf("invalidArguments", "unknown property %q in %s", name, key)
 	}
 	return &Selection{names: selected, dynamicPrefix: dynamicPrefix}, nil
+}
+
+// DynamicNames returns the requested dynamic property names (for example
+// "header:Subject") in a stable order. Callers use it to inject those values
+// before filtering, so only requested names can appear in a response.
+func (s *Selection) DynamicNames() []string {
+	if s == nil || s.dynamicPrefix == "" {
+		return nil
+	}
+	names := make([]string, 0, len(s.names))
+	for name := range s.names {
+		if strings.HasPrefix(name, s.dynamicPrefix) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// Has reports whether name was explicitly selected. A nil Selection selects
+// every property.
+func (s *Selection) Has(name string) bool {
+	return s == nil || s.names[name]
 }
 
 // WithRecursion configures a Selection to recurse into the named child key
@@ -134,11 +158,9 @@ func (s *Selection) Apply(obj map[string]json.RawMessage) map[string]json.RawMes
 			out[name] = value
 		}
 	}
-	if s.dynamicPrefix != "" {
-		for name, value := range obj {
-			if strings.HasPrefix(name, s.dynamicPrefix) {
-				out[name] = value
-			}
+	for _, name := range s.DynamicNames() {
+		if value, ok := obj[name]; ok {
+			out[name] = value
 		}
 	}
 	return out

@@ -40,8 +40,8 @@ func New(deps *base.Deps) *Handler { return &Handler{deps: deps} }
 type Mailbox struct {
 	ID            string        `json:"id"`
 	Name          string        `json:"name"`
-	ParentID      *string       `json:"parentId,omitempty"`
-	Role          *string       `json:"role,omitempty"`
+	ParentID      *string       `json:"parentId"`
+	Role          *string       `json:"role"`
 	SortOrder     int           `json:"sortOrder"`
 	TotalEmails   int           `json:"totalEmails"`
 	UnreadEmails  int           `json:"unreadEmails"`
@@ -51,17 +51,8 @@ type Mailbox struct {
 	IsSubscribed  bool          `json:"isSubscribed"`
 }
 
-// MailboxRights describes the caller's rights on a Mailbox.
-type MailboxRights struct {
-	MayReadItems   bool `json:"mayReadItems"`
-	MayAddItems    bool `json:"mayAddItems"`
-	MayRemoveItems bool `json:"mayRemoveItems"`
-	MaySetSeen     bool `json:"maySetSeen"`
-	MaySetKeywords bool `json:"maySetKeywords"`
-	MayCreateChild bool `json:"mayCreateChild"`
-	MayRename      bool `json:"mayRename"`
-	MayDelete      bool `json:"mayDelete"`
-	MaySubmit      bool `json:"maySubmit"`
-}
+// MailboxRights is the shared RFC 8621 rights object. The alias keeps the
+// package's public name while deriving the values from one implementation.
+type MailboxRights = base.MailboxRights
 
 var _ MethodHandler = (*Handler)(nil)
