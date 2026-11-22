@@ -280,9 +280,12 @@ func HandleQueryChanges(ctx context.Context, accountID string, args json.RawMess
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, Errorf("invalidArguments", "sinceQueryState must be a string")
 	}
-	if req.UpToID != nil {
-		return nil, RejectArgument("upToId", "the change tracker cannot limit a query diff to an id")
-	}
+	// RFC 8620 section 5.6 makes upToId an optimisation: the server SHOULD
+	// omit later changes only when both filter and sort use immutable
+	// properties, and MUST otherwise ignore the argument. This server's
+	// queries can sort/filter on mutable properties, so accepting upToId and
+	// returning the complete diff is the compliant behaviour.
+	_ = req.UpToID
 	allIDs, queryReq, queryKey, err := spec.resolve(ctx, accountID, args)
 	if err != nil {
 		return nil, err

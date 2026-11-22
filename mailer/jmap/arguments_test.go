@@ -3,6 +3,7 @@ package jmap
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/kncept/Emissary/mailer/components/metadata"
@@ -96,14 +97,6 @@ func TestJMAPArgumentsRejected(t *testing.T) {
 			want: "anchorNotFound",
 		},
 		{
-			name: "email queryChanges upToId",
-			call: func() error {
-				_, err := h.EmailQueryChanges(ctx, accountID, json.RawMessage(`{"sinceQueryState":"s","upToId":"id"}`))
-				return err
-			},
-			want: "invalidArguments",
-		},
-		{
 			name: "email queryChanges collapseThreads",
 			call: func() error {
 				_, err := h.EmailQueryChanges(ctx, accountID, json.RawMessage(`{"sinceQueryState":"s","collapseThreads":true}`))
@@ -112,9 +105,9 @@ func TestJMAPArgumentsRejected(t *testing.T) {
 			want: "unsupportedFilter",
 		},
 		{
-			name: "mailbox sort",
+			name: "mailbox sort on unsupported property",
 			call: func() error {
-				_, err := h.MailboxQuery(ctx, accountID, json.RawMessage(`{"sort":[{"property":"name"}]}`))
+				_, err := h.MailboxQuery(ctx, accountID, json.RawMessage(`{"sort":[{"property":"subject"}]}`))
 				return err
 			},
 			want: "unsupportedSort",
@@ -134,14 +127,6 @@ func TestJMAPArgumentsRejected(t *testing.T) {
 				return err
 			},
 			want: "anchorNotFound",
-		},
-		{
-			name: "mailbox queryChanges upToId",
-			call: func() error {
-				_, err := h.MailboxQueryChanges(ctx, accountID, json.RawMessage(`{"sinceQueryState":"s","upToId":"id"}`))
-				return err
-			},
-			want: "invalidArguments",
 		},
 		{
 			name: "submission sendAt",
@@ -257,4 +242,42 @@ func TestJMAPMaxSizeIsStrict(t *testing.T) {
 func jsonNumber(value int) string {
 	data, _ := json.Marshal(value)
 	return string(data)
+}
+
+// TestQueryChangesUpToIDReturnsValidDiff verifies RFC 8620 section 5.6:
+// upToId is accepted and, because the server's sorts and filters may use
+// mutable properties, ignored in favour of the complete (valid) diff.
+func TestQueryChangesUpToIDReturnsValidDiff(t *testing.T) {
+	const accountID = "alice@example.com"
+	h := newArgumentHandler(t)
+	ctx := context.Background()
+
+	raw, err := h.MailboxQuery(ctx, accountID, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("MailboxQuery() error = %v", err)
+	}
+	var query struct {
+		QueryState string `json:"queryState"`
+	}
+	if err := json.Unmarshal(raw, &query); err != nil {
+		t.Fatalf("unmarshal query response: %v", err)
+	}
+	if query.QueryState == "" {
+		t.Fatal("MailboxQuery() returned no queryState")
+	}
+
+	raw, err = h.MailboxQueryChanges(ctx, accountID,
+		json.RawMessage(fmt.Sprintf(`{"sinceQueryState":%q,"upToId":"inbox"}`, query.QueryState)))
+	if err != nil {
+		t.Fatalf("MailboxQueryChanges(upToId) error = %v", err)
+	}
+	var diff map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &diff); err != nil {
+		t.Fatalf("unmarshal queryChanges response: %v", err)
+	}
+	for _, field := range []string{"oldQueryState", "newQueryState", "added", "removed"} {
+		if _, ok := diff[field]; !ok {
+			t.Errorf("queryChanges response is missing %q: %s", field, raw)
+		}
+	}
 }

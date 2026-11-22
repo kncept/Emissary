@@ -2,14 +2,21 @@ package mailbox
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/kncept/Emissary/mailer/components/storage"
 	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 )
+
+// maxMailboxNameBytes mirrors the maxSizeMailboxName capability advertised by
+// the Session (RFC 8621 section 1.3.1). The RFC counts UTF-8 octets, not runes.
+const maxMailboxNameBytes = 255
 
 func (h *Handler) MailboxGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	mailboxes := h.getMailboxes(ctx, accountID)
@@ -55,8 +62,22 @@ func (h *Handler) MailboxSet(ctx context.Context, accountID string, args json.Ra
 func (h *Handler) setSpec(accountID string) base.SetSpec {
 	// Track created ids within this call so parent references can resolve.
 	createdServerIDs := make(map[string]string)
+	// onDestroyRemoveEmails is a method-level argument, not part of any
+	// create/update/destroy record, so the kernel's Extra hook captures it
+	// once before the per-record callbacks run.
+	var onDestroyRemoveEmails bool
 	return base.SetSpec{
 		Allowed: base.ArgumentSet("accountId", "ifInState", "create", "update", "destroy", "onDestroyRemoveEmails"),
+		Extra: func(args json.RawMessage) error {
+			var req struct {
+				OnDestroyRemoveEmails bool `json:"onDestroyRemoveEmails"`
+			}
+			if err := json.Unmarshal(args, &req); err != nil {
+				return base.Errorf("invalidArguments", "Mailbox/set arguments must be an object")
+			}
+			onDestroyRemoveEmails = req.OnDestroyRemoveEmails
+			return nil
+		},
 		State: func(ctx context.Context) (string, error) {
 			return h.syncMailboxState(ctx, accountID, h.getMailboxes(ctx, accountID))
 		},
@@ -83,6 +104,9 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 			}
 			if name == "" {
 				return fail(base.NewSetError("invalidProperties", "name is required"))
+			}
+			if len([]byte(name)) > maxMailboxNameBytes {
+				return fail(base.InvalidProperties("name exceeds maxSizeMailboxName", "name"))
 			}
 			// Role mailboxes are predefined; clients must not create mailboxes with a role.
 			if mc.Role != nil && strings.TrimSpace(*mc.Role) != "" {
@@ -198,7 +222,10 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 			if patch.Name != nil {
 				name := strings.TrimSpace(*patch.Name)
 				if name == "" {
-					return fail(base.NewSetError("invalidProperties", "name must not be empty"))
+					return fail(base.InvalidProperties("name must not be empty", "name"))
+				}
+				if len([]byte(name)) > maxMailboxNameBytes {
+					return fail(base.InvalidProperties("name exceeds maxSizeMailboxName", "name"))
 				}
 				if role != "" {
 					return fail(base.NewSetError("invalidProperties", "cannot rename a mailbox with a role"))
@@ -243,16 +270,55 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 			return json.RawMessage("null"), nil, nil
 		},
 		Destroy: func(ctx context.Context, id string) *base.SetError {
+			fail := func(setErr base.SetError) *base.SetError { return &setErr }
 			current, err := h.deps.Storage.GetMailbox(ctx, accountID, id)
 			if err != nil {
-				setErr := base.NewSetError("notFound", "Mailbox not found")
-				return &setErr
+				return fail(base.NewSetError("notFound", "Mailbox not found"))
 			}
 			if current.Role != nil && strings.TrimSpace(*current.Role) != "" {
-				setErr := base.NewSetError("forbidden", "Cannot destroy a mailbox with a role")
-				return &setErr
+				return fail(base.NewSetError("forbidden", "Cannot destroy a mailbox with a role"))
 			}
-			// Ensure empty (messages and children).
+			// RFC 8621 section 2.5 distinguishes a non-empty mailbox by
+			// *why* it cannot be removed, so children and emails are checked
+			// separately before the storage-wide "not empty" error is used.
+			mailboxes, err := h.deps.Storage.ListMailboxes(ctx, accountID)
+			if err != nil {
+				return fail(base.NewSetError("serverFail", "Could not list mailboxes"))
+			}
+			for _, mb := range mailboxes {
+				if mb.ParentID != nil && *mb.ParentID == id {
+					return fail(base.NewSetError("mailboxHasChild", "Mailbox still has child mailboxes"))
+				}
+			}
+			emails, err := h.deps.Storage.ListEmails(ctx, accountID, id)
+			if err != nil {
+				return fail(base.NewSetError("serverFail", "Could not list emails in mailbox"))
+			}
+			if len(emails) > 0 && !onDestroyRemoveEmails {
+				return fail(base.NewSetError("mailboxHasEmail", "Mailbox still has emails"))
+			}
+			// With maxMailboxesPerEmail=1 an email in this mailbox belongs to
+			// no other mailbox, so removing the mailbox means destroying it.
+			for _, listed := range emails {
+				if listed == nil || listed.Ref == nil || !strings.EqualFold(listed.Ref.AccountID, accountID) {
+					return fail(base.NewSetError("notFound", "Email not found"))
+				}
+				emailID := listed.Ref.ID
+				originalMeta := base.EmailMetadata(ctx, h.deps, accountID, emailID)
+				if err := h.deps.Metadata.Delete(ctx, accountID, emailID); err != nil {
+					slog.Error("JMAP: failed to delete email metadata during Mailbox/set", "account", accountID, "id", emailID, "err", err)
+					return fail(base.NewSetError("serverFail", "Failed to delete email metadata"))
+				}
+				if err := h.deps.Storage.DeleteEmail(ctx, accountID, emailID); err != nil {
+					if restoreErr := h.deps.Metadata.Save(ctx, originalMeta); restoreErr != nil {
+						slog.Error("JMAP: failed to restore email metadata", "account", accountID, "id", emailID, "err", restoreErr)
+					}
+					return fail(base.NewSetError("serverFail", "Failed to delete email"))
+				}
+				if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, emailID, base.ChangeDestroy); err != nil {
+					return fail(base.NewSetError("serverFail", "Failed to record email change"))
+				}
+			}
 			if err := h.deps.Storage.DeleteMailbox(ctx, accountID, id); err != nil {
 				setErr := base.SetError{}
 				switch {
@@ -278,7 +344,15 @@ func (h *Handler) MailboxChanges(ctx context.Context, accountID string, args jso
 			return err
 		},
 		Changes: func(ctx context.Context, sinceState string, maxChanges *int) (map[string]any, error) {
-			return h.deps.Changes.ChangesFrom(ctx, accountID, base.StateMailbox, sinceState, maxChanges)
+			result, err := h.deps.Changes.ChangesFrom(ctx, accountID, base.StateMailbox, sinceState, maxChanges)
+			if err != nil {
+				return nil, err
+			}
+			// RFC 8621 section 2.2: the shared tracker fingerprints whole
+			// objects, so this server cannot tell whether a change affected
+			// only the count properties. It MUST then report null.
+			result["updatedProperties"] = nil
+			return result, nil
 		},
 	})
 }
@@ -323,9 +397,9 @@ func parseMailboxFilter(args json.RawMessage) (*mailboxFilter, error) {
 	return &filter, nil
 }
 
-// queryMailboxIDs refreshes the object state and returns the full filtered
-// result set, before pagination.
-func (h *Handler) queryMailboxIDs(ctx context.Context, accountID string, filter *mailboxFilter) ([]string, error) {
+// queryMailboxIDs refreshes the object state and returns the full filtered and
+// sorted result set, before pagination.
+func (h *Handler) queryMailboxIDs(ctx context.Context, accountID string, args json.RawMessage, filter *mailboxFilter, ascending bool) ([]string, error) {
 	mailboxes := h.getMailboxes(ctx, accountID)
 	if _, err := h.syncMailboxState(ctx, accountID, mailboxes); err != nil {
 		return nil, err
@@ -370,6 +444,41 @@ func (h *Handler) queryMailboxIDs(ctx context.Context, accountID string, filter 
 		}
 		mailboxes = filtered
 	}
+	// RFC 8621 section 2.3 requires both sortOrder and name sorts. Storage
+	// already returns the default ascending order; an explicit comparator
+	// overrides it. The id is always the final tie-breaker so the ordering is
+	// stable even when two mailboxes share a sort key.
+	var query struct {
+		Sort []struct {
+			Property string `json:"property"`
+		} `json:"sort"`
+	}
+	if err := json.Unmarshal(args, &query); err != nil {
+		return nil, base.Errorf("invalidArguments", "query arguments must be an object")
+	}
+	if len(query.Sort) > 0 {
+		property := query.Sort[0].Property
+		sort.SliceStable(mailboxes, func(i, j int) bool {
+			order := 0
+			switch property {
+			case "sortOrder":
+				order = cmp.Compare(mailboxes[i].SortOrder, mailboxes[j].SortOrder)
+				if order == 0 {
+					order = strings.Compare(strings.ToLower(mailboxes[i].Name), strings.ToLower(mailboxes[j].Name))
+				}
+			case "name":
+				order = strings.Compare(strings.ToLower(mailboxes[i].Name), strings.ToLower(mailboxes[j].Name))
+			}
+			if order == 0 {
+				return mailboxes[i].ID < mailboxes[j].ID
+			}
+			if ascending {
+				return order < 0
+			}
+			return order > 0
+		})
+	}
+
 	ids := make([]string, len(mailboxes))
 	for i, mb := range mailboxes {
 		ids[i] = mb.ID
@@ -389,15 +498,16 @@ func (h *Handler) MailboxQueryChanges(ctx context.Context, accountID string, arg
 // ordering and query state are derived identically in both methods.
 func (h *Handler) querySpec() base.QuerySpec {
 	return base.QuerySpec{
-		// Mailbox ordering comes from storage; no sort is implemented yet.
+		// RFC 8621 section 2.3 requires these two sort properties.
+		SortProperties: map[string]bool{"sortOrder": true, "name": true},
 		Allowed: base.ArgumentSet("accountId", "filter", "sort", "position", "anchor", "anchorOffset",
 			"limit", "calculateTotal"),
 		ChangesAllowed: base.ArgumentSet("accountId", "filter", "sinceQueryState", "sort", "maxChanges",
 			"upToId", "calculateTotal"),
 		ParseFilter: func(args json.RawMessage) (any, error) { return parseMailboxFilter(args) },
-		AllIDs: func(ctx context.Context, accountID string, _ json.RawMessage, filter any, _ bool) ([]string, error) {
+		AllIDs: func(ctx context.Context, accountID string, args json.RawMessage, filter any, ascending bool) ([]string, error) {
 			typed, _ := filter.(*mailboxFilter)
-			return h.queryMailboxIDs(ctx, accountID, typed)
+			return h.queryMailboxIDs(ctx, accountID, args, typed, ascending)
 		},
 		Tracker: h.deps.Changes,
 		Kind:    base.StateMailboxQuery,
