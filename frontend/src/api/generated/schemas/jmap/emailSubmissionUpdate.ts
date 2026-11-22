@@ -49,10 +49,6 @@
  * - Blob: `copy`
  * OpenAPI spec version: 1.0.0
  */
-import type { EmailSubmissionUpdateUndoStatus } from './emailSubmissionUpdateUndoStatus';
-import type { UTCDate } from './uTCDate';
+import type { PatchObject } from './patchObject';
 
-export interface EmailSubmissionUpdate {
-  sendAt?: UTCDate;
-  undoStatus?: EmailSubmissionUpdateUndoStatus;
-}
+export type EmailSubmissionUpdate = PatchObject;

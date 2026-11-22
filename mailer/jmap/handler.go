@@ -84,6 +84,13 @@ func (h *Handler) SetVacationStore(store usermanager.VacationStore) {
 	}
 }
 
+// SetMaxSubmissionSize wires the configured upload limit into EmailSubmission's
+// tooLarge SetError. The same limit is advertised in the Session as
+// maxSizeUpload/maxSizeAttachmentsPerEmail.
+func (h *Handler) SetMaxSubmissionSize(bytes uint64) {
+	h.submissionMethods.SetMaxMessageSize(bytes)
+}
+
 // AccountSupportsCapability reports the capabilities the Session advertises
 // for an account. Every Emissary account supports the same data-type
 // capabilities, so this is the single source shared with the dispatcher's

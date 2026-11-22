@@ -287,7 +287,8 @@ func TestEmailSubmissionUsesNonPrimaryIdentityRFC8621_7_5(t *testing.T) {
 		t.Errorf("sent From = %q, want %q", capture.Sent[0].From.Address, alias)
 	}
 
-	// An unknown id is an explicit notFound SetError, not a silent fallback.
+	// An unknown id is an explicit invalidProperties SetError (RFC 8621 7.5),
+	// not a silent fallback.
 	unknownRaw, err := h.EmailSubmissionSet(ctx, accountID, json.RawMessage(fmt.Sprintf(
 		`{"accountId":%q,"create":{"s2":{"identityId":"missing","emailId":"draft1"}}}`, accountID)))
 	if err != nil {
@@ -299,7 +300,7 @@ func TestEmailSubmissionUsesNonPrimaryIdentityRFC8621_7_5(t *testing.T) {
 	if err := json.Unmarshal(unknownRaw, &unknown); err != nil {
 		t.Fatalf("unmarshal unknown response: %v", err)
 	}
-	if unknown.NotCreated["s2"].Type != "notFound" || len(capture.Sent) != 1 {
+	if unknown.NotCreated["s2"].Type != "invalidProperties" || len(capture.Sent) != 1 {
 		t.Errorf("unknown identity response = %s, sent = %d", unknownRaw, len(capture.Sent))
 	}
 }

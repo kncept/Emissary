@@ -12,8 +12,9 @@ func TestSetErrorVocabulary(t *testing.T) {
 	types := []string{
 		"forbidden", "notFound", "invalidProperties", "invalidPatch",
 		"stateMismatch", "alreadyExists", "overQuota", "tooLarge",
-		"mailboxHasChild", "mailboxHasEmail", "forbiddenFrom", "rateLimit",
-		"willDestroy", "singleton", "blobNotFound", "serverFail",
+		"mailboxHasChild", "mailboxHasEmail", "invalidEmail", "tooManyRecipients",
+		"forbiddenMailFrom", "forbiddenFrom", "forbiddenToSend", "cannotUnsend",
+		"rateLimit", "willDestroy", "singleton", "blobNotFound", "serverFail",
 		"invalidRecipients", "noRecipients", "invalidArguments",
 	}
 	for _, typ := range types {
@@ -75,6 +76,32 @@ func TestSetErrorVocabulary(t *testing.T) {
 		{
 			name: "forbiddenFrom", err: NewSetError("forbiddenFrom", "bad sender"),
 			want: map[string]any{"type": "forbiddenFrom", "description": "bad sender"},
+		},
+		{
+			name: "invalidEmail", err: InvalidEmail("bad Email properties", "to", "subject"),
+			want: map[string]any{
+				"type": "invalidEmail", "description": "bad Email properties",
+				"properties": []any{"to", "subject"},
+			},
+		},
+		{
+			name: "tooManyRecipients", err: TooManyRecipients("too many", 50),
+			want: map[string]any{"type": "tooManyRecipients", "description": "too many", "maxRecipients": float64(50)},
+		},
+		{
+			name: "invalidRecipients", err: InvalidRecipients("bad rcptTo", []string{"nope", "also-nope"}),
+			want: map[string]any{
+				"type": "invalidRecipients", "description": "bad rcptTo",
+				"invalidRecipients": []any{"nope", "also-nope"},
+			},
+		},
+		{
+			name: "cannotUnsend", err: NewSetError("cannotUnsend", "already relayed"),
+			want: map[string]any{"type": "cannotUnsend", "description": "already relayed"},
+		},
+		{
+			name: "blobNotFound", err: BlobNotFound("missing blobs", []string{"b1"}),
+			want: map[string]any{"type": "blobNotFound", "description": "missing blobs", "notFound": []any{"b1"}},
 		},
 		{
 			name: "rateLimit", err: NewSetError("rateLimit", "slow down"),

@@ -79,24 +79,39 @@ func (s *AwsSesSender) Send(ctx context.Context, message *email.UserEmail) error
 	}
 
 	// The envelope carries every recipient, including Bcc (which never appears
-	// in the raw message headers).
-	var envelope []email.Address
-	for _, list := range [][]email.Address{message.To, message.Cc, message.Bcc} {
-		envelope = append(envelope, list...)
+	// in the raw message headers). A JMAP-supplied envelope is authoritative,
+	// so SMTP-only rcptTo addresses are delivered too.
+	destinations := email.BareAddresses(headerRecipients(message))
+	if message.SubmissionEnvelope != nil && len(message.SubmissionEnvelope.RcptTo) > 0 {
+		destinations = destinations[:0]
+		for _, recipient := range message.SubmissionEnvelope.RcptTo {
+			if address := bareAddress(recipient.Email); address != "" {
+				destinations = append(destinations, address)
+			}
+			if len(recipient.Parameters) > 0 {
+				slog.Warn("SES: ESMTP envelope parameters are not supported; address only",
+					"recipient", recipient.Email)
+			}
+		}
+	}
+	if message.SubmissionEnvelope != nil && strings.TrimSpace(message.SubmissionEnvelope.MailFrom.Email) != "" && !isAutomaticReply(message) {
+		if address := bareAddress(message.SubmissionEnvelope.MailFrom.Email); address != "" {
+			source = address
+		}
 	}
 
-	slog.Debug("SES: sending raw email", "from", from, "source", source, "recipients", len(envelope), "subject", message.Subject)
+	slog.Debug("SES: sending raw email", "from", from, "source", source, "recipients", len(destinations), "subject", message.Subject)
 	_, err := s.client.SendRawEmail(ctx, &ses.SendRawEmailInput{
 		Source:       aws.String(source),
-		Destinations: email.BareAddresses(envelope),
+		Destinations: destinations,
 		RawMessage: &types.RawMessage{
 			Data: wire,
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("send raw email with SES: %w", err)
+		return ClassifySendError(fmt.Errorf("send raw email with SES: %w", err))
 	}
-	slog.Debug("SES: raw email sent", "from", from, "source", source, "recipients", len(envelope))
+	slog.Debug("SES: raw email sent", "from", from, "source", source, "recipients", len(destinations))
 	return nil
 }
 

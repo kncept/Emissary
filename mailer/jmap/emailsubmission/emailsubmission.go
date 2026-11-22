@@ -15,6 +15,14 @@ const (
 	MethodChanges      = "EmailSubmission/changes"
 	MethodQuery        = "EmailSubmission/query"
 	MethodQueryChanges = "EmailSubmission/queryChanges"
+
+	// defaultMaxMessageSize matches config.DefaultMaxFileSize. The composition
+	// root overrides it with the configured upload limit, which is also the
+	// advertised maxSizeUpload/maxSizeAttachmentsPerEmail.
+	defaultMaxMessageSize uint64 = 10 << 20
+	// defaultMaxRecipients mirrors the SES per-message destination cap. A
+	// tooManyRecipients SetError always carries this limit (RFC 8621 7.5).
+	defaultMaxRecipients uint64 = 50
 )
 
 // Methods returns the method names implemented by this package.
@@ -47,15 +55,35 @@ type EmailSetter interface {
 
 // Handler implements the EmailSubmission methods.
 type Handler struct {
-	deps     *base.Deps
-	emailSet EmailSetter
+	deps           *base.Deps
+	emailSet       EmailSetter
+	maxMessageSize uint64
+	maxRecipients  uint64
 }
 
 // New creates an EmailSubmission method handler. emailSet performs the
 // implicit Email/set call after a successful submission.
 func New(deps *base.Deps, emailSet EmailSetter) *Handler {
-	return &Handler{deps: deps, emailSet: emailSet}
+	return &Handler{
+		deps:           deps,
+		emailSet:       emailSet,
+		maxMessageSize: defaultMaxMessageSize,
+		maxRecipients:  defaultMaxRecipients,
+	}
 }
+
+// SetMaxMessageSize overrides the octet limit used for the tooLarge SetError.
+// Zero restores the default.
+func (h *Handler) SetMaxMessageSize(bytes uint64) {
+	if bytes == 0 {
+		h.maxMessageSize = defaultMaxMessageSize
+		return
+	}
+	h.maxMessageSize = bytes
+}
+
+// MaxMessageSize returns the octet limit reported by tooLarge SetErrors.
+func (h *Handler) MaxMessageSize() uint64 { return h.maxMessageSize }
 
 var _ MethodHandler = (*Handler)(nil)
 var _ ImplicitSetHandler = (*Handler)(nil)

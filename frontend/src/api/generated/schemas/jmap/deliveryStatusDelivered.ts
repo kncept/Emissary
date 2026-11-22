@@ -55,7 +55,7 @@ export type DeliveryStatusDelivered = typeof DeliveryStatusDelivered[keyof typeo
 
 export const DeliveryStatusDelivered = {
   queued: 'queued',
-  true: 'true',
-  false: 'false',
+  yes: 'yes',
+  no: 'no',
   unknown: 'unknown',
 } as const;

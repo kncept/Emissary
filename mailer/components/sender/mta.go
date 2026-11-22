@@ -80,11 +80,20 @@ func (s *MtaSender) Send(ctx context.Context, message *email.UserEmail) error {
 	// delivery failures and other responders cannot start a mail loop.
 	if value := strings.TrimSpace(message.AutoSubmitted); value != "" && !strings.EqualFold(value, "no") {
 		slog.Debug("mta: sending automatic response with null envelope sender", "from", message.From.Address, "subject", message.Subject)
-		return s.deliver(ctx, "", helloNameFromAddress(message.From.Address), message)
+		return ClassifySendError(s.deliver(ctx, "", nil, helloNameFromAddress(message.From.Address), message))
+	}
+	var envelopeParams map[string]*string
+	if message.SubmissionEnvelope != nil {
+		// An empty MAIL FROM is the RFC 5321 null reverse path. Keep the
+		// From-derived HELO/DMARC identity, but still pass any ESMTP params.
+		if address := bareAddress(message.SubmissionEnvelope.MailFrom.Email); address != "" {
+			envelopeFrom = address
+		}
+		envelopeParams = message.SubmissionEnvelope.MailFrom.Parameters
 	}
 	slog.Debug("mta: sending message", "from", envelopeFrom, "subject", message.Subject)
 	s.checkDMARC(ctx, envelopeFrom, envelopeFrom)
-	return s.deliver(ctx, envelopeFrom, helloNameFromAddress(envelopeFrom), message)
+	return ClassifySendError(s.deliver(ctx, envelopeFrom, envelopeParams, helloNameFromAddress(envelopeFrom), message))
 }
 
 // checkDMARC is a sender-side pre-flight check using mox's DMARC
@@ -173,7 +182,7 @@ func (s *MtaSender) SendBounce(ctx context.Context, originalMessageID, bounceSen
 		subject = "Mail delivery failed: " + originalMessage.Subject
 	}
 	body := fmt.Sprintf("Delivery to %s failed.\nBounce type: %s\nOriginal message ID: %s\n", recipient, bounceType, originalMessageID)
-	return s.deliver(ctx, "", helloNameFromAddress(bounceSender), &email.UserEmail{
+	return s.deliver(ctx, "", nil, helloNameFromAddress(bounceSender), &email.UserEmail{
 		From:    email.Address{Address: bounceSender},
 		To:      []email.Address{{Address: recipient}},
 		Subject: subject,
@@ -182,7 +191,7 @@ func (s *MtaSender) SendBounce(ctx context.Context, originalMessageID, bounceSen
 	})
 }
 
-func (s *MtaSender) deliver(ctx context.Context, envelopeFrom, helloName string, message *email.UserEmail) error {
+func (s *MtaSender) deliver(ctx context.Context, envelopeFrom string, envelopeParams map[string]*string, helloName string, message *email.UserEmail) error {
 	recipients, err := groupRecipients(message)
 	if err != nil {
 		return err
@@ -203,14 +212,14 @@ func (s *MtaSender) deliver(ctx context.Context, envelopeFrom, helloName string,
 
 	var errs []error
 	for _, domain := range domains {
-		if err := s.deliverToDomain(ctx, domain, envelopeFrom, helloName, recipients[domain], wire); err != nil {
+		if err := s.deliverToDomain(ctx, domain, envelopeFrom, envelopeParams, helloName, recipients[domain], wire); err != nil {
 			errs = append(errs, fmt.Errorf("deliver to %s: %w", domain, err))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-func (s *MtaSender) deliverToDomain(ctx context.Context, domain, envelopeFrom, helloName string, recipients []string, wire []byte) error {
+func (s *MtaSender) deliverToDomain(ctx context.Context, domain, envelopeFrom string, envelopeParams map[string]*string, helloName string, recipients []smtpRecipient, wire []byte) error {
 	hosts, lookupErr := s.mxHosts(ctx, domain)
 	if lookupErr != nil {
 		slog.Warn("mta: MX lookup failed; trying domain as mail host", "domain", domain, "err", lookupErr)
@@ -219,7 +228,7 @@ func (s *MtaSender) deliverToDomain(ctx context.Context, domain, envelopeFrom, h
 
 	var errs []error
 	for _, host := range hosts {
-		if err := s.deliverToHost(ctx, host, envelopeFrom, helloName, recipients, wire); err != nil {
+		if err := s.deliverToHost(ctx, host, envelopeFrom, envelopeParams, helloName, recipients, wire); err != nil {
 			errs = append(errs, fmt.Errorf("mx %s: %w", host, err))
 			continue
 		}
@@ -258,7 +267,7 @@ func (s *MtaSender) mxHosts(ctx context.Context, domain string) ([]string, error
 	return hosts, nil
 }
 
-func (s *MtaSender) deliverToHost(ctx context.Context, host, envelopeFrom, helloName string, recipients []string, wire []byte) error {
+func (s *MtaSender) deliverToHost(ctx context.Context, host, envelopeFrom string, envelopeParams map[string]*string, helloName string, recipients []smtpRecipient, wire []byte) error {
 	addr := net.JoinHostPort(host, s.port)
 	conn, err := s.dial(ctx, "tcp", addr)
 	if err != nil {
@@ -286,12 +295,12 @@ func (s *MtaSender) deliverToHost(ctx context.Context, host, envelopeFrom, hello
 			return fmt.Errorf("smtp starttls: %w", err)
 		}
 	}
-	if err := client.Mail(envelopeFrom); err != nil {
+	if err := smtpEnvelopeCommand(client, "MAIL FROM", envelopeFrom, envelopeParams); err != nil {
 		return fmt.Errorf("smtp mail from: %w", err)
 	}
 	for _, recipient := range recipients {
-		if err := client.Rcpt(recipient); err != nil {
-			return fmt.Errorf("smtp rcpt to %s: %w", recipient, err)
+		if err := smtpEnvelopeCommand(client, "RCPT TO", recipient.address, recipient.parameters); err != nil {
+			return fmt.Errorf("smtp rcpt to %s: %w", recipient.address, err)
 		}
 	}
 
@@ -314,30 +323,105 @@ func (s *MtaSender) deliverToHost(ctx context.Context, host, envelopeFrom, hello
 	return nil
 }
 
-// groupRecipients returns the bare envelope recipients for each domain,
-// preserving header order and removing duplicates across To, Cc and Bcc.
-func groupRecipients(message *email.UserEmail) (map[string][]string, error) {
-	groups := make(map[string][]string)
+// smtpRecipient is one RCPT TO address with its ESMTP parameters.
+type smtpRecipient struct {
+	address    string
+	parameters map[string]*string
+}
+
+// groupRecipients returns the bare envelope recipients for each domain. A JMAP
+// submission envelope is authoritative (including SMTP-only rcptTo addresses);
+// otherwise the To, Cc and Bcc headers are used in that order.
+func groupRecipients(message *email.UserEmail) (map[string][]smtpRecipient, error) {
+	groups := make(map[string][]smtpRecipient)
 	seen := make(map[string]bool)
-	for _, list := range [][]email.Address{message.To, message.Cc, message.Bcc} {
-		for _, address := range list {
-			recipient := bareAddress(address.Address)
-			if recipient == "" {
-				continue
+	add := func(address string, parameters map[string]*string) error {
+		recipient := bareAddress(address)
+		if recipient == "" {
+			return nil
+		}
+		key := strings.ToLower(recipient)
+		if seen[key] {
+			return nil
+		}
+		domain := domainOfAddress(recipient)
+		if domain == "" {
+			return fmt.Errorf("invalid recipient address %q", address)
+		}
+		seen[key] = true
+		groups[domain] = append(groups[domain], smtpRecipient{address: recipient, parameters: parameters})
+		return nil
+	}
+
+	if message.SubmissionEnvelope != nil && len(message.SubmissionEnvelope.RcptTo) > 0 {
+		for _, recipient := range message.SubmissionEnvelope.RcptTo {
+			if err := add(recipient.Email, recipient.Parameters); err != nil {
+				return nil, err
 			}
-			key := strings.ToLower(recipient)
-			if seen[key] {
-				continue
-			}
-			domain := domainOfAddress(recipient)
-			if domain == "" {
-				return nil, fmt.Errorf("invalid recipient address %q", address.Address)
-			}
-			seen[key] = true
-			groups[domain] = append(groups[domain], recipient)
+		}
+		return groups, nil
+	}
+	for _, address := range headerRecipients(message) {
+		if err := add(address.Address, nil); err != nil {
+			return nil, err
 		}
 	}
 	return groups, nil
+}
+
+// smtpEnvelopeCommand issues MAIL FROM or RCPT TO. The standard library
+// client's helpers cannot express ESMTP parameters, so commands carrying
+// parameters use the underlying text protocol connection directly.
+func smtpEnvelopeCommand(client *smtp.Client, command, address string, parameters map[string]*string) error {
+	if len(parameters) == 0 {
+		if command == "MAIL FROM" {
+			return client.Mail(address)
+		}
+		return client.Rcpt(address)
+	}
+	if err := client.Text.PrintfLine("%s:<%s>%s", command, address, smtpParameters(parameters)); err != nil {
+		return err
+	}
+	_, _, err := client.Text.ReadResponse(25)
+	return err
+}
+
+func smtpParameters(parameters map[string]*string) string {
+	names := make([]string, 0, len(parameters))
+	for name := range parameters {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, name := range names {
+		b.WriteByte(' ')
+		b.WriteString(xtext(name))
+		if value := parameters[name]; value != nil {
+			b.WriteByte('=')
+			b.WriteString(xtext(*value))
+		}
+	}
+	return b.String()
+}
+
+// xtext encodes a parameter as required by RFC 3461. JMAP removes xtext
+// encoding from values, so it is restored here before putting them on the wire.
+func xtext(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		if r <= 0x7e && r >= 0x21 && r != '+' {
+			b.WriteRune(r)
+			continue
+		}
+		if r > 0x7f {
+			for _, byteValue := range []byte(string(r)) {
+				fmt.Fprintf(&b, "+%02X", byteValue)
+			}
+			continue
+		}
+		fmt.Fprintf(&b, "+%02X", r)
+	}
+	return b.String()
 }
 
 func bareAddress(value string) string {

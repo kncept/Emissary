@@ -41,12 +41,7 @@ func submitDraft(t *testing.T, handler *Handler, accountID, creationID string) s
 	}
 	var resp struct {
 		Created map[string]struct {
-			ID       string `json:"id"`
-			EmailID  string `json:"emailId"`
-			Envelope struct {
-				MailFrom struct{ Email string }   `json:"mailFrom"`
-				RcptTo   []struct{ Email string } `json:"rcptTo"`
-			} `json:"envelope"`
+			ID string `json:"id"`
 		} `json:"created"`
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
@@ -56,14 +51,38 @@ func submitDraft(t *testing.T, handler *Handler, accountID, creationID string) s
 	if !ok || created.ID == "" {
 		t.Fatalf("created = %+v, want a submission for %q", resp.Created, creationID)
 	}
-	if created.EmailID != "draft1" {
-		t.Errorf("emailId = %q, want draft1", created.EmailID)
+	// A /set created entry only carries server-set properties; fetch the full
+	// record to verify the stored Identity, Email and generated envelope.
+	got, err := handler.EmailSubmissionGet(ctx, accountID,
+		json.RawMessage(fmt.Sprintf(`{"ids":[%q]}`, created.ID)))
+	if err != nil {
+		t.Fatalf("EmailSubmissionGet() error = %v", err)
 	}
-	if created.Envelope.MailFrom.Email != accountID {
-		t.Errorf("mailFrom = %q, want %q", created.Envelope.MailFrom.Email, accountID)
+	var getResp struct {
+		List []struct {
+			ID       string `json:"id"`
+			EmailID  string `json:"emailId"`
+			Envelope struct {
+				MailFrom struct{ Email string }   `json:"mailFrom"`
+				RcptTo   []struct{ Email string } `json:"rcptTo"`
+			} `json:"envelope"`
+		} `json:"list"`
 	}
-	if len(created.Envelope.RcptTo) != 1 || created.Envelope.RcptTo[0].Email != "bob@example.com" {
-		t.Errorf("rcptTo = %+v, want bob@example.com", created.Envelope.RcptTo)
+	if err := json.Unmarshal(got, &getResp); err != nil {
+		t.Fatalf("unmarshal get response: %v", err)
+	}
+	if len(getResp.List) != 1 {
+		t.Fatalf("get list = %+v, want one record", getResp.List)
+	}
+	record := getResp.List[0]
+	if record.EmailID != "draft1" {
+		t.Errorf("emailId = %q, want draft1", record.EmailID)
+	}
+	if record.Envelope.MailFrom.Email != accountID {
+		t.Errorf("mailFrom = %q, want %q", record.Envelope.MailFrom.Email, accountID)
+	}
+	if len(record.Envelope.RcptTo) != 1 || record.Envelope.RcptTo[0].Email != "bob@example.com" {
+		t.Errorf("rcptTo = %+v, want bob@example.com", record.Envelope.RcptTo)
 	}
 	return created.ID
 }
@@ -229,8 +248,8 @@ func TestEmailSubmissionPhase4ColdStart(t *testing.T) {
 	}
 }
 
-// TestEmailSubmissionPhase4UpdateDestroy verifies that update and destroy act
-// on the durable record and advance the type state.
+// TestEmailSubmissionPhase4UpdateDestroy verifies that an immediate submission
+// cannot be unsent, while destroy still removes the durable record.
 func TestEmailSubmissionPhase4UpdateDestroy(t *testing.T) {
 	const accountID = "alice@example.com"
 	handler, _ := newSubmissionHandler(t, accountID)
@@ -245,17 +264,16 @@ func TestEmailSubmissionPhase4UpdateDestroy(t *testing.T) {
 		t.Fatalf("EmailSubmissionSet(update) error = %v", err)
 	}
 	var updateResp struct {
-		Updated map[string]struct {
-			UndoStatus string `json:"undoStatus"`
-		} `json:"updated"`
-		NotUpdated map[string]interface{} `json:"notUpdated"`
+		Updated    map[string]interface{} `json:"updated"`
+		NotUpdated map[string]struct {
+			Type string `json:"type"`
+		} `json:"notUpdated"`
 	}
 	if err := json.Unmarshal(updateResult, &updateResp); err != nil {
 		t.Fatalf("unmarshal update response: %v", err)
 	}
-	updated, ok := updateResp.Updated[subID]
-	if !ok || updated.UndoStatus != "canceled" || len(updateResp.NotUpdated) != 0 {
-		t.Fatalf("update response = %+v, want %q updated to canceled", updateResp, subID)
+	if len(updateResp.Updated) != 0 || updateResp.NotUpdated[subID].Type != "cannotUnsend" {
+		t.Fatalf("update response = %+v, want %q rejected with cannotUnsend", updateResp, subID)
 	}
 
 	getResult, err := handler.EmailSubmissionGet(ctx, accountID,
@@ -271,8 +289,8 @@ func TestEmailSubmissionPhase4UpdateDestroy(t *testing.T) {
 	if err := json.Unmarshal(getResult, &getResp); err != nil {
 		t.Fatalf("unmarshal get response: %v", err)
 	}
-	if len(getResp.List) != 1 || getResp.List[0].UndoStatus != "canceled" {
-		t.Fatalf("after update = %+v, want undoStatus canceled", getResp.List)
+	if len(getResp.List) != 1 || getResp.List[0].UndoStatus != "final" {
+		t.Fatalf("after update = %+v, want undoStatus to remain final", getResp.List)
 	}
 
 	destroyArgs := json.RawMessage(fmt.Sprintf(

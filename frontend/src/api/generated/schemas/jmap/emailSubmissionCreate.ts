@@ -53,6 +53,11 @@ import type { Envelope } from './envelope';
 import type { IdOrCreationId } from './idOrCreationId';
 import type { UTCDate } from './uTCDate';
 
+/**
+ * `sendAt` is present for schema parity with RFC 8621, but the Session
+ * advertises `maxDelayedSend: 0`. Supplying it returns the documented
+ * `invalidArguments` method error with a description.
+ */
 export interface EmailSubmissionCreate {
   identityId: IdOrCreationId;
   emailId: IdOrCreationId;

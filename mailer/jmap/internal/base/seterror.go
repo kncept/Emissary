@@ -4,11 +4,14 @@ package base
 // uses this type so the JSON shape (and the optional RFC-defined fields) is
 // identical across all data types.
 type SetError struct {
-	Type        string   `json:"type"`
-	Description string   `json:"description"`
-	Properties  []string `json:"properties,omitempty"`
-	ExistingID  string   `json:"existingId,omitempty"`
-	MaxSize     *uint64  `json:"maxSize,omitempty"`
+	Type              string   `json:"type"`
+	Description       string   `json:"description"`
+	Properties        []string `json:"properties,omitempty"`
+	ExistingID        string   `json:"existingId,omitempty"`
+	MaxSize           *uint64  `json:"maxSize,omitempty"`
+	MaxRecipients     *uint64  `json:"maxRecipients,omitempty"`
+	InvalidRecipients []string `json:"invalidRecipients,omitempty"`
+	NotFound          []string `json:"notFound,omitempty"`
 }
 
 // setErrorTypes enumerates every SetError type the server may emit. The core
@@ -31,10 +34,15 @@ var setErrorTypes = map[string]bool{
 	"alreadyExists": true,
 	"stateMismatch": true,
 	// RFC 8621 mail extensions.
-	"mailboxHasChild": true,
-	"mailboxHasEmail": true,
-	"forbiddenFrom":   true,
-	"blobNotFound":    true,
+	"mailboxHasChild":    true,
+	"mailboxHasEmail":    true,
+	"invalidEmail":       true,
+	"tooManyRecipients":  true,
+	"forbiddenMailFrom":  true,
+	"forbiddenFrom":      true,
+	"forbiddenToSend":    true,
+	"cannotUnsend":       true,
+	"blobNotFound":       true,
 	// Documented server extensions used in existing /set responses.
 	"serverFail":        true,
 	"invalidRecipients": true,
@@ -67,4 +75,27 @@ func AlreadyExists(description, existingID string) SetError {
 // "maxSize" field when this type is used for EmailSubmission/create.
 func TooLarge(description string, maxSize uint64) SetError {
 	return SetError{Type: "tooLarge", Description: description, MaxSize: &maxSize}
+}
+
+// InvalidEmail builds the RFC 8621 EmailSubmission create SetError. The
+// "properties" field lists every invalid Email property.
+func InvalidEmail(description string, properties ...string) SetError {
+	return SetError{Type: "invalidEmail", Description: description, Properties: append([]string(nil), properties...)}
+}
+
+// TooManyRecipients builds the RFC 8621 SetError carrying the mandatory
+// maxRecipients field.
+func TooManyRecipients(description string, maxRecipients uint64) SetError {
+	return SetError{Type: "tooManyRecipients", Description: description, MaxRecipients: &maxRecipients}
+}
+
+// InvalidRecipients builds the RFC 8621 SetError listing every bad envelope
+// rcptTo address.
+func InvalidRecipients(description string, addresses []string) SetError {
+	return SetError{Type: "invalidRecipients", Description: description, InvalidRecipients: append([]string(nil), addresses...)}
+}
+
+// BlobNotFound builds the RFC 8621 SetError listing missing blob ids.
+func BlobNotFound(description string, ids []string) SetError {
+	return SetError{Type: "blobNotFound", Description: description, NotFound: append([]string(nil), ids...)}
 }

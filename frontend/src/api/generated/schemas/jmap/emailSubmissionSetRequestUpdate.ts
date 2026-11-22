@@ -49,9 +49,9 @@
  * - Blob: `copy`
  * OpenAPI spec version: 1.0.0
  */
-import type { EmailSubmissionUpdate } from './emailSubmissionUpdate';
+import type { PatchObject } from './patchObject';
 
 /**
  * @nullable
  */
-export type EmailSubmissionSetRequestUpdate = {[key: string]: EmailSubmissionUpdate} | null;
+export type EmailSubmissionSetRequestUpdate = {[key: string]: PatchObject} | null;

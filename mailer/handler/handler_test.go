@@ -851,7 +851,7 @@ func TestSendEmailFromRules(t *testing.T) {
 		{"EmailSubmission/set", map[string]interface{}{
 			"accountId": "bob@example.com",
 			"create": map[string]interface{}{
-				"s1": map[string]interface{}{
+				"s3": map[string]interface{}{
 					"identityId": "primary",
 					"emailId":    replyCreatedEmailID,
 					// No envelope - From stays locked to bob
@@ -1238,7 +1238,7 @@ func TestSendEmailWithCCAndBCC(t *testing.T) {
 	}
 
 	// Now submit the email
-	jmapRequest(t, h, userToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
+	submissionResp := jmapRequest(t, h, userToken, []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"}, []JmapMethodCall{
 		{"EmailSubmission/set", map[string]interface{}{
 			"accountId": "bob@example.com",
 			"create": map[string]interface{}{
@@ -1259,7 +1259,7 @@ func TestSendEmailWithCCAndBCC(t *testing.T) {
 	})
 
 	if len(mailSender.Sent) == 0 {
-		t.Fatal("no email was sent")
+		t.Fatalf("no email was sent: %v", submissionResp)
 	}
 	msg := mailSender.Sent[len(mailSender.Sent)-1]
 	if len(msg.To) != 1 || msg.To[0].Address != "dave@example.com" {
@@ -1319,7 +1319,7 @@ func TestSendEmailWithCCAndBCC(t *testing.T) {
 		{"EmailSubmission/set", map[string]interface{}{
 			"accountId": "bob@example.com",
 			"create": map[string]interface{}{
-				"s1": map[string]interface{}{
+				"s2": map[string]interface{}{
 					"identityId": "primary",
 					"emailId":    multiCreatedEmailID,
 					"envelope": map[string]interface{}{

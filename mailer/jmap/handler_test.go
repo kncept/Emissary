@@ -766,8 +766,8 @@ func TestEmailGetExposesThreadHeaders(t *testing.T) {
 
 // TestEmailSubmissionSetLocksFrom exercises the locked-From rule at the JMAP
 // layer: submissions always send as the caller's own account, or as the target
-// account when a User Manager masquerades as it. Client-supplied senders
-// (draft From header and envelope mailFrom) are ignored.
+// account when a User Manager masquerades as it. A forged draft From header is
+// ignored, while envelope mailFrom must match the selected Identity.
 func TestEmailSubmissionSetLocksFrom(t *testing.T) {
 	const (
 		caller     = "alice@example.com"
@@ -799,10 +799,17 @@ func TestEmailSubmissionSetLocksFrom(t *testing.T) {
 			wantFrom:  caller,
 		},
 		{
-			name:      "ignores the envelope mailFrom",
+			name:      "rejects an envelope mailFrom outside the identity",
 			claims:    &auth.Claims{Subject: caller},
 			accountID: caller,
 			mailFrom:  forgedFrom,
+			wantError: "forbiddenMailFrom",
+		},
+		{
+			name:      "accepts an envelope mailFrom matching the identity",
+			claims:    &auth.Claims{Subject: caller},
+			accountID: caller,
+			mailFrom:  caller,
 			wantFrom:  caller,
 		},
 		{
@@ -915,7 +922,13 @@ func TestEmailSubmissionSetChecksFromIdentity(t *testing.T) {
 		{
 			"unverified identity is rejected",
 			stubFromValidator{fmt.Errorf("not verified: %w", identity.ErrNotAllowed)},
-			"forbidden",
+			"forbiddenFrom",
+			false,
+		},
+		{
+			"sending disabled is rejected",
+			stubFromValidator{fmt.Errorf("paused: %w", identity.ErrSendForbidden)},
+			"forbiddenToSend",
 			false,
 		},
 		{

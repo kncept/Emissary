@@ -17,8 +17,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ses"
 )
 
-// ErrNotAllowed means the address is not covered by any verified identity.
-var ErrNotAllowed = errors.New("from address is not a verified email identity")
+var (
+	// ErrNotAllowed means the address is not covered by any verified identity.
+	ErrNotAllowed = errors.New("from address is not a verified email identity")
+	// ErrSendForbidden means sending is temporarily disabled for this account,
+	// independently of the From address. JMAP maps it to forbiddenToSend.
+	ErrSendForbidden = errors.New("sending is not currently permitted")
+)
 
 // Lister is the narrow SES operation needed to enumerate identities. Keeping
 // it an interface makes the validator testable without AWS credentials.

@@ -55,5 +55,5 @@ export type DeliveryStatusDisplayed = typeof DeliveryStatusDisplayed[keyof typeo
 
 export const DeliveryStatusDisplayed = {
   unknown: 'unknown',
-  true: 'true',
+  yes: 'yes',
 } as const;

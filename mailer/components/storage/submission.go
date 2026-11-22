@@ -23,8 +23,8 @@ type SubmissionEnvelope struct {
 }
 
 // SubmissionDelivery is the per-recipient delivery status of a submission. The
-// values are the JMAP enums ("queued"/"true"/"false"/"unknown" and
-// "unknown"/"true"), kept as strings so the storage layer is not coupled to a
+// values are the RFC 8621 enums ("queued"/"yes"/"no"/"unknown" and
+// "unknown"/"yes"), kept as strings so the storage layer is not coupled to a
 // JMAP schema package.
 type SubmissionDelivery struct {
 	SMTPReply string `json:"smtpReply"`
@@ -47,6 +47,11 @@ type SubmissionRecord struct {
 	DeliveryStatus map[string]SubmissionDelivery `json:"deliveryStatus"`
 	DSNBlobIDs     []string                      `json:"dsnBlobIds"`
 	MDNBlobIDs     []string                      `json:"mdnBlobIds"`
+
+	// Relayed is an internal send-completion marker, not a JMAP property. A
+	// record written before Send() is retried if the process dies mid-send;
+	// once Relayed is true a repeated creation id is an idempotent success.
+	Relayed bool `json:"relayed,omitempty"`
 }
 
 // ErrSubmissionConflict reports that another invocation changed the account's

@@ -64,6 +64,22 @@ type Address struct {
 	Address string `json:"address"`
 }
 
+// EnvelopeAddress is one SMTP envelope address and its optional ESMTP
+// parameters. Parameters are produced by JMAP EmailSubmission/set; ordinary
+// messages leave them nil.
+type EnvelopeAddress struct {
+	Email      string             `json:"email"`
+	Parameters map[string]*string `json:"parameters,omitempty"`
+}
+
+// SubmissionEnvelope carries the exact SMTP envelope for an outbound message.
+// It is send-time metadata, not part of the stored RFC 5322 message, so Bcc and
+// SMTP-only rcptTo addresses never leak into the message headers.
+type SubmissionEnvelope struct {
+	MailFrom EnvelopeAddress   `json:"mailFrom"`
+	RcptTo   []EnvelopeAddress `json:"rcptTo"`
+}
+
 // EmailRef identifies a stored message: its storage id and the JMAP
 // account/mailbox that own it. These are metadata about where a message
 // lives, separate from the message content held by UserEmail.
@@ -106,6 +122,11 @@ type UserEmail struct {
 	// AutoSubmitted is the RFC 3834 Auto-Submitted header value. "auto-replied"
 	// marks an automatic response so other responders can avoid mail loops.
 	AutoSubmitted string `json:"autoSubmitted,omitempty"`
+
+	// SubmissionEnvelope is set by EmailSubmission/set when the JMAP envelope
+	// is known. Senders use its rcptTo list (and MAIL FROM when permitted)
+	// instead of deriving the envelope from the To/Cc/Bcc headers.
+	SubmissionEnvelope *SubmissionEnvelope `json:"submissionEnvelope,omitempty"`
 }
 
 // GenerateMessageID returns a globally unique RFC 5322 Message-ID value of the

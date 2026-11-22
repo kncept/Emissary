@@ -713,6 +713,7 @@ var jmapErrorTypes = map[string]bool{
 	"forbidden":                   true,
 	"fromAccountNotFound":         true,
 	"invalidArguments":            true,
+	"invalidPatch":                true,
 	"invalidProperties":           true,
 	"invalidResultReference":      true,
 	"notCreated":                  true,

@@ -228,6 +228,7 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 	}
 	jmapHandler := jmap.NewHandler(emailStore, b.Metadata, userManager, mailSender, fromValidator)
 	jmapHandler.SetVacationStore(b.VacationStore)
+	jmapHandler.SetMaxSubmissionSize(uint64(maxFileSize))
 	jmapHandler.SetSessionChecker(func(ctx context.Context, sid string) bool {
 		_, err := b.Session.Get(ctx, sid)
 		return err == nil

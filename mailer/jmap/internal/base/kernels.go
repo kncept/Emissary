@@ -3,6 +3,7 @@ package base
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"sort"
 )
 
@@ -371,16 +372,32 @@ type SetResult struct {
 	NotDestroyed any
 }
 
+// nullIfEmpty converts an empty map or slice into JSON null, as RFC 8620
+// section 5.3 requires for every /set map with no entries.
+func nullIfEmpty(value any) any {
+	reflected := reflect.ValueOf(value)
+	if !reflected.IsValid() {
+		return nil
+	}
+	switch reflected.Kind() {
+	case reflect.Map, reflect.Slice:
+		if reflected.Len() == 0 {
+			return nil
+		}
+	}
+	return value
+}
+
 // Marshal emits the /set response with null maps for empty results and an
 // array (never null) for destroyed.
 func (r SetResult) Marshal() (json.RawMessage, error) {
 	resp := map[string]any{
-		"created":      r.Created,
-		"updated":      r.Updated,
+		"created":      nullIfEmpty(r.Created),
+		"updated":      nullIfEmpty(r.Updated),
 		"destroyed":    append([]string{}, r.Destroyed...),
-		"notCreated":   r.NotCreated,
-		"notUpdated":   r.NotUpdated,
-		"notDestroyed": r.NotDestroyed,
+		"notCreated":   nullIfEmpty(r.NotCreated),
+		"notUpdated":   nullIfEmpty(r.NotUpdated),
+		"notDestroyed": nullIfEmpty(r.NotDestroyed),
 	}
 	if !r.AccountLess {
 		resp["accountId"] = r.AccountID
