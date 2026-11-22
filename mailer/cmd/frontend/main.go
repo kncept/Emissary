@@ -41,7 +41,14 @@ func main() {
 }
 
 func run() error {
-	ctx := context.Background()
+	// SIGINT/SIGTERM stop accepting new connections and give in-flight
+	// requests a bounded window to finish instead of being cut off mid-reply.
+	// The context is created here (rather than just before ListenAndServe) so
+	// components that own long-lived connections can be released on shutdown;
+	// otherwise http.Server.Shutdown waits for open EventSource streams until
+	// the graceful timeout expires.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	cfg, err := config.Load(ctx)
 	if err != nil {
@@ -82,10 +89,6 @@ func run() error {
 	}
 	server := newHTTPServer(port, h)
 
-	// SIGINT/SIGTERM stop accepting new connections and give in-flight
-	// requests a bounded window to finish instead of being cut off mid-reply.
-	shutdownCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- server.ListenAndServe()
@@ -98,8 +101,11 @@ func run() error {
 			return nil
 		}
 		return fmt.Errorf("serve on %s: %w", port, err)
-	case <-shutdownCtx.Done():
+	case <-ctx.Done():
 		slog.Info("Shutdown signal received", "addr", port)
+		// Cancel the component context first so long-lived subscribers such as
+		// EventSource streams are closed before we wait for connections to drain.
+		stop()
 		gracefulCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := server.Shutdown(gracefulCtx); err != nil {

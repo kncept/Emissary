@@ -24,7 +24,8 @@ type ddbConfigAPI interface {
 
 // DdbConfigStore stores one DynamoDB item per mail identity. The table needs
 // only a string partition key named "id"; the rules live in a "rules" list
-// attribute. Table names are derived from TABLE_PREFIX by mailer/config.
+// attribute. The table name is a fixed suffix of TABLE_PREFIX, which is
+// required for the DDB backend and resolved by mailer/config.
 type DdbConfigStore struct {
 	client    ddbConfigAPI
 	tableName string

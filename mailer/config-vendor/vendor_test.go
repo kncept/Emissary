@@ -78,9 +78,15 @@ func TestSessionAndMetadata(t *testing.T) {
 	if _, err := Session(SessionOptions{}); err == nil {
 		t.Error("Session with no type should fail: a backend must be chosen explicitly")
 	}
+	if _, err := Session(SessionOptions{Type: "ddb"}); err == nil {
+		t.Error("Session(ddb) without a derived table should fail: TABLE_PREFIX is required")
+	}
 
 	if _, err := Metadata(MetadataOptions{}); err == nil {
 		t.Error("Metadata with no type should fail: a backend must be chosen explicitly")
+	}
+	if _, err := Metadata(MetadataOptions{Type: "ddb"}); err == nil {
+		t.Error("Metadata(ddb) without a derived table should fail: TABLE_PREFIX is required")
 	}
 	meta, err := Metadata(MetadataOptions{Type: "memory"})
 	if err != nil {
@@ -103,6 +109,9 @@ func TestUserManagerAndReceiverConfigStore(t *testing.T) {
 	if _, err := UserManager(UserManagerOptions{}); err == nil {
 		t.Error("UserManager with no type should fail: a backend must be chosen explicitly")
 	}
+	if _, err := UserManager(UserManagerOptions{Type: "ddb"}); err == nil {
+		t.Error("UserManager(ddb) without a derived table should fail: TABLE_PREFIX is required")
+	}
 	users, err := UserManager(UserManagerOptions{Type: "none"})
 	if err != nil {
 		t.Fatalf("UserManager(none) error = %v", err)
@@ -113,6 +122,9 @@ func TestUserManagerAndReceiverConfigStore(t *testing.T) {
 
 	if _, err := ReceiverConfigStore(ReceiverConfigStoreOptions{}); err == nil {
 		t.Error("ReceiverConfigStore with no type should fail: a backend must be chosen explicitly")
+	}
+	if _, err := ReceiverConfigStore(ReceiverConfigStoreOptions{Type: "ddb"}); err == nil {
+		t.Error("ReceiverConfigStore(ddb) without a derived table should fail: TABLE_PREFIX is required")
 	}
 	store, err := ReceiverConfigStore(ReceiverConfigStoreOptions{Type: "memory"})
 	if err != nil {

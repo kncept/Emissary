@@ -248,6 +248,11 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 		return err == nil
 	})
 	pushHub.Start(ctx)
+	// http.Server.Shutdown does not cancel active request contexts, so an open
+	// EventSource stream would otherwise keep the graceful drain waiting until
+	// the server's shutdown timeout expires. Close all streams as soon as the
+	// owning context is cancelled.
+	context.AfterFunc(ctx, pushHub.Shutdown)
 	dispatcher := jmap.NewDispatcher(jmapHandler, emailStore, userManager).WithLimits(jmapRequestLimits())
 
 	mux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, r *http.Request) {

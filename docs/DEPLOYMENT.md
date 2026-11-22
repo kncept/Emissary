@@ -46,7 +46,7 @@ AWS, not the application directly):
 | --- | --- | --- |
 | `DOMAIN` | yes | The receiving domain, e.g. `example.com`. |
 | `AWS_REGION` | yes | Region for SES, S3, DynamoDB, API Gateway. |
-| `TABLE_PREFIX` | no | Prefix for DynamoDB table names (default `emissary`, normalized to `emissary-`), applied the same way as the household project. `DDB_TABLE_PREFIX` is accepted as an alias. |
+| `TABLE_PREFIX` | only when a DDB backend is enabled | Prefix for DynamoDB table names; normalized with a trailing `-` unless it already ends in `-` or `_`. There is no default: selecting `METADATA`/`SESSION`/`USER_MANAGER`/`RECEIVER=ddb` without it fails synthesis and startup. `DDB_TABLE_PREFIX` is accepted as an alias. |
 | `SUBDOMAINS` | no | Recipients accepted by the receipt rule: unset → only `DOMAIN`; `*` → `DOMAIN` plus every subdomain; a comma list → `DOMAIN` plus each entry (entries without a dot become `<entry>.<DOMAIN>`). |
 | `S3_BUCKET` | no | Use this existing bucket for inbound mail instead of the created one. |
 | `USERNAME` | no | Administrator username baked into the Lambda env. |
@@ -55,7 +55,6 @@ AWS, not the application directly):
 | `SESSION` | no | Session backend for the deployed app. Unset → CDK passes `memory`. When set to `ddb`, a sessions table is created. |
 | `RECEIVER` | no | Receiver config backend. Unset → CDK passes `s3` (routing files in the mail bucket). When set to `ddb`/`dynamodb`, a receiver table is created for the inbound routing rules. |
 | `RECEIVER_BUCKET` | no | S3 bucket for receiver rules when `RECEIVER=s3` (default: the mail bucket). IAM access is granted on both buckets. |
-| `RECEIVER_TABLE` | no | Override the generated receiver table name (default `<TABLE_PREFIX>receiver`). |
 | `JWT_SECRET` | no | Signing secret for the app. Unset → CDK generates a 64-character secret in Secrets Manager. |
 | `LOG_LEVEL` | no | Minimum `log/slog` level for both application Lambdas (`DEBUG`, `INFO`, `WARN` or `ERROR`, or the equivalent numeric value). Always injected; `ERROR` is used when unset in the current environment. Unrecognised values fall back to `WARN`. |
 
@@ -108,9 +107,9 @@ Skipped (with a warning) unless `mailer/cmd/frontend/bootstrap` exists.
   `SESSION` (default `memory`), `USER_MANAGER` (default `s3`) and
   `RECEIVER` (default `s3`). This is required because `config.Load` no
   longer infers a backend from `TABLE_PREFIX` when several backends have
-  configuration. It also passes the bucket, `TABLE_PREFIX`, the resolved
-  DynamoDB table names (including `RECEIVER_TABLE`/`RECEIVER_REGION` when
-  `RECEIVER=ddb`), domain, admin credentials (password only if provided),
+  configuration. It also passes the bucket, `TABLE_PREFIX` (when set), the
+  DynamoDB region variables for enabled DDB backends (including
+  `RECEIVER_REGION` when `RECEIVER=ddb`), domain, admin credentials (password only if provided),
   `JWT_SECRET` as a Secrets Manager ARN, the JWT audience/issuer, and
   `LOG_LEVEL` (default `ERROR`).
 - Lambda function `emissary-<domain>-s3-receiver`: custom runtime
@@ -125,9 +124,10 @@ Skipped (with a warning) unless `mailer/cmd/frontend/bootstrap` exists.
   `ses:ListIdentities` (account-wide, for the support receiver rules editor),
   read/write on all DynamoDB tables created for the configured backends, and
   read on the JWT secret.
-- DynamoDB tables for application state (pay-per-request), named from `TABLE_PREFIX` the same way as the
-  household project (default prefix `emissary-`). Each table below is created only when its backend is
-  selected and is granted read/write to that shared role:
+- DynamoDB tables for application state (pay-per-request), named as `TABLE_PREFIX` plus a fixed suffix
+  (`metadata`, `sessions`, `users`, `receiver`). There is no default prefix: the deployment fails if a DDB
+  backend is selected without one. Each table below is created only when its backend is selected and is
+  granted read/write to that shared role:
   - `metadata`: per-message metadata (JMAP keywords and `receivedAt`; partition key `id`, sort key
     `userId`, plus the `userId-index` global secondary index for per-user listing; `METADATA=ddb`).
   - `sessions`: refresh tokens (partition key `id`, sort key `userEmail`; `SESSION=ddb`).

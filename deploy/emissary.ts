@@ -64,13 +64,15 @@ const appBootstrap = path.join(appAssetDirectory, 'bootstrap')
 const s3ReceiverAssetDirectory = path.join(__dirname, '..', 'mailer', 'cmd', 's3-receiver')
 const s3ReceiverBootstrap = path.join(s3ReceiverAssetDirectory, 'bootstrap')
 
+// Table names are a configurable prefix plus a fixed suffix. There is no
+// default prefix: a deployment using DynamoDB must set TABLE_PREFIX explicitly.
 function resolveTablePrefix(): string {
-  let tablePrefix = (env.TABLE_PREFIX || env.DDB_TABLE_PREFIX || '').trim()
+  const tablePrefix = (env.TABLE_PREFIX || env.DDB_TABLE_PREFIX || '').trim()
   if (tablePrefix === '') {
-    tablePrefix = 'emissary'
+    return ''
   }
   if (!tablePrefix.endsWith('-') && !tablePrefix.endsWith('_')) {
-    tablePrefix = tablePrefix + '-'
+    return tablePrefix + '-'
   }
   return tablePrefix
 }
@@ -349,13 +351,25 @@ async function emailClientStack(
     effect: iam.Effect.ALLOW,
   }))
 
-  // DynamoDB tables used by the application. Table names are derived from
-  // TABLE_PREFIX the same way as the household project (default "emissary-").
-  // The metadata table is only needed when METADATA selects DynamoDB. Parse
-  // the value the same way as mailer/config: lower-cased, trimmed, with
+  // DynamoDB tables used by the application. Table names are a configurable
+  // prefix plus a fixed suffix; there are no per-table overrides. Parse each
+  // selector the same way as mailer/config: lower-cased, trimmed, with
   // "dynamodb" accepted as an alias for "ddb".
+  const isDdb = (value: string) => value === 'ddb' || value === 'dynamodb'
   const metadataType = (env.METADATA || 'memory').toLowerCase().trim()
-  const usesDdbMetadata = metadataType === 'ddb' || metadataType === 'dynamodb'
+  const sessionType = (env.SESSION || '').toLowerCase().trim()
+  const userManagerType = (env.USER_MANAGER || 'none').toLowerCase().trim()
+  const receiverType = (env.RECEIVER || '').toLowerCase().trim()
+  const usesDdbMetadata = isDdb(metadataType)
+  const usesDdbSession = isDdb(sessionType)
+  const usesDdbUsers = isDdb(userManagerType)
+  const usesDdbReceiver = isDdb(receiverType)
+  // A DDB backend without a prefix has no table to talk to. Fail synthesis
+  // rather than creating unusable tables or an app that cannot start.
+  if (ddbTablePrefix === '' && (usesDdbMetadata || usesDdbSession || usesDdbUsers || usesDdbReceiver)) {
+    throw new Error('TABLE_PREFIX must be set when a DynamoDB backend is enabled (METADATA, SESSION, USER_MANAGER or RECEIVER=ddb)')
+  }
+
   const metadataTableName = `${ddbTablePrefix}metadata`
   if (usesDdbMetadata) {
     const metadataTable = new dynamodb.Table(stack, 'emissary-metadata', {
@@ -376,10 +390,8 @@ async function emailClientStack(
     metadataTable.grantReadWriteData(role)
   }
 
-  const sessionType = (env.SESSION || '').toLowerCase().trim()
-  let sessionTableName = env.SESSION_TABLE || ''
-  if (sessionType === 'ddb' || sessionType === 'dynamodb') {
-    if (sessionTableName === '') sessionTableName = `${ddbTablePrefix}sessions`
+  const sessionTableName = usesDdbSession ? `${ddbTablePrefix}sessions` : ''
+  if (usesDdbSession) {
     const sessionTable = new dynamodb.Table(stack, 'emissary-sessions', {
       tableName: sessionTableName,
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
@@ -390,10 +402,8 @@ async function emailClientStack(
     sessionTable.grantReadWriteData(role)
   }
 
-  const userManagerType = (env.USER_MANAGER || 'none').toLowerCase().trim()
-  let userTableName = env.USER_TABLE || ''
-  if (userManagerType === 'ddb' || userManagerType === 'dynamodb') {
-    if (userTableName === '') userTableName = `${ddbTablePrefix}users`
+  const userTableName = usesDdbUsers ? `${ddbTablePrefix}users` : ''
+  if (usesDdbUsers) {
     const userTable = new dynamodb.Table(stack, 'emissary-users', {
       tableName: userTableName,
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
@@ -408,11 +418,8 @@ async function emailClientStack(
   // partition key is needed: each item holds one identity's rules in a
   // "rules" list. CDK passes S3 unless RECEIVER overrides it, so this table is
   // only created when RECEIVER explicitly selects DynamoDB.
-  const receiverType = (env.RECEIVER || '').toLowerCase().trim()
-  const usesDdbReceiver = receiverType === 'ddb' || receiverType === 'dynamodb'
-  let receiverTableName = env.RECEIVER_TABLE || ''
+  const receiverTableName = usesDdbReceiver ? `${ddbTablePrefix}receiver` : ''
   if (usesDdbReceiver) {
-    if (receiverTableName === '') receiverTableName = `${ddbTablePrefix}receiver`
     const receiverTable = new dynamodb.Table(stack, 'emissary-receiver', {
       tableName: receiverTableName,
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
@@ -424,10 +431,11 @@ async function emailClientStack(
 
   // Selectors are always passed to the app explicitly. config.Load no longer
   // infers a backend when it is omitted, and errors when more than one backend
-  // has configuration (TABLE_PREFIX is always set in a deployment).
+  // has configuration. TABLE_PREFIX is required for DDB backends (checked
+  // above); without DDB it is simply not passed.
   const sessionSelector = env.SESSION || 'memory'
   const userManagerSelector = env.USER_MANAGER || 's3'
-  const receiverSelector = env.RECEIVER || (receiverTableName ? 'ddb' : 's3')
+  const receiverSelector = env.RECEIVER || 's3'
 
   const authUsername = env.USERNAME || ''
   const authPassword = env.PASSWORD || ''
@@ -497,15 +505,14 @@ async function emailClientStack(
     S3_BUCKET: inboundEmailBucketName,
     SENDER: 'aws-ses',
     METADATA: metadataType,
-    TABLE_PREFIX: ddbTablePrefix,
-    ...(usesDdbMetadata ? { DDB_TABLE: metadataTableName } : {}),
+    ...(ddbTablePrefix ? { TABLE_PREFIX: ddbTablePrefix } : {}),
     METADATA_REGION: awsRegion,
     SESSION: sessionSelector,
-    ...(sessionTableName ? { SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
-    ...(userTableName ? { USER_TABLE: userTableName, USER_REGION: awsRegion } : {}),
+    ...(usesDdbSession ? { SESSION_REGION: awsRegion } : {}),
+    ...(usesDdbUsers ? { USER_REGION: awsRegion } : {}),
     RECEIVER: receiverSelector,
     RECEIVER_BUCKET: receiverBucketName,
-    ...(receiverTableName ? { RECEIVER_TABLE: receiverTableName, RECEIVER_REGION: awsRegion } : {}),
+    ...(usesDdbReceiver ? { RECEIVER_REGION: awsRegion } : {}),
     ...(authPassword ? { PASSWORD: authPassword } : {}),
     // Pass the JWT secret ARN - the application will resolve it at runtime
     JWT_SECRET: jwtSecret.secretArn,
@@ -642,15 +649,14 @@ async function emailClientStack(
       S3_BUCKET: inboundEmailBucketName,
       SENDER: 'aws-ses',
       METADATA: metadataType,
-      TABLE_PREFIX: ddbTablePrefix,
-      ...(usesDdbMetadata ? { DDB_TABLE: metadataTableName } : {}),
+      ...(ddbTablePrefix ? { TABLE_PREFIX: ddbTablePrefix } : {}),
       METADATA_REGION: awsRegion,
       SESSION: sessionSelector,
-      ...(sessionTableName ? { SESSION_TABLE: sessionTableName, SESSION_REGION: awsRegion } : {}),
-      ...(userTableName ? { USER_TABLE: userTableName, USER_REGION: awsRegion } : {}),
+      ...(usesDdbSession ? { SESSION_REGION: awsRegion } : {}),
+      ...(usesDdbUsers ? { USER_REGION: awsRegion } : {}),
       RECEIVER: receiverSelector,
       RECEIVER_BUCKET: receiverBucketName,
-      ...(receiverTableName ? { RECEIVER_TABLE: receiverTableName, RECEIVER_REGION: awsRegion } : {}),
+      ...(usesDdbReceiver ? { RECEIVER_REGION: awsRegion } : {}),
       ...(authPassword ? { PASSWORD: authPassword } : {}),
       JWT_SECRET: jwtSecret.secretArn,
       JWT_AUDIENCE: mailFromDomain,

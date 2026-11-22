@@ -359,11 +359,9 @@ deploy_show_env() {
 	echo "AWS_REGION: ${AWS_REGION:-<not set>}"
 	echo "SUBDOMAINS: ${SUBDOMAINS:-<not set (defaults to DOMAIN only)>}"
 	echo "S3_BUCKET: ${S3_BUCKET:-<not set (will create new bucket)>}"
-	echo "TABLE_PREFIX: ${TABLE_PREFIX:-${DDB_TABLE_PREFIX:-<not set (defaults to emissary-)>}}"
+	echo "TABLE_PREFIX: ${TABLE_PREFIX:-${DDB_TABLE_PREFIX:-<not set (required for DDB backends)>}}"
 	echo "SESSION: ${SESSION:-<not set (CDK passes memory unless overridden)>}"
-	echo "SESSION_TABLE: ${SESSION_TABLE:-<not set>}"
 	echo "USER_MANAGER: ${USER_MANAGER:-<not set (CDK passes s3 unless overridden)>}"
-	echo "USER_TABLE: ${USER_TABLE:-<not set>}"
 	echo "USERNAME: ${USERNAME:-<not set (no admin user)>}"
 	if [[ -n "${PASSWORD+x}" ]]; then
 		echo "PASSWORD: (defined)"
@@ -472,22 +470,22 @@ run() {
 		export SENDER=log
 	fi
 	if [[ -z "${RECEIVER:-}" ]] && [[ -z "${RECEIVER_BUCKET:-}" ]] \
-		&& [[ -z "${RECEIVER_FILESYSTEM_DIR:-}" ]] && [[ -z "${RECEIVER_TABLE:-}" ]] \
+		&& [[ -z "${RECEIVER_FILESYSTEM_DIR:-}" ]] \
 		&& [[ -z "${S3_BUCKET:-}" ]] && [[ -z "${FILESYSTEM_DIR:-}" ]] \
 		&& [[ -z "${TABLE_PREFIX:-}" ]] && [[ -z "${DDB_TABLE_PREFIX:-}" ]]; then
 		export RECEIVER=memory
 	fi
 	if [[ -z "${METADATA:-}" ]] && [[ -z "${METADATA_FILE:-}" ]] \
-		&& [[ -z "${DDB_TABLE:-}" ]] && [[ -z "${FILESYSTEM_DIR:-}" ]] \
+		&& [[ -z "${FILESYSTEM_DIR:-}" ]] \
 		&& [[ -z "${TABLE_PREFIX:-}" ]] && [[ -z "${DDB_TABLE_PREFIX:-}" ]]; then
 		export METADATA=memory
 	fi
-	if [[ -z "${SESSION:-}" ]] && [[ -z "${SESSION_TABLE:-}" ]] \
+	if [[ -z "${SESSION:-}" ]] \
 		&& [[ -z "${TABLE_PREFIX:-}" ]] && [[ -z "${DDB_TABLE_PREFIX:-}" ]]; then
 		export SESSION=memory
 	fi
 	if [[ -z "${USER_MANAGER:-}" ]] && [[ -z "${S3_BUCKET:-}" ]] \
-		&& [[ -z "${FILESYSTEM_DIR:-}" ]] && [[ -z "${USER_TABLE:-}" ]] \
+		&& [[ -z "${FILESYSTEM_DIR:-}" ]] \
 		&& [[ -z "${LDAP_URL:-}" ]] && [[ -z "${TABLE_PREFIX:-}" ]] \
 		&& [[ -z "${DDB_TABLE_PREFIX:-}" ]]; then
 		export USER_MANAGER=none

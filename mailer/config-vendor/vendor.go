@@ -82,6 +82,9 @@ func Session(opts SessionOptions) (session.SessionStore, error) {
 	case "memory":
 		return session.NewMemorySessionStore(), nil
 	case "ddb", "dynamodb":
+		if err := requireDDBTable("session", opts.TableName); err != nil {
+			return nil, err
+		}
 		return session.NewDdbSessionStore(opts.TableName, opts.Region)
 	default:
 		return nil, fmt.Errorf("unknown session type %q (set SESSION explicitly)", opts.Type)
@@ -99,6 +102,11 @@ type MetadataOptions struct {
 
 // Metadata creates the metadata store named by opts.Type.
 func Metadata(opts MetadataOptions) (metadata.MetadataStore, error) {
+	if usesDDB(opts.Type) {
+		if err := requireDDBTable("metadata", opts.TableName); err != nil {
+			return nil, err
+		}
+	}
 	return metadata.NewStore(opts.Type, opts.FilePath, opts.TableName, opts.Region)
 }
 
@@ -124,6 +132,11 @@ type UserManagerOptions struct {
 
 // UserManager creates the user manager named by opts.Type.
 func UserManager(opts UserManagerOptions) (usermanager.UserManager, error) {
+	if usesDDB(opts.Type) {
+		if err := requireDDBTable("user manager", opts.DdbTable); err != nil {
+			return nil, err
+		}
+	}
 	return usermanager.New(usermanager.Config{
 		Type:             opts.Type,
 		AdminUsername:    opts.AdminUsername,
@@ -154,6 +167,11 @@ type ReceiverConfigStoreOptions struct {
 
 // ReceiverConfigStore creates the receiver rule store named by opts.Type.
 func ReceiverConfigStore(opts ReceiverConfigStoreOptions) (receiver.ConfigStore, error) {
+	if usesDDB(opts.Type) {
+		if err := requireDDBTable("receiver config", opts.TableName); err != nil {
+			return nil, err
+		}
+	}
 	return receiver.NewConfigStore(receiver.ConfigStoreOptions{
 		Type:          opts.Type,
 		FilesystemDir: opts.FilesystemDir,
@@ -293,4 +311,22 @@ func FromConfig(ctx context.Context, cfg *config.Config) (*Bundle, error) {
 
 func normalize(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func usesDDB(typeName string) bool {
+	switch normalize(typeName) {
+	case "ddb", "dynamodb":
+		return true
+	}
+	return false
+}
+
+// requireDDBTable rejects a DDB component whose table name could not be
+// derived. Names come only from TABLE_PREFIX, so an empty name means the
+// deployment forgot to configure the prefix.
+func requireDDBTable(component, table string) error {
+	if strings.TrimSpace(table) == "" {
+		return fmt.Errorf("%s ddb requires TABLE_PREFIX (DDB table names are derived from a configured prefix)", component)
+	}
+	return nil
 }

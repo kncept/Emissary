@@ -180,7 +180,7 @@ func TestLoad_UserManagerAutoSelect(t *testing.T) {
 		{
 			name: "s3 storage with explicit backend keeps it",
 			env: map[string]string{
-				"STORAGE": "s3", "S3_BUCKET": "my-bucket", "USER_MANAGER": "ddb",
+				"STORAGE": "s3", "S3_BUCKET": "my-bucket", "USER_MANAGER": "ddb", "TABLE_PREFIX": "custom",
 				"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
 			},
 			wantStorage:  "s3",
@@ -224,18 +224,18 @@ func TestLoad_UserManagerAutoSelect(t *testing.T) {
 			wantUserType: "filesystem",
 		},
 		{
-			name: "ddb config auto-selects ddb user manager",
+			name: "table prefix auto-selects ddb user manager",
 			env: map[string]string{
-				"USER_TABLE":        "users-table",
+				"TABLE_PREFIX":      "custom",
 				"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
 			},
 			unset:        []string{"USER_MANAGER"},
 			wantUserType: "ddb",
 		},
 		{
-			name: "s3 bucket and ddb table are ambiguous",
+			name: "s3 bucket and table prefix are ambiguous",
 			env: map[string]string{
-				"S3_BUCKET": "bucket", "USER_TABLE": "users-table",
+				"S3_BUCKET": "bucket", "TABLE_PREFIX": "custom",
 				"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
 			},
 			unset:   []string{"USER_MANAGER", "STORAGE"},
@@ -372,19 +372,25 @@ func TestLoad_S3StorageRequiresBucket(t *testing.T) {
 	}
 }
 
-func TestLoad_DDBMetadataDerivesTableFromPrefix(t *testing.T) {
+func TestLoad_DDBMetadataWithoutPrefixFails(t *testing.T) {
 	localBackendEnv()
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("METADATA", "ddb")
 	defer cleanupEnv()
 
+	if _, err := Load(context.Background()); err == nil || !strings.Contains(err.Error(), "metadata ddb requires TABLE_PREFIX") {
+		t.Fatalf("Load(METADATA=ddb) error = %v, want a missing TABLE_PREFIX error", err)
+	}
+
+	// An explicit prefix completes the same configuration.
+	os.Setenv("TABLE_PREFIX", "custom")
 	cfg, err := Load(context.Background())
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatalf("Load(TABLE_PREFIX=custom) error = %v", err)
 	}
-	if got := cfg.MetadataTableName(); got != "emissary-metadata" {
-		t.Errorf("MetadataTableName() = %q, want %q", got, "emissary-metadata")
+	if got := cfg.MetadataTableName(); got != "custom-metadata" {
+		t.Errorf("MetadataTableName() = %q, want %q", got, "custom-metadata")
 	}
 }
 
@@ -423,14 +429,16 @@ func TestLoad_ReceiverDDBTableDerivesFromPrefix(t *testing.T) {
 	if got := cfg.ReceiverTableName(); got != "custom-receiver" {
 		t.Errorf("ReceiverTableName() = %q, want %q", got, "custom-receiver")
 	}
+	// Stale per-table override variables are ignored: the prefix is the only
+	// input to table naming.
 	os.Setenv("RECEIVER_TABLE", "explicit-table")
 	defer os.Unsetenv("RECEIVER_TABLE")
 	cfg, err = Load(context.Background())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got := cfg.ReceiverTableName(); got != "explicit-table" {
-		t.Errorf("ReceiverTableName() with override = %q, want %q", got, "explicit-table")
+	if got := cfg.ReceiverTableName(); got != "custom-receiver" {
+		t.Errorf("ReceiverTableName() with stale override = %q, want %q", got, "custom-receiver")
 	}
 }
 
@@ -497,7 +505,7 @@ func TestLoad_MetadataRegionDefaultsToAWSRegion(t *testing.T) {
 	os.Setenv("USERNAME", "user")
 	os.Setenv("PASSWORD", "pass")
 	os.Setenv("METADATA", "ddb")
-	os.Setenv("DDB_TABLE", "my-table")
+	os.Setenv("TABLE_PREFIX", "custom")
 	os.Setenv("AWS_REGION", "ap-northeast-1")
 	defer cleanupEnv()
 
@@ -715,14 +723,14 @@ func TestLoad_ReceiverAutoSelect(t *testing.T) {
 		{"shared profile", map[string]string{
 			"AWS_PROFILE": "dev", "S3_BUCKET": "bucket",
 		}, "", "s3", ""},
-		{"ddb table selects ddb", map[string]string{
-			"AWS_PROFILE": "dev", "RECEIVER_TABLE": "receiver-table",
+		{"table prefix selects ddb", map[string]string{
+			"AWS_PROFILE": "dev", "TABLE_PREFIX": "custom",
 		}, "", "ddb", ""},
 		{"dedicated filesystem root selects filesystem", map[string]string{
 			"RECEIVER_FILESYSTEM_DIR": t.TempDir(),
 		}, "", "filesystem", ""},
-		{"bucket and table are ambiguous", map[string]string{
-			"AWS_PROFILE": "dev", "S3_BUCKET": "bucket", "RECEIVER_TABLE": "receiver-table",
+		{"bucket and prefix are ambiguous", map[string]string{
+			"AWS_PROFILE": "dev", "S3_BUCKET": "bucket", "TABLE_PREFIX": "custom",
 		}, "", "", "receiver has configuration for multiple backends (s3, ddb)"},
 		{"explicit memory wins over credentials", map[string]string{
 			"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret",
@@ -828,10 +836,8 @@ func TestMetadataConfig_Validate(t *testing.T) {
 	}{
 		{"memory", MetadataConfig{Type: "memory"}, false},
 		{"file", MetadataConfig{Type: "file"}, false},
-		{"ddb with table", MetadataConfig{Type: "ddb", DdbTable: "t"}, false},
-		{"ddb without table", MetadataConfig{Type: "ddb"}, false},
-		{"dynamodb with table", MetadataConfig{Type: "dynamodb", DdbTable: "t"}, false},
-		{"dynamodb without table", MetadataConfig{Type: "dynamodb"}, false},
+		{"ddb", MetadataConfig{Type: "ddb"}, false},
+		{"dynamodb", MetadataConfig{Type: "dynamodb"}, false},
 		{"unknown", MetadataConfig{Type: "redis"}, true},
 	}
 	for _, tt := range tests {
@@ -1113,7 +1119,7 @@ func TestLoad_TablePrefixMustBeExplicitToSelectDDB(t *testing.T) {
 	defer cleanupEnv()
 	os.Setenv("USERNAME", "testuser")
 
-	// The default TABLE_PREFIX (emissary) must never count as configuration.
+	// An unset TABLE_PREFIX must never count as DDB configuration.
 	if _, err := Load(context.Background()); err == nil || !strings.Contains(err.Error(), "metadata backend is not configured") {
 		t.Fatalf("Load() error = %v, want an unconfigured metadata error", err)
 	}
@@ -1131,5 +1137,74 @@ func TestLoad_TablePrefixMustBeExplicitToSelectDDB(t *testing.T) {
 	}
 	if got := cfg.MetadataTableName(); got != "custom-metadata" {
 		t.Errorf("MetadataTableName() = %q, want custom-metadata", got)
+	}
+}
+
+func TestLoad_ExplicitDDBSelectorRequiresTablePrefix(t *testing.T) {
+	for _, tt := range []struct {
+		selector string
+		wantErr  string
+	}{
+		{"RECEIVER=ddb", "receiver ddb requires TABLE_PREFIX"},
+		{"METADATA=ddb", "metadata ddb requires TABLE_PREFIX"},
+		{"SESSION=ddb", "session ddb requires TABLE_PREFIX"},
+		{"USER_MANAGER=ddb", "user manager ddb requires TABLE_PREFIX"},
+	} {
+		t.Run(tt.selector, func(t *testing.T) {
+			localBackendEnv()
+			os.Setenv("USERNAME", "testuser")
+			parts := strings.SplitN(tt.selector, "=", 2)
+			os.Setenv(parts[0], parts[1])
+			defer cleanupEnv()
+
+			if _, err := Load(context.Background()); err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load(%s) error = %v, want %q", tt.selector, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoad_TableNamesIgnoreStaleOverrides(t *testing.T) {
+	localBackendEnv()
+	os.Setenv("USERNAME", "testuser")
+	os.Setenv("TABLE_PREFIX", "prefix_")
+	os.Setenv("RECEIVER_TABLE", "old-receiver")
+	os.Setenv("DDB_TABLE", "old-metadata")
+	os.Setenv("SESSION_TABLE", "old-sessions")
+	os.Setenv("USER_TABLE", "old-users")
+	defer cleanupEnv()
+
+	cfg, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	for _, tt := range []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"receiver", cfg.ReceiverTableName(), "prefix_receiver"},
+		{"metadata", cfg.MetadataTableName(), "prefix_metadata"},
+		{"sessions", cfg.SessionTableName(), "prefix_sessions"},
+		{"users", cfg.UserTableName(), "prefix_users"},
+	} {
+		if tt.got != tt.want {
+			t.Errorf("%s table = %q, want %q", tt.name, tt.got, tt.want)
+		}
+	}
+}
+
+func TestApplyDDBTablePrefix_NoDefault(t *testing.T) {
+	if got := ApplyDDBTablePrefix("", "metadata"); got != "" {
+		t.Errorf("ApplyDDBTablePrefix(\"\", \"metadata\") = %q, want empty", got)
+	}
+	for _, tt := range []struct{ prefix, want string }{
+		{"custom", "custom-metadata"},
+		{"custom-", "custom-metadata"},
+		{"custom_", "custom_metadata"},
+	} {
+		if got := ApplyDDBTablePrefix(tt.prefix, "metadata"); got != tt.want {
+			t.Errorf("ApplyDDBTablePrefix(%q) = %q, want %q", tt.prefix, got, tt.want)
+		}
 	}
 }

@@ -37,10 +37,8 @@ type handlerTestConfig struct {
 	AWSRegion      string
 	MetadataType   string
 	MetadataPath   string
-	MetadataTable  string
 	MetadataRegion string
 	SessionType    string
-	SessionTable   string
 	SessionRegion  string
 	DDBTablePrefix string
 
@@ -57,7 +55,6 @@ type handlerTestConfig struct {
 	UserManager      usermanager.UserManager
 	UserManagerType  string
 	UserDomain       string
-	UserTable        string
 	UserRegion       string
 	LDAPURL          string
 	LDAPBindDN       string
@@ -73,7 +70,6 @@ type handlerTestConfig struct {
 	ReceiverConfigType    string
 	ReceiverBucket        string
 	ReceiverFilesystemDir string
-	ReceiverTable         string
 	ReceiverRegion        string
 	ReceiverConfig        receiver.MailIdentityConfig
 	ReceiverConfigStore   receiver.ConfigStore
@@ -120,25 +116,21 @@ func (tc handlerTestConfig) build(t *testing.T) (*config.Config, *configvendor.B
 			Type:          tc.ReceiverConfigType,
 			S3Bucket:      tc.ReceiverBucket,
 			FilesystemDir: tc.ReceiverFilesystemDir,
-			DdbTable:      tc.ReceiverTable,
 			Region:        tc.ReceiverRegion,
 		},
 		Metadata: config.MetadataConfig{
 			Type:     tc.MetadataType,
-			DdbTable: tc.MetadataTable,
 			FilePath: tc.MetadataPath,
 			Region:   tc.MetadataRegion,
 		},
 		Session: config.SessionConfig{
-			Type:     tc.SessionType,
-			DdbTable: tc.SessionTable,
-			Region:   tc.SessionRegion,
+			Type:   tc.SessionType,
+			Region: tc.SessionRegion,
 		},
 		UserManager: config.UserManagerConfig{
 			Type:             tc.UserManagerType,
 			Domain:           tc.UserDomain,
 			Region:           tc.UserRegion,
-			DdbTable:         tc.UserTable,
 			FilesystemDir:    tc.FilesystemDir,
 			LDAPURL:          tc.LDAPURL,
 			LDAPBindDN:       tc.LDAPBindDN,

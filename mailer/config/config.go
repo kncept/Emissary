@@ -123,7 +123,6 @@ type ReceiverConfig struct {
 	Type          string // "s3", "filesystem", "memory", "ddb" or "dynamodb"
 	S3Bucket      string
 	FilesystemDir string
-	DdbTable      string
 	Region        string // AWS region for the "ddb" backend
 }
 
@@ -147,8 +146,7 @@ func (c *ReceiverConfig) Validate() error {
 
 // MetadataConfig holds email metadata storage configuration.
 type MetadataConfig struct {
-	Type     string // "memory", "file", "ddb", "dynamodb"
-	DdbTable string
+	Type string // "memory", "file", "ddb", "dynamodb"
 	// FilePath is the metadata file/directory. When METADATA_FILE is unset it
 	// defaults to <FILESYSTEM_DIR>/metadata.
 	FilePath string
@@ -157,9 +155,8 @@ type MetadataConfig struct {
 
 // SessionConfig holds session storage configuration for refresh tokens.
 type SessionConfig struct {
-	Type     string // "memory", "ddb", "dynamodb"
-	DdbTable string
-	Region   string // AWS region for DDB
+	Type   string // "memory", "ddb", "dynamodb"
+	Region string // AWS region for DDB
 }
 
 // Validate checks that the metadata configuration is complete and consistent.
@@ -192,7 +189,6 @@ type UserManagerConfig struct {
 	Domain string // receiving domain for mail delivery and reporting
 	Region string // AWS region for the "ddb" and "s3" backends
 
-	DdbTable string
 	// FilesystemDir is the shared root from FILESYSTEM_DIR. Users are stored
 	// under its "users" subdirectory.
 	FilesystemDir string
@@ -241,8 +237,9 @@ type Config struct {
 	// <root>/mail, the user manager <root>/users and metadata <root>/metadata.
 	FilesystemDir string
 
-	// DDBTablePrefix is prepended to logical DynamoDB table names when
-	// building table names (see TABLE_PREFIX). It defaults to "emissary".
+	// DDBTablePrefix is prepended to the fixed logical DynamoDB table names
+	// when building table names (see TABLE_PREFIX). It has no default: every
+	// DDB backend requires it to be set explicitly.
 	DDBTablePrefix string
 
 	// MaxFileSize caps a single JMAP request body and a single parsed MIME
@@ -269,7 +266,33 @@ func (c *Config) Validate() error {
 	if c.UserManager.Type == "s3" && c.Storage.S3Bucket == "" {
 		errs = append(errs, errors.New("user manager s3 requires a bucket (set S3_BUCKET)"))
 	}
+	// Table names are static suffixes of the prefix, so a DDB backend without
+	// a prefix has no table to talk to.
+	if strings.TrimSpace(c.DDBTablePrefix) == "" {
+		var ddbBackends []string
+		for _, component := range []struct{ name, backendType string }{
+			{"receiver", c.Receiver.Type},
+			{"metadata", c.Metadata.Type},
+			{"session", c.Session.Type},
+			{"user manager", c.UserManager.Type},
+		} {
+			if isDDBType(component.backendType) {
+				ddbBackends = append(ddbBackends, component.name)
+			}
+		}
+		if len(ddbBackends) > 0 {
+			errs = append(errs, fmt.Errorf("%s ddb requires TABLE_PREFIX (DDB table names are derived from a configured prefix)", strings.Join(ddbBackends, ", ")))
+		}
+	}
 	return errors.Join(errs...)
+}
+
+func isDDBType(backendType string) bool {
+	switch strings.ToLower(strings.TrimSpace(backendType)) {
+	case "ddb", "dynamodb":
+		return true
+	}
+	return false
 }
 
 // FilesystemMailDir returns the directory holding filesystem-backed mail.
@@ -288,14 +311,14 @@ func (c *Config) FilesystemMetadataDir() string {
 	return filepath.Join(c.FilesystemDir, "metadata")
 }
 
-// ApplyDDBTablePrefix names tables the same way as the household project
-// (TABLE_PREFIX): prefix joined with a separator and the logical table name.
-// If prefix is empty, "emissary-" is used. If prefix does not already end with
-// "-" or "_", "-" is inserted.
+// ApplyDDBTablePrefix builds a table name from the configured prefix and its
+// fixed logical suffix. An empty prefix yields an empty name: a DDB backend
+// without a prefix is incomplete configuration and is rejected by Validate.
+// If prefix does not already end with "-" or "_", "-" is inserted.
 func ApplyDDBTablePrefix(prefix, name string) string {
 	prefix = strings.TrimSpace(prefix)
 	if prefix == "" {
-		prefix = "emissary"
+		return ""
 	}
 	if strings.HasSuffix(prefix, "-") || strings.HasSuffix(prefix, "_") {
 		return prefix + name
@@ -303,32 +326,25 @@ func ApplyDDBTablePrefix(prefix, name string) string {
 	return prefix + "-" + name
 }
 
-func resolveDDBTable(explicit, prefix, logical string) string {
-	if strings.TrimSpace(explicit) != "" {
-		return strings.TrimSpace(explicit)
-	}
-	return ApplyDDBTablePrefix(prefix, logical)
-}
-
 // MetadataTableName returns the DynamoDB table name for message metadata.
 func (c *Config) MetadataTableName() string {
-	return resolveDDBTable(c.Metadata.DdbTable, c.DDBTablePrefix, "metadata")
+	return ApplyDDBTablePrefix(c.DDBTablePrefix, "metadata")
 }
 
 // SessionTableName returns the DynamoDB table name for sessions.
 func (c *Config) SessionTableName() string {
-	return resolveDDBTable(c.Session.DdbTable, c.DDBTablePrefix, "sessions")
+	return ApplyDDBTablePrefix(c.DDBTablePrefix, "sessions")
 }
 
 // UserTableName returns the DynamoDB table name for users.
 func (c *Config) UserTableName() string {
-	return resolveDDBTable(c.UserManager.DdbTable, c.DDBTablePrefix, "users")
+	return ApplyDDBTablePrefix(c.DDBTablePrefix, "users")
 }
 
 // ReceiverTableName returns the DynamoDB table name for inbound routing
 // rules. It follows the same TABLE_PREFIX derivation as the other tables.
 func (c *Config) ReceiverTableName() string {
-	return resolveDDBTable(c.Receiver.DdbTable, c.DDBTablePrefix, "receiver")
+	return ApplyDDBTablePrefix(c.DDBTablePrefix, "receiver")
 }
 
 // backend records whether one implementation of a pluggable component has
@@ -370,14 +386,13 @@ func (r backendResolver) s3(buckets ...string) backend {
 	return backend{name: "s3", configured: configured}
 }
 
-// ddb is configured when AWS credentials are available and either this
-// component's table name or a table prefix was set explicitly in the
-// environment. The table name is passed in because each component has its own
-// override (DDB_TABLE, SESSION_TABLE, RECEIVER_TABLE, USER_TABLE).
-func (r backendResolver) ddb(table string) backend {
+// ddb is configured when AWS credentials are available and a table prefix was
+// set explicitly in the environment. Table names are fixed suffixes of that
+// prefix, so the prefix is the only DDB configuration input.
+func (r backendResolver) ddb() backend {
 	return backend{
 		name:       "ddb",
-		configured: r.hasCreds && (strings.TrimSpace(table) != "" || r.tablePrefixSet),
+		configured: r.hasCreds && r.tablePrefixSet,
 	}
 }
 
@@ -491,7 +506,7 @@ func Load(ctx context.Context) (*Config, error) {
 	explicitReceiverFilesystemDir := get("RECEIVER_FILESYSTEM_DIR")
 
 	// Read every selector up front: backend resolution needs them all, and
-	// TABLE_PREFIX must be checked before its default is applied below.
+	// TABLE_PREFIX is required configuration for any DDB backend.
 	storageType := strings.ToLower(strings.TrimSpace(get("STORAGE")))
 	senderType := strings.ToLower(strings.TrimSpace(get("SENDER")))
 	receiverType := strings.ToLower(strings.TrimSpace(get("RECEIVER")))
@@ -561,24 +576,20 @@ func Load(ctx context.Context) (*Config, error) {
 			Type:          receiverType,
 			S3Bucket:      get("RECEIVER_BUCKET"),
 			FilesystemDir: receiverFilesystemDir,
-			DdbTable:      get("RECEIVER_TABLE"),
 			Region:        get("RECEIVER_REGION"),
 		},
 		Metadata: MetadataConfig{
 			Type:     metadataType,
-			DdbTable: get("DDB_TABLE"),
 			FilePath: get("METADATA_FILE"),
 			Region:   get("METADATA_REGION"),
 		},
 		Session: SessionConfig{
-			Type:     sessionType,
-			DdbTable: get("SESSION_TABLE"),
-			Region:   get("SESSION_REGION"),
+			Type:   sessionType,
+			Region: get("SESSION_REGION"),
 		},
 		UserManager: UserManagerConfig{
 			Type:             strings.ToLower(strings.TrimSpace(get("USER_MANAGER"))),
 			Domain:           strings.ToLower(strings.TrimSpace(get("DOMAIN"))),
-			DdbTable:         get("USER_TABLE"),
 			FilesystemDir:    filesystemDir,
 			Region:           get("USER_REGION"),
 			LDAPURL:          get("LDAP_URL"),
@@ -590,7 +601,7 @@ func Load(ctx context.Context) (*Config, error) {
 		},
 		AWSRegion:      awsRegion,
 		FilesystemDir:  filesystemDir,
-		DDBTablePrefix: strings.TrimSpace(getDefault("emissary", "TABLE_PREFIX", "DDB_TABLE_PREFIX")),
+		DDBTablePrefix: strings.TrimSpace(tablePrefixEnv),
 	}
 	if envErr != nil {
 		return nil, envErr
@@ -663,18 +674,18 @@ func Load(ctx context.Context) (*Config, error) {
 
 	if cfg.Receiver.Type, err = resolver.selectType(
 		"receiver", "RECEIVER", cfg.Receiver.Type, "memory",
-		"AWS credentials + RECEIVER_BUCKET/S3_BUCKET (s3), RECEIVER_FILESYSTEM_DIR/FILESYSTEM_DIR (filesystem), AWS credentials + RECEIVER_TABLE/TABLE_PREFIX (ddb)",
+		"AWS credentials + RECEIVER_BUCKET/S3_BUCKET (s3), RECEIVER_FILESYSTEM_DIR/FILESYSTEM_DIR (filesystem), AWS credentials + TABLE_PREFIX/DDB_TABLE_PREFIX (ddb)",
 		resolver.s3(cfg.Receiver.S3Bucket, cfg.Storage.S3Bucket),
 		resolver.filesystem(explicitReceiverFilesystemDir, explicitFilesystemDir),
-		resolver.ddb(cfg.Receiver.DdbTable),
+		resolver.ddb(),
 	); err != nil {
 		return nil, err
 	}
 
 	if cfg.Metadata.Type, err = resolver.selectType(
 		"metadata", "METADATA", cfg.Metadata.Type, "memory",
-		"AWS credentials + DDB_TABLE/TABLE_PREFIX (ddb), METADATA_FILE/FILESYSTEM_DIR (file)",
-		resolver.ddb(cfg.Metadata.DdbTable),
+		"AWS credentials + TABLE_PREFIX/DDB_TABLE_PREFIX (ddb), METADATA_FILE/FILESYSTEM_DIR (file)",
+		resolver.ddb(),
 		resolver.filesystemNamed("file", cfg.Metadata.FilePath, explicitFilesystemDir),
 	); err != nil {
 		return nil, err
@@ -682,18 +693,18 @@ func Load(ctx context.Context) (*Config, error) {
 
 	if cfg.Session.Type, err = resolver.selectType(
 		"session", "SESSION", cfg.Session.Type, "memory",
-		"AWS credentials + SESSION_TABLE/TABLE_PREFIX (ddb)",
-		resolver.ddb(cfg.Session.DdbTable),
+		"AWS credentials + TABLE_PREFIX/DDB_TABLE_PREFIX (ddb)",
+		resolver.ddb(),
 	); err != nil {
 		return nil, err
 	}
 
 	if cfg.UserManager.Type, err = resolver.selectType(
 		"user manager", "USER_MANAGER", cfg.UserManager.Type, "none",
-		"AWS credentials + S3_BUCKET (s3), FILESYSTEM_DIR (filesystem), AWS credentials + USER_TABLE/TABLE_PREFIX (ddb), LDAP_URL (ldap)",
+		"AWS credentials + S3_BUCKET (s3), FILESYSTEM_DIR (filesystem), AWS credentials + TABLE_PREFIX/DDB_TABLE_PREFIX (ddb), LDAP_URL (ldap)",
 		resolver.s3(cfg.Storage.S3Bucket),
 		resolver.filesystem(explicitFilesystemDir),
-		resolver.ddb(cfg.UserManager.DdbTable),
+		resolver.ddb(),
 		resolver.ldap(cfg.UserManager.LDAPURL),
 	); err != nil {
 		return nil, err

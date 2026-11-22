@@ -23,9 +23,9 @@ in-application `ddb` and `s3` backends are Emissary-mastered. Set the backend
 explicitly, or leave it unset only when exactly one backend has configuration
 (for example AWS credentials plus `S3_BUCKET` selects `s3`). Missing or
 ambiguous configuration is a startup error. When using DynamoDB, table names
-are derived from `TABLE_PREFIX` the same
-way as the household project (default `emissary`), with explicit
-`USER_TABLE`/`DDB_TABLE`/`SESSION_TABLE` overrides available (see
+are fixed suffixes of an explicitly set `TABLE_PREFIX` (`users`, `sessions`,
+`metadata`, `receiver`); there is no default prefix and no per-table override,
+and a DDB backend without a prefix is incomplete configuration (see
 [CONFIGURATION.md](CONFIGURATION.md#dynamodb-table-naming)). The `s3`
 backend stores each user as a `users/<email>/user.json` object in the mail
 storage bucket, next to the user's mailboxes (see
