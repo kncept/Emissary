@@ -707,15 +707,3 @@ func (h *Handler) EmailQueryChanges(ctx context.Context, accountID string, args 
 	}
 	return json.Marshal(result)
 }
-
-func (h *Handler) EmailCopy(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	return base.NotImplemented(MethodCopy)
-}
-
-func (h *Handler) EmailImport(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	return base.NotImplemented(MethodImport)
-}
-
-func (h *Handler) EmailParse(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	return base.NotImplemented(MethodParse)
-}

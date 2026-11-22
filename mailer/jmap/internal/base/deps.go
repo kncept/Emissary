@@ -39,6 +39,14 @@ type Deps struct {
 	Sender        sender.Sender
 	FromValidator FromValidator
 	Changes       *Tracker
+	// Submissions is the durable RFC 8621 EmailSubmission record store.
+	Submissions *storage.SubmissionStore
+	// Identities is the durable singleton Identity override store.
+	Identities *storage.IdentityStore
+	// VacationStore holds the VacationResponse singleton. It is shared with the
+	// inbound receiver so a JMAP /set is visible to auto-reply processing even
+	// when the user manager has no durable store of its own.
+	VacationStore usermanager.VacationStore
 	// HTTPClient is used for outbound JMAP push verification requests. Tests
 	// may replace it with a client configured for a local TLS server.
 	HTTPClient *http.Client
@@ -50,12 +58,15 @@ type Deps struct {
 // NewDeps builds the shared dependencies for a JMAP handler.
 func NewDeps(store storage.Storage, meta metadata.MetadataStore, userMgr usermanager.UserManager, mailSender sender.Sender, validators ...FromValidator) *Deps {
 	deps := &Deps{
-		Storage:    store,
-		Metadata:   meta,
-		UserMgr:    userMgr,
-		Sender:     mailSender,
-		Changes:    NewTracker(store),
-		HTTPClient: &http.Client{Timeout: 10 * time.Second},
+		Storage:       store,
+		Metadata:      meta,
+		UserMgr:       userMgr,
+		Sender:        mailSender,
+		Changes:       NewTracker(store),
+		Submissions:   storage.NewSubmissionStore(store),
+		Identities:    storage.NewIdentityStore(store),
+		VacationStore: usermanager.VacationStoreFor(userMgr),
+		HTTPClient:    &http.Client{Timeout: 10 * time.Second},
 	}
 	for _, validator := range validators {
 		if validator != nil {

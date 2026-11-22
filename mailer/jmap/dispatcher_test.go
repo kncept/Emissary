@@ -485,7 +485,10 @@ func TestJMAPErrorTypeMapping(t *testing.T) {
 	}
 }
 
-func TestJMAPStubReturnsServerFail(t *testing.T) {
+// TestJMAPFormerStubReturnsRealResponse guards the Phase 4 hard rule: a method
+// that used to be a NotImplemented stub must now produce its own JMAP response
+// shape, never a generic serverFail.
+func TestJMAPFormerStubReturnsRealResponse(t *testing.T) {
 	handler := NewHandler(storage.NewMemoryStorage(), metadata.NewMemoryMetadata(),
 		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
 		sender.NewLogSender())
@@ -493,7 +496,10 @@ func TestJMAPStubReturnsServerFail(t *testing.T) {
 	req := &Request{
 		Using: allUsing,
 		MethodCalls: []Invocation{{
-			Name: "Email/copy", ClientID: "c1", Arguments: map[string]json.RawMessage{},
+			Name: "Email/copy", ClientID: "c1", Arguments: map[string]json.RawMessage{
+				"fromAccountId": json.RawMessage(`"alice@example.com"`),
+				"accountId":     json.RawMessage(`"alice@example.com"`),
+			},
 		}},
 	}
 	resp, err := dispatcher.DispatchRequest(context.Background(), "alice@example.com",
@@ -501,15 +507,11 @@ func TestJMAPStubReturnsServerFail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DispatchRequest() error = %v", err)
 	}
-	if len(resp.MethodResponses) != 1 || resp.MethodResponses[0].Name != "error" {
-		t.Fatalf("responses = %+v, want one error", resp.MethodResponses)
+	if len(resp.MethodResponses) != 1 || resp.MethodResponses[0].Name != "Email/copy" {
+		t.Fatalf("responses = %+v, want one Email/copy response", resp.MethodResponses)
 	}
-	var errorType string
-	if err := json.Unmarshal(resp.MethodResponses[0].Arguments["type"], &errorType); err != nil {
-		t.Fatalf("unmarshal error type: %v", err)
-	}
-	if errorType != "serverFail" {
-		t.Errorf("error type = %q, want serverFail", errorType)
+	if _, ok := resp.MethodResponses[0].Arguments["created"]; !ok {
+		t.Errorf("response = %+v, want a real CopyResponse", resp.MethodResponses[0].Arguments)
 	}
 }
 

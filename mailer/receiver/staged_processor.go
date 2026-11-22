@@ -43,6 +43,11 @@ type StagedMessageProcessorConfig struct {
 	UserManager usermanager.UserManager
 	Sender      sender.Sender
 
+	// VacationStore is optional; when omitted the receiver derives one from
+	// the user manager. Production wiring passes the JMAP handler's store so
+	// both consumers see the same VacationResponse settings.
+	VacationStore usermanager.VacationStore
+
 	IdentityConfig MailIdentityConfigSource
 
 	// EmailDelivery advances the push EmailDelivery type state on delivery.
@@ -83,6 +88,7 @@ func NewStagedMessageProcessor(cfg StagedMessageProcessorConfig) (StagedMessageP
 		Storage:       cfg.Storage,
 		Metadata:      cfg.Metadata,
 		Dedup:         NewS3Dedup(cfg.Client, cfg.Bucket),
+		VacationStore: cfg.VacationStore,
 		EmailDelivery: cfg.EmailDelivery,
 	}
 	return &stagedMessageProcessor{

@@ -131,6 +131,86 @@ func TestVacationResponseGetSetPersistsToUserJSON(t *testing.T) {
 	}
 }
 
+// TestVacationResponseSetExplicitNullClears checks that a PatchObject value of
+// null clears an optional field. Absent properties must leave the stored value
+// untouched; JSON unmarshalling alone cannot tell the two apart.
+func TestVacationResponseSetExplicitNullClears(t *testing.T) {
+	ctx := context.Background()
+	h, users := newVacationTestHandler(t)
+
+	set := func(args string) {
+		t.Helper()
+		if _, err := h.VacationResponseSet(ctx, "alice@example.com", json.RawMessage(args)); err != nil {
+			t.Fatalf("VacationResponseSet() error = %v", err)
+		}
+	}
+	get := func() map[string]any {
+		t.Helper()
+		raw, err := h.VacationResponseGet(ctx, "alice@example.com", json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("VacationResponseGet() error = %v", err)
+		}
+		return decodeMap(t, raw)["list"].([]any)[0].(map[string]any)
+	}
+
+	set(`{"update":{"singleton":{
+		"isEnabled":true,
+		"fromDate":"2026-01-01T00:00:00Z",
+		"toDate":"2026-02-01T00:00:00Z",
+		"subject":"Away",
+		"textBody":"Back soon",
+		"htmlBody":"<p>Back soon</p>"
+	}}}`)
+	obj := get()
+	for _, key := range []string{"fromDate", "toDate", "subject", "textBody", "htmlBody"} {
+		if obj[key] == nil {
+			t.Errorf("%s = nil after set, want a value", key)
+		}
+	}
+
+	// An absent subject must keep its value; every other field is cleared by
+	// an explicit null.
+	set(`{"update":{"singleton":{
+		"fromDate":null,
+		"toDate":null,
+		"textBody":null,
+		"htmlBody":null
+	}}}`)
+	// isEnabled is not nullable and its whole patch is rejected atomically.
+	raw, err := h.VacationResponseSet(ctx, "alice@example.com", json.RawMessage(`{"update":{"singleton":{"isEnabled":null}}}`))
+	if err != nil {
+		t.Fatalf("VacationResponseSet(isEnabled:null) error = %v", err)
+	}
+	if notUpdated := decodeMap(t, raw)["notUpdated"].(map[string]any); notUpdated["singleton"] == nil {
+		t.Errorf("isEnabled:null was not rejected: %s", raw)
+	}
+
+	obj = get()
+	for _, key := range []string{"fromDate", "toDate", "textBody", "htmlBody"} {
+		if value, ok := obj[key]; !ok || value != nil {
+			t.Errorf("%s = %v (present=%v), want null after explicit null", key, value, ok)
+		}
+	}
+	if obj["subject"] != "Away" {
+		t.Errorf("subject = %v after absent property, want unchanged Away", obj["subject"])
+	}
+	if obj["isEnabled"] != true {
+		t.Errorf("isEnabled = %v, want unchanged true", obj["isEnabled"])
+	}
+
+	stored, err := users.Get(ctx, "alice@example.com")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	v := stored.VacationResponse
+	if v.FromDate != nil || v.ToDate != nil || v.TextBody != nil || v.HTMLBody != nil {
+		t.Errorf("stored vacation settings not cleared: %+v", v)
+	}
+	if v.Subject == nil || *v.Subject != "Away" || !v.IsEnabled {
+		t.Errorf("stored settings lost unchanged fields: %+v", v)
+	}
+}
+
 func TestVacationResponseGetIDsAndNotFound(t *testing.T) {
 	ctx := context.Background()
 	h, _ := newVacationTestHandler(t)

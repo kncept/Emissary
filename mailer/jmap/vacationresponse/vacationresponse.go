@@ -30,19 +30,15 @@ type MethodHandler interface {
 	VacationResponseSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error)
 }
 
-// Handler implements the VacationResponse methods.
-type Handler struct {
-	deps  *base.Deps
-	store usermanager.VacationStore
-}
+// Handler implements the VacationResponse methods. It reads the store from
+// deps on every call so the composition root can replace it with the same
+// instance the receiver uses.
+type Handler struct{ deps *base.Deps }
 
 // New creates a VacationResponse method handler.
-func New(deps *base.Deps) *Handler {
-	return &Handler{
-		deps:  deps,
-		store: usermanager.VacationStoreFor(deps.UserMgr),
-	}
-}
+func New(deps *base.Deps) *Handler { return &Handler{deps: deps} }
+
+func (h *Handler) store() usermanager.VacationStore { return h.deps.VacationStore }
 
 var _ MethodHandler = (*Handler)(nil)
 
@@ -72,8 +68,9 @@ func fromStored(v usermanager.VacationResponse) VacationResponse {
 }
 
 // updatePatch is the set of mutable properties accepted by /set. Pointer
-// fields distinguish an absent property (leave unchanged) from an explicit
-// null (clear the value).
+// fields carry a supplied non-null value; cleared records the properties whose
+// PatchObject value was explicitly null. JSON unmarshalling alone cannot tell
+// an absent property from a null one, because both yield a nil pointer.
 type updatePatch struct {
 	IsEnabled *bool      `json:"isEnabled,omitempty"`
 	FromDate  *time.Time `json:"fromDate,omitempty"`
@@ -81,6 +78,7 @@ type updatePatch struct {
 	Subject   *string    `json:"subject,omitempty"`
 	TextBody  *string    `json:"textBody,omitempty"`
 	HTMLBody  *string    `json:"htmlBody,omitempty"`
+	cleared   map[string]bool
 }
 
 func (p updatePatch) apply(v *usermanager.VacationResponse) {
@@ -90,22 +88,32 @@ func (p updatePatch) apply(v *usermanager.VacationResponse) {
 	if p.FromDate != nil {
 		t := p.FromDate.UTC()
 		v.FromDate = &t
+	} else if p.cleared["fromDate"] {
+		v.FromDate = nil
 	}
 	if p.ToDate != nil {
 		t := p.ToDate.UTC()
 		v.ToDate = &t
+	} else if p.cleared["toDate"] {
+		v.ToDate = nil
 	}
 	if p.Subject != nil {
 		s := *p.Subject
 		v.Subject = &s
+	} else if p.cleared["subject"] {
+		v.Subject = nil
 	}
 	if p.TextBody != nil {
 		s := *p.TextBody
 		v.TextBody = &s
+	} else if p.cleared["textBody"] {
+		v.TextBody = nil
 	}
 	if p.HTMLBody != nil {
 		s := *p.HTMLBody
 		v.HTMLBody = &s
+	} else if p.cleared["htmlBody"] {
+		v.HTMLBody = nil
 	}
 }
 
@@ -125,12 +133,18 @@ func handlePatch(raw json.RawMessage) (updatePatch, error) {
 		"textBody":  true,
 		"htmlBody":  true,
 	}
-	for name := range fields {
+	patch := updatePatch{cleared: make(map[string]bool)}
+	for name, value := range fields {
 		if !allowed[name] {
 			return updatePatch{}, base.Errorf("invalidProperties", "unknown or immutable property %q", name)
 		}
+		if string(value) == "null" {
+			if name == "isEnabled" {
+				return updatePatch{}, base.Errorf("invalidProperties", "isEnabled is not nullable")
+			}
+			patch.cleared[name] = true
+		}
 	}
-	var patch updatePatch
 	if err := json.Unmarshal(raw, &patch); err != nil {
 		return updatePatch{}, base.Errorf("invalidProperties", "invalid VacationResponse value")
 	}
@@ -157,7 +171,7 @@ func (h *Handler) SyncState(ctx context.Context, accountID string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	stored, err := h.store.GetVacationResponse(ctx, email)
+	stored, err := h.store().GetVacationResponse(ctx, email)
 	if err != nil {
 		return "", err
 	}
@@ -202,7 +216,7 @@ func (h *Handler) VacationResponseGet(ctx context.Context, accountID string, arg
 	if err != nil {
 		return nil, err
 	}
-	stored, err := h.store.GetVacationResponse(ctx, email)
+	stored, err := h.store().GetVacationResponse(ctx, email)
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +285,7 @@ func (h *Handler) VacationResponseSet(ctx context.Context, accountID string, arg
 	if err != nil {
 		return nil, err
 	}
-	stored, err := h.store.GetVacationResponse(ctx, email)
+	stored, err := h.store().GetVacationResponse(ctx, email)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +325,7 @@ func (h *Handler) VacationResponseSet(ctx context.Context, accountID string, arg
 	// fingerprint is identical.
 	_, updateFailed := notUpdated[SingletonID]
 	if _, requested := req.Update[SingletonID]; requested && !updateFailed {
-		if err := h.store.SaveVacationResponse(ctx, email, stored); err != nil {
+		if err := h.store().SaveVacationResponse(ctx, email, stored); err != nil {
 			return nil, err
 		}
 		updated[SingletonID] = fromStored(stored)

@@ -286,6 +286,13 @@ func toJMAPAddresses(addresses ...mailemail.Address) []model.EmailAddress {
 // toJMAPEmail builds the structural properties and then hydrates every
 // wire-derived property from one parse of the original message bytes.
 func (h *Handler) toJMAPEmail(ctx context.Context, listed *mailemail.ListedEmail) (*JMAPEmail, error) {
+	return h.toJMAPEmailFromRaw(ctx, listed, nil)
+}
+
+// toJMAPEmailFromRaw is toJMAPEmail with an explicit raw source. Email/parse
+// and Email/import build objects from blob bytes that are not stored under an
+// email id yet, so hydrate must not look them up through GetEmailRaw.
+func (h *Handler) toJMAPEmailFromRaw(ctx context.Context, listed *mailemail.ListedEmail, raw []byte) (*JMAPEmail, error) {
 	if listed == nil {
 		return nil, fmt.Errorf("missing email")
 	}
@@ -336,7 +343,11 @@ func (h *Handler) toJMAPEmail(ctx context.Context, listed *mailemail.ListedEmail
 		SentAt:     &sentAt,
 		Preview:    preview,
 	}
-	m.hydrate(ctx, h.deps, accountID, id, e)
+	if raw != nil {
+		m.hydrateWithRaw(raw, e)
+	} else {
+		m.hydrate(ctx, h.deps, accountID, id, e)
+	}
 	return m, nil
 }
 
@@ -361,10 +372,17 @@ func (m *JMAPEmail) hydrate(ctx context.Context, deps *base.Deps, accountID, id 
 			raw = fetched
 		}
 	}
+	m.hydrateWithRaw(raw, fallback)
+}
+
+// hydrateWithRaw derives wire-backed properties from the exact bytes that will
+// be returned as the email's blobId. A nil/empty raw falls back to rendering
+// the parsed message.
+func (m *JMAPEmail) hydrateWithRaw(raw []byte, fallback *mailemail.UserEmail) {
 	if len(raw) == 0 {
 		raw = mailemail.RawFromUserEmail(fallback)
 	}
-	view := newWireView(id, raw)
+	view := newWireView("", raw)
 	m.wire = view
 	m.BlobID = storage.BlobID(raw)
 	m.Size = len(raw)

@@ -212,6 +212,7 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 		fromValidator = identity.NewValidator(opts.SESIdentityLister)
 	}
 	jmapHandler := jmap.NewHandler(emailStore, b.Metadata, userManager, mailSender, fromValidator)
+	jmapHandler.SetVacationStore(b.VacationStore)
 	jmapHandler.SetSessionChecker(func(ctx context.Context, sid string) bool {
 		_, err := b.Session.Get(ctx, sid)
 		return err == nil

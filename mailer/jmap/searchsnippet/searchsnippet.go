@@ -5,6 +5,7 @@ package searchsnippet
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 )
@@ -27,9 +28,46 @@ type Handler struct{ deps *base.Deps }
 // New creates a SearchSnippet method handler.
 func New(deps *base.Deps) *Handler { return &Handler{deps: deps} }
 
-// SearchSnippetGet is not implemented yet.
-func (h *Handler) SearchSnippetGet(_ context.Context, _ string, _ json.RawMessage) (json.RawMessage, error) {
-	return base.NotImplemented(MethodGet)
+type snippet struct {
+	EmailID string  `json:"emailId"`
+	Subject *string `json:"subject"`
+	Preview *string `json:"preview"`
+}
+
+// SearchSnippetGet returns one SearchSnippet per known email id. Emissary does
+// not compute highlighted search snippets, so subject and preview are always
+// null — which RFC 8621 explicitly permits. The method still validates every
+// id against storage so an unknown email is reported in notFound.
+func (h *Handler) SearchSnippetGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
+	var req struct {
+		EmailIDs []string        `json:"emailIds"`
+		Filter   json.RawMessage `json:"filter,omitempty"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, err
+	}
+	// RFC 8621 allows a filter here; Emissary does not highlight matches, and
+	// Phase 3 forbids silently ignoring a supplied argument.
+	if len(req.Filter) > 0 && string(req.Filter) != "null" {
+		return nil, base.Errorf("unsupportedFilter", "SearchSnippet filter is not supported")
+	}
+
+	list := make([]snippet, 0, len(req.EmailIDs))
+	var notFound []string
+	for _, id := range req.EmailIDs {
+		listed, err := h.deps.Storage.GetEmail(ctx, accountID, id)
+		if err != nil || listed == nil || listed.Ref == nil || !strings.EqualFold(listed.Ref.AccountID, accountID) {
+			notFound = append(notFound, id)
+			continue
+		}
+		list = append(list, snippet{EmailID: id, Subject: nil, Preview: nil})
+	}
+	resp := map[string]any{
+		"accountId": accountID,
+		"list":      list,
+		"notFound":  notFound,
+	}
+	return json.Marshal(resp)
 }
 
 var _ MethodHandler = (*Handler)(nil)

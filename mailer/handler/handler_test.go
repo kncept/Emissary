@@ -1039,8 +1039,15 @@ func TestSendEmailWithCreationReference(t *testing.T) {
 	if !ok || emailID == "" || strings.HasPrefix(emailID, "#") {
 		t.Fatalf("response createdIds = %v, want create1 mapped to a real id", createdIDs)
 	}
-	if got := createdIDs["submission1"]; got != emailID {
-		t.Errorf("submission1 createdId = %v, want %q", got, emailID)
+	submissionID, ok := createdIDs["submission1"].(string)
+	if !ok || submissionID == "" || strings.HasPrefix(submissionID, "#") {
+		t.Fatalf("response createdIds = %v, want submission1 mapped to a real id", createdIDs)
+	}
+	// Phase 4 derives the submission id from the account, creation id and
+	// email id so a retried /set is idempotent; it is distinct from the email
+	// id and can be fetched back with EmailSubmission/get.
+	if submissionID == emailID {
+		t.Errorf("submission createdId = %q, want an id distinct from the email id", submissionID)
 	}
 
 	// onSuccessUpdateEmail must produce a second Email/set response with the

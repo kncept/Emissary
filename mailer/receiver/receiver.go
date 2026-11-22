@@ -351,6 +351,9 @@ func (r *Receiver) handleRecipient(ctx context.Context, key, recipient string, p
 				slog.Error("Receiver: failed to deliver", "recipient", mailbox, "err", err)
 				return fmt.Errorf("delivery to %s failed: %w", mailbox, err)
 			}
+			// The mailbox owner's vacation settings apply to mail delivered
+			// through a mail identity just as they do to a user delivery.
+			r.maybeSendVacationReply(ctx, mailbox, parsedEmail, wireEmail)
 			applied = true
 		case Bounce:
 			if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {

@@ -96,6 +96,7 @@ func handler(ctx context.Context, s3Event events.S3Event) error {
 		Storage:        components.Storage,
 		Metadata:       components.Metadata,
 		Dedup:          receiver.NewS3Dedup(s3Client, cfg.Storage.S3Bucket),
+		VacationStore:  components.VacationStore,
 		IdentityConfig: components.ReceiverConfig,
 		EmailDelivery:  delivery.New(components.Storage),
 	})

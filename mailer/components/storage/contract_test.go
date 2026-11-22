@@ -121,6 +121,129 @@ func TestStorageContractCreatedIDsUseRevisions(t *testing.T) {
 	}
 }
 
+// TestStorageContractSubmissions exercises the durable EmailSubmission store
+// on every backend. A Lambda that records a submission must be able to read it
+// back in a later, unrelated invocation, and stale writers must not overwrite
+// a newer collection.
+func TestStorageContractSubmissions(t *testing.T) {
+	ctx := context.Background()
+	accountID := contractAccountID()
+	record := SubmissionRecord{
+		ID:         "S1",
+		AccountID:  accountID,
+		IdentityID: "primary",
+		EmailID:    "email-1",
+		ThreadID:   "thread-1",
+		Envelope: SubmissionEnvelope{
+			MailFrom: SubmissionAddress{Email: accountID},
+			RcptTo:   []SubmissionAddress{{Email: "bob@example.com"}},
+		},
+		SendAt:         "2026-01-02T03:04:05Z",
+		UndoStatus:     "final",
+		DeliveryStatus: map[string]SubmissionDelivery{"bob@example.com": {SMTPReply: "250 OK", Delivered: "queued", Displayed: "unknown"}},
+		DSNBlobIDs:     []string{},
+		MDNBlobIDs:     []string{},
+	}
+
+	for _, backend := range contractBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			store := NewSubmissionStore(backend.open(t))
+
+			records, revision, err := store.Load(ctx, accountID)
+			if err != nil || len(records) != 0 || revision != "" {
+				t.Fatalf("empty load = %v / %q / %v", records, revision, err)
+			}
+
+			revision, err = store.Save(ctx, accountID, map[string]SubmissionRecord{"S1": record}, "")
+			if err != nil || revision == "" {
+				t.Fatalf("Save() = %q / %v, want a revision", revision, err)
+			}
+			if _, err := store.Save(ctx, accountID, map[string]SubmissionRecord{}, ""); !errors.Is(err, ErrSubmissionConflict) {
+				t.Fatalf("stale save error = %v, want ErrSubmissionConflict", err)
+			}
+
+			records, loadedRevision, err := store.Load(ctx, accountID)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if loadedRevision != revision || len(records) != 1 {
+				t.Fatalf("loaded = %v / %q, want one record at revision %q", records, loadedRevision, revision)
+			}
+			got := records["S1"]
+			if got.IdentityID != record.IdentityID || got.EmailID != record.EmailID || got.SendAt != record.SendAt {
+				t.Errorf("loaded record = %+v, want %+v", got, record)
+			}
+			if len(got.Envelope.RcptTo) != 1 || got.Envelope.RcptTo[0].Email != "bob@example.com" {
+				t.Errorf("loaded envelope = %+v", got.Envelope)
+			}
+
+			nextRevision, err := store.Save(ctx, accountID, map[string]SubmissionRecord{}, revision)
+			if err != nil || nextRevision == "" || nextRevision == revision {
+				t.Fatalf("conditional save = %q / %v, want a new revision", nextRevision, err)
+			}
+			records, _, err = store.Load(ctx, accountID)
+			if err != nil || len(records) != 0 {
+				t.Fatalf("after destroy = %v / %v, want empty", records, err)
+			}
+
+			// A record cannot be written into a different account's namespace.
+			other := record
+			other.AccountID = "someone-else@example.com"
+			if _, err := store.Save(ctx, accountID, map[string]SubmissionRecord{"S2": other}, ""); err == nil {
+				t.Fatal("Save() accepted a record belonging to another account")
+			}
+		})
+	}
+}
+
+// TestStorageContractIdentity exercises the durable singleton Identity store
+// on every backend. Identity/set must survive a later Lambda invocation.
+func TestStorageContractIdentity(t *testing.T) {
+	ctx := context.Background()
+	accountID := contractAccountID()
+
+	for _, backend := range contractBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			store := NewIdentityStore(backend.open(t))
+
+			record, revision, err := store.Load(ctx, accountID)
+			if err != nil || record.Name != "" || revision != "" {
+				t.Fatalf("empty load = %+v / %q / %v", record, revision, err)
+			}
+
+			want := IdentityRecord{
+				Name:          "Alice",
+				ReplyTo:       []IdentityAddress{{Name: "Alice", Email: accountID}},
+				Bcc:           []IdentityAddress{},
+				TextSignature: "--\nAlice",
+			}
+			revision, err = store.Save(ctx, accountID, want, "")
+			if err != nil || revision == "" {
+				t.Fatalf("Save() = %q / %v, want a revision", revision, err)
+			}
+			if _, err := store.Save(ctx, accountID, IdentityRecord{}, ""); !errors.Is(err, ErrIdentityConflict) {
+				t.Fatalf("stale save error = %v, want ErrIdentityConflict", err)
+			}
+
+			got, loadedRevision, err := store.Load(ctx, accountID)
+			if err != nil || loadedRevision != revision {
+				t.Fatalf("Load() = %+v / %q / %v", got, loadedRevision, err)
+			}
+			if got.Name != want.Name || got.TextSignature != want.TextSignature || len(got.ReplyTo) != 1 {
+				t.Errorf("loaded = %+v, want %+v", got, want)
+			}
+
+			if _, err := store.Save(ctx, accountID, IdentityRecord{}, revision); err != nil {
+				t.Fatalf("conditional save error = %v", err)
+			}
+			got, _, err = store.Load(ctx, accountID)
+			if err != nil || got.Name != "" {
+				t.Fatalf("after clear = %+v / %v, want empty", got, err)
+			}
+		})
+	}
+}
+
 func TestStorageContractMailboxes(t *testing.T) {
 	ctx := context.Background()
 	accountID := contractAccountID()

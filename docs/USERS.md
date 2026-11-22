@@ -141,6 +141,13 @@ follow the RFC 3834 loop-prevention rules described in
 [API.md](API.md). The reply state is stored with the
 account in `user.json` (or the DynamoDB user item).
 
+The same `VacationStore` is shared by the JMAP handler and the inbound
+receiver, so settings saved through JMAP drive auto-replies in other processes.
+For durable user backends (file, S3, DynamoDB) the settings survive restarts.
+Backends without their own user store (the `none` backend, LDAP and test
+doubles) keep a process-local store: JMAP-set settings are visible to the
+receiver while the process lives, but are lost on restart.
+
 ## The user
 
 `EmissaryUser` is a superstruct of `User`: it embeds `User` (whose

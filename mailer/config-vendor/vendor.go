@@ -165,11 +165,14 @@ func ReceiverConfigStore(opts ReceiverConfigStoreOptions) (receiver.ConfigStore,
 
 // Bundle holds every runtime component created from a Config.
 type Bundle struct {
-	Storage             storage.Storage
-	Metadata            metadata.MetadataStore
-	Session             session.SessionStore
-	Sender              sender.Sender
-	UserManager         usermanager.UserManager
+	Storage     storage.Storage
+	Metadata    metadata.MetadataStore
+	Session     session.SessionStore
+	Sender      sender.Sender
+	UserManager usermanager.UserManager
+	// VacationStore is shared by the JMAP VacationResponse methods and the
+	// receiver's auto-reply processor.
+	VacationStore       usermanager.VacationStore
 	ReceiverConfigStore receiver.ConfigStore
 	ReceiverConfig      receiver.MailIdentityConfig
 
@@ -238,6 +241,11 @@ func FromConfig(ctx context.Context, cfg *config.Config) (*Bundle, error) {
 	}); err != nil {
 		return nil, fmt.Errorf("user manager: %w", err)
 	}
+	// One store instance serves both the JMAP methods and the inbound
+	// receiver. Durable managers return themselves; managers without a user
+	// store share a single process-local store instead of each consumer
+	// creating its own.
+	b.VacationStore = usermanager.VacationStoreFor(b.UserManager)
 	if b.ReceiverConfigStore, err = ReceiverConfigStore(ReceiverConfigStoreOptions{
 		Type:          cfg.Receiver.Type,
 		FilesystemDir: cfg.Receiver.FilesystemDir,
@@ -264,6 +272,7 @@ func FromConfig(ctx context.Context, cfg *config.Config) (*Bundle, error) {
 			Metadata:       b.Metadata,
 			UserManager:    b.UserManager,
 			Sender:         b.Sender,
+			VacationStore:  b.VacationStore,
 			IdentityConfig: b.MailIdentityConfigSource,
 			EmailDelivery:  delivery.New(b.Storage),
 		}); err != nil {

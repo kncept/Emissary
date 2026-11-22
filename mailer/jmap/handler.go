@@ -75,6 +75,15 @@ func NewHandler(store storage.Storage, meta metadata.MetadataStore, userMgr user
 	}
 }
 
+// SetVacationStore replaces the VacationStore used by VacationResponse
+// methods. The composition root passes the same instance to the inbound
+// receiver so a settings change is immediately visible to auto-replies.
+func (h *Handler) SetVacationStore(store usermanager.VacationStore) {
+	if store != nil {
+		h.deps.VacationStore = store
+	}
+}
+
 // AccountSupportsCapability reports the capabilities the Session advertises
 // for an account. Every Emissary account supports the same data-type
 // capabilities, so this is the single source shared with the dispatcher's

@@ -179,10 +179,3 @@ func PageBounds(total int, position, limit *int) (int, int) {
 	}
 	return start, end
 }
-
-// NotImplemented produces the standard error for methods that are advertised
-// but not yet backed by an implementation. It is a typed serverFail so stubs
-// are never mislabelled as unknownMethod (RFC 8620 section 3.6.2).
-func NotImplemented(method string) (json.RawMessage, error) {
-	return nil, Errorf("serverFail", "%s not implemented", method)
-}

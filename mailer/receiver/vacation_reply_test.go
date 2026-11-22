@@ -73,6 +73,45 @@ func deliverVacationMessage(t *testing.T, r *Receiver, raw []byte) {
 	}
 }
 
+// TestVacationReplyForMailIdentityDelivery covers Phase 4c's extension of
+// auto-replies to DeliverToMailIdentity. The mailbox owner's shared
+// VacationStore settings must drive a reply even though there is no user
+// record for that address.
+func TestVacationReplyForMailIdentityDelivery(t *testing.T) {
+	const mailbox = "alias@example.com"
+	store := usermanager.NewMemoryVacationStore()
+	if err := store.SaveVacationResponse(context.Background(), mailbox, vacationSettings()); err != nil {
+		t.Fatalf("SaveVacationResponse() error = %v", err)
+	}
+	identity := BaseMailIdentityConfig()
+	identity["example.com"] = HandlerRules{
+		MailIdentity: mailbox,
+		Rules:        []HandlerRule{DeliverToMailIdentity},
+	}
+	mailSender := sender.NewInMemoryRecording()
+	r, err := NewReceiver(ReceiverConfig{
+		Domain:         "example.com",
+		UserManager:    usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		Sender:         mailSender,
+		Storage:        storage.NewMemoryStorage(),
+		Metadata:       metadata.NewMemoryMetadata(),
+		VacationStore:  store,
+		IdentityConfig: identity,
+	})
+	if err != nil {
+		t.Fatalf("NewReceiver() error = %v", err)
+	}
+
+	deliverVacationMessage(t, r, vacationMessage("", "sender@example.net", mailbox))
+	if len(mailSender.Sent) != 1 {
+		t.Fatalf("vacation replies = %d, want 1: %+v", len(mailSender.Sent), mailSender.Sent)
+	}
+	reply := mailSender.Sent[0]
+	if reply.From.Address != mailbox || reply.Subject != "On leave" {
+		t.Errorf("reply = %+v, want from %q with subject %q", reply, mailbox, "On leave")
+	}
+}
+
 func TestVacationReplySentOncePerSenderWithRFC3834Headers(t *testing.T) {
 	r, mailSender, users := newVacationReceiver(t, vacationSettings())
 

@@ -26,14 +26,15 @@ const (
 	// StateEmailDelivery is the RFC 8620 "EmailDelivery" type state. It is
 	// advanced when a message is delivered to an account by the inbound
 	// pipeline, independently of the Email records that /changes reports.
-	StateEmailDelivery StateKind = "email-delivery"
-	StateMailbox       StateKind = "mailbox"
-	StateMailboxQuery  StateKind = "mailbox-query"
-	StateThread        StateKind = "thread"
-	StateIdentity      StateKind = "identity"
-	StateSubmission    StateKind = "submission"
-	StateVacation      StateKind = "vacation"
-	StateBlob          StateKind = "blob"
+	StateEmailDelivery   StateKind = "email-delivery"
+	StateMailbox         StateKind = "mailbox"
+	StateMailboxQuery    StateKind = "mailbox-query"
+	StateThread          StateKind = "thread"
+	StateIdentity        StateKind = "identity"
+	StateSubmission      StateKind = "submission"
+	StateSubmissionQuery StateKind = "submission-query"
+	StateVacation        StateKind = "vacation"
+	StateBlob            StateKind = "blob"
 
 	// maxChangeEntries bounds the persisted delta log. Callers whose state is
 	// older than the retained window get cannotCalculateChanges, which RFC
