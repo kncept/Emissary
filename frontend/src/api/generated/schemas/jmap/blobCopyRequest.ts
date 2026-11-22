@@ -55,4 +55,9 @@ export interface BlobCopyRequest {
   fromAccountId: Id;
   accountId: Id;
   blobIds: Id[];
+  /**
+     * Advisory guard for the source account's blob state. This is an Emissary safeguard layered on RFC 8620 section 6.3; clients that send only the three RFC arguments are unaffected.
+     * @nullable
+     */
+  ifFromInState?: string | null;
 }

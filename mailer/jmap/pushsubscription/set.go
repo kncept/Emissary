@@ -176,14 +176,15 @@ func (h *Handler) PushSubscriptionSet(ctx context.Context, _ string, args json.R
 		}
 	}
 
-	return json.Marshal(map[string]any{
-		"created":      created,
-		"updated":      updated,
-		"destroyed":    destroyed,
-		"notCreated":   notCreated,
-		"notUpdated":   notUpdated,
-		"notDestroyed": notDestroyed,
-	})
+	return base.SetResult{
+		AccountLess:  true,
+		Created:      created,
+		Updated:      updated,
+		Destroyed:    destroyed,
+		NotCreated:   notCreated,
+		NotUpdated:   notUpdated,
+		NotDestroyed: notDestroyed,
+	}.Marshal()
 }
 
 type createFields struct {

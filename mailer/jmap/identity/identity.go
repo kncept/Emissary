@@ -99,37 +99,7 @@ func (h *Handler) loadIdentity(ctx context.Context, accountID string) (Identity,
 }
 
 func (h *Handler) IdentityGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		IDs []string `json:"ids,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-	properties, err := base.ParseSelection(args, "properties", Identity{}, "")
-	if err != nil {
-		return nil, err
-	}
-
 	identity, err := h.loadIdentity(ctx, accountID)
-	if err != nil {
-		return nil, err
-	}
-
-	var list []Identity
-	var notFound []string
-	if len(req.IDs) > 0 {
-		for _, id := range req.IDs {
-			if id == SingletonID {
-				list = append(list, identity)
-			} else {
-				notFound = append(notFound, id)
-			}
-		}
-	} else {
-		list = append(list, identity)
-	}
-
-	selected, err := properties.Filter(list)
 	if err != nil {
 		return nil, err
 	}
@@ -137,13 +107,16 @@ func (h *Handler) IdentityGet(ctx context.Context, accountID string, args json.R
 	if err != nil {
 		return nil, err
 	}
-	resp := map[string]interface{}{
-		"accountId": accountID,
-		"state":     state,
-		"list":      selected,
-		"notFound":  notFound,
-	}
-	return json.Marshal(resp)
+	return base.HandleGet(ctx, accountID, args, base.GetSpec[Identity]{
+		Allowed: base.ArgumentSet("accountId", "ids", "properties"),
+		Model:   Identity{},
+		Load:    func(context.Context) ([]Identity, error) { return []Identity{identity}, nil },
+		ID:      func(Identity) string { return SingletonID },
+		State:   func(context.Context) (string, error) { return state, nil },
+		Render: func(_ context.Context, record Identity, selection *base.Selection, _ json.RawMessage) (json.RawMessage, error) {
+			return selection.Filter(record)
+		},
+	})
 }
 
 // SyncState refreshes the derived singleton identity from the user record and
@@ -248,138 +221,97 @@ func applyIdentityPatch(record *storage.IdentityRecord, raw json.RawMessage, exp
 	return nil
 }
 
-func identitySetError(typ, description string) map[string]string {
-	return map[string]string{"type": typ, "description": description}
-}
-
 // patchSetError preserves the typed error from applyIdentityPatch (currently
 // forbiddenFrom) and folds every other failure into invalidProperties, which
 // is the only other SetError the singleton update can produce.
-func patchSetError(err error) map[string]string {
+func patchSetError(err error) base.SetError {
 	typ, detail, found := strings.Cut(err.Error(), ": ")
 	if !found || typ != "forbiddenFrom" {
-		return identitySetError("invalidProperties", err.Error())
+		return base.NewSetError("invalidProperties", err.Error())
 	}
-	return identitySetError(typ, detail)
+	return base.NewSetError(typ, detail)
 }
 
 func (h *Handler) IdentitySet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		IfInState *string                    `json:"ifInState,omitempty"`
-		Create    map[string]json.RawMessage `json:"create,omitempty"`
-		Update    map[string]json.RawMessage `json:"update,omitempty"`
-		Destroy   []string                   `json:"destroy,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-
-	oldState, err := h.deps.Changes.State(ctx, accountID, base.StateIdentity)
-	if err != nil {
-		return nil, err
-	}
-	if req.IfInState != nil && *req.IfInState != oldState {
-		return nil, base.Errorf("stateMismatch", "Identity state mismatch")
-	}
-
-	created := map[string]Identity{}
-	updated := map[string]Identity{}
-	destroyed := []string{}
-	notCreated := map[string]map[string]string{}
-	notUpdated := map[string]map[string]string{}
-	notDestroyed := map[string]map[string]string{}
-
 	// The canonical email is immutable; load it once so an attempted email
 	// change can be checked against the address the user actually owns.
 	identity, err := h.loadIdentity(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
-
-	// There is exactly one identity and it always exists. Creation and
-	// destruction are therefore rejected; only update is meaningful.
-	for id := range req.Create {
-		notCreated[id] = identitySetError("alreadyExists", "the singleton identity already exists")
-	}
-	for _, id := range req.Destroy {
-		notDestroyed[id] = identitySetError("forbidden", "the singleton identity cannot be destroyed")
-	}
-
-	for id, raw := range req.Update {
-		if id != SingletonID {
-			notUpdated[id] = identitySetError("notFound", "the only valid Identity id is \"primary\"")
-			continue
-		}
-		// Load, patch and save inside each attempt so a conflict re-applies
-		// the patch to the freshly loaded record instead of a stale one.
-		for attempt := 0; attempt < 8; attempt++ {
-			record, revision, err := h.deps.Identities.Load(ctx, accountID)
+	return base.HandleSet(ctx, accountID, args, base.SetSpec{
+		Allowed: base.ArgumentSet("accountId", "ifInState", "create", "update", "destroy"),
+		State: func(ctx context.Context) (string, error) {
+			return h.deps.Changes.State(ctx, accountID, base.StateIdentity)
+		},
+		Create: func(_ context.Context, _ string, _ json.RawMessage) (json.RawMessage, *base.SetError, error) {
+			// There is exactly one identity and it always exists.
+			setErr := base.AlreadyExists("the singleton identity already exists", SingletonID)
+			return nil, &setErr, nil
+		},
+		Update: func(ctx context.Context, id string, raw json.RawMessage) (json.RawMessage, *base.SetError, error) {
+			if id != SingletonID {
+				setErr := base.NewSetError("notFound", "the only valid Identity id is \"primary\"")
+				return nil, &setErr, nil
+			}
+			// RFC 8620 section 5.3: validate the PatchObject structure (JSON
+			// Pointer escapes, no array traversal, existing parents, no prefix
+			// conflicts) before applying property semantics.
+			currentJSON, _ := json.Marshal(identity)
+			if _, err := base.ApplyPatch(currentJSON, raw); err != nil {
+				setErr := base.NewSetError("invalidPatch", err.Error())
+				return nil, &setErr, nil
+			}
+			// Load, patch and save inside each attempt so a conflict re-applies
+			// the patch to the freshly loaded record instead of a stale one.
+			for attempt := 0; attempt < 8; attempt++ {
+				record, revision, err := h.deps.Identities.Load(ctx, accountID)
+				if err != nil {
+					return nil, nil, err
+				}
+				if err := applyIdentityPatch(&record, raw, identity.Email); err != nil {
+					setErr := patchSetError(err)
+					return nil, &setErr, nil
+				}
+				_, saveErr := h.deps.Identities.Save(ctx, accountID, record, revision)
+				if saveErr == nil {
+					break
+				}
+				if !errors.Is(saveErr, storage.ErrIdentityConflict) {
+					return nil, nil, saveErr
+				}
+			}
+			// The persistent overrides may have changed during the update loop.
+			updated, err := h.loadIdentity(ctx, accountID)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			if err := applyIdentityPatch(&record, raw, identity.Email); err != nil {
-				notUpdated[id] = patchSetError(err)
-				break
+			if _, err := h.syncIdentityState(ctx, accountID, updated); err != nil {
+				return nil, nil, err
 			}
-			_, saveErr := h.deps.Identities.Save(ctx, accountID, record, revision)
-			if saveErr == nil {
-				break
-			}
-			if !errors.Is(saveErr, storage.ErrIdentityConflict) {
-				return nil, saveErr
-			}
-		}
-	}
-
-	// The persistent overrides may have changed during the update loop.
-	identity, err = h.loadIdentity(ctx, accountID)
-	if err != nil {
-		return nil, err
-	}
-	if _, failed := notUpdated[SingletonID]; !failed {
-		if _, requested := req.Update[SingletonID]; requested {
-			updated[SingletonID] = identity
-		}
-	}
-
-	newState, err := h.syncIdentityState(ctx, accountID, identity)
-	if err != nil {
-		return nil, err
-	}
-
-	resp := map[string]any{
-		"accountId":    accountID,
-		"oldState":     oldState,
-		"newState":     newState,
-		"created":      created,
-		"updated":      updated,
-		"destroyed":    destroyed,
-		"notCreated":   notCreated,
-		"notUpdated":   notUpdated,
-		"notDestroyed": notDestroyed,
-	}
-	return json.Marshal(resp)
+			result, err := json.Marshal(updated)
+			return result, nil, err
+		},
+		Destroy: func(context.Context, string) *base.SetError {
+			setErr := base.NewSetError("forbidden", "the singleton identity cannot be destroyed")
+			return &setErr
+		},
+	})
 }
 
 func (h *Handler) IdentityChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		SinceState string `json:"sinceState"`
-		MaxChanges *int   `json:"maxChanges,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-
-	identity, err := h.loadIdentity(ctx, accountID)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := h.syncIdentityState(ctx, accountID, identity); err != nil {
-		return nil, err
-	}
-	result, err := h.deps.Changes.ChangesFrom(ctx, accountID, base.StateIdentity, req.SinceState, req.MaxChanges)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(result)
+	return base.HandleChanges(ctx, accountID, args, base.ChangesSpec{
+		Allowed: base.ArgumentSet("accountId", "sinceState", "maxChanges"),
+		Sync: func(ctx context.Context) error {
+			identity, err := h.loadIdentity(ctx, accountID)
+			if err != nil {
+				return err
+			}
+			_, err = h.syncIdentityState(ctx, accountID, identity)
+			return err
+		},
+		Changes: func(ctx context.Context, sinceState string, maxChanges *int) (map[string]any, error) {
+			return h.deps.Changes.ChangesFrom(ctx, accountID, base.StateIdentity, sinceState, maxChanges)
+		},
+	})
 }

@@ -131,17 +131,25 @@ func (h *Handler) EmailParse(ctx context.Context, accountID string, args json.Ra
 		FetchAllBodyValues  bool     `json:"fetchAllBodyValues"`
 		MaxBodyValueBytes   int      `json:"maxBodyValueBytes"`
 	}
+	if err := base.RejectUnknownArguments(args, base.ArgumentSet(
+		"accountId", "blobIds", "properties", "bodyProperties", "fetchTextBodyValues",
+		"fetchHTMLBodyValues", "fetchAllBodyValues", "maxBodyValueBytes")); err != nil {
+		return nil, err
+	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
 	if req.MaxBodyValueBytes < 0 {
 		return nil, base.Errorf("invalidArguments", "maxBodyValueBytes must not be negative")
 	}
-	properties, err := base.ParseSelection(args, "properties", JMAPEmail{}, "header:")
+	// RFC 8621 section 4.9 defines a distinct default property set for parsed
+	// blobs (no id/mailboxIds/keywords/receivedAt), and reuses the Email/get
+	// bodyProperties default.
+	properties, err := base.ParseSelectionWithDefault(args, "properties", JMAPEmail{}, "header:", base.DefaultProperties("Email/parse"))
 	if err != nil {
 		return nil, err
 	}
-	bodyProperties, err := base.ParseSelection(args, "bodyProperties", EmailBodyPart{}, "header:")
+	bodyProperties, err := base.ParseSelectionWithDefault(args, "bodyProperties", EmailBodyPart{}, "header:", base.DefaultProperties("EmailBodyPart"))
 	if err != nil {
 		return nil, err
 	}
@@ -198,6 +206,10 @@ func (h *Handler) EmailImport(ctx context.Context, accountID string, args json.R
 		IfInState *string              `json:"ifInState,omitempty"`
 		Emails    map[string]rawImport `json:"emails"`
 	}
+	if err := base.RejectUnknownArguments(args, base.ArgumentSet(
+		"accountId", "ifInState", "emails")); err != nil {
+		return nil, err
+	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
@@ -210,44 +222,44 @@ func (h *Handler) EmailImport(ctx context.Context, accountID string, args json.R
 	}
 
 	created := make(map[string]*JMAPEmail)
-	notCreated := make(map[string]map[string]string)
+	notCreated := make(map[string]base.SetError)
 	for createID, imp := range req.Emails {
 		mailboxID, err := targetMailbox(imp.MailboxIDs)
 		if err != nil {
-			notCreated[createID] = setErr("invalidProperties", err.Error())
+			notCreated[createID] = base.NewSetError("invalidProperties", err.Error())
 			continue
 		}
 		if mailboxErr := h.checkMailboxRights(ctx, accountID, mailboxID); mailboxErr != nil {
-			notCreated[createID] = map[string]string{"type": mailboxErr.typ, "description": mailboxErr.description}
+			notCreated[createID] = base.NewSetError(mailboxErr.typ, mailboxErr.description)
 			continue
 		}
 		keywords, err := parseKeywords(imp.Keywords)
 		if err != nil {
-			notCreated[createID] = setErr("invalidProperties", err.Error())
+			notCreated[createID] = base.NewSetError("invalidProperties", err.Error())
 			continue
 		}
 		receivedAt, err := receivedAtFor(imp.ReceivedAt)
 		if err != nil {
-			notCreated[createID] = setErr("invalidArguments", err.Error())
+			notCreated[createID] = base.NewSetError("invalidArguments", err.Error())
 			continue
 		}
 		_, raw, err := h.deps.Storage.GetBlob(ctx, accountID, imp.BlobID)
 		if err != nil {
 			if errors.Is(err, storage.ErrNotFound) {
-				notCreated[createID] = setErr("notFound", "Blob not found")
+				notCreated[createID] = base.NewSetError("notFound", "Blob not found")
 			} else {
-				notCreated[createID] = setErr("serverFail", "Failed to read blob")
+				notCreated[createID] = base.NewSetError("serverFail", "Failed to read blob")
 			}
 			continue
 		}
 		message, err := mailemail.Parse("", bytes.NewReader(raw))
 		if err != nil {
-			notCreated[createID] = setErr("invalidProperties", "Blob is not a valid email")
+			notCreated[createID] = base.NewSetError("invalidProperties", "Blob is not a valid email")
 			continue
 		}
 		jmapEmail, err := h.storeRawEmail(ctx, accountID, mailboxID, raw, message, keywords, receivedAt)
 		if err != nil {
-			notCreated[createID] = setErr("serverFail", "Failed to import email")
+			notCreated[createID] = base.NewSetError("serverFail", "Failed to import email")
 			continue
 		}
 		created[createID] = jmapEmail
@@ -256,13 +268,13 @@ func (h *Handler) EmailImport(ctx context.Context, accountID string, args json.R
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(map[string]any{
-		"accountId":  accountID,
-		"oldState":   oldState,
-		"newState":   newState,
-		"created":    created,
-		"notCreated": notCreated,
-	})
+	return base.CopyImportResult{
+		AccountID:  accountID,
+		OldState:   oldState,
+		NewState:   newState,
+		Created:    created,
+		NotCreated: notCreated,
+	}.Marshal()
 }
 
 // EmailCopy copies emails between mailboxes of the authenticated account. The
@@ -279,6 +291,11 @@ func (h *Handler) EmailCopy(ctx context.Context, accountID string, args json.Raw
 		Create                   map[string]rawImport `json:"create"`
 		OnSuccessDestroyOriginal bool                 `json:"onSuccessDestroyOriginal"`
 		DestroyFromIfInState     *string              `json:"destroyFromIfInState,omitempty"`
+	}
+	if err := base.RejectUnknownArguments(args, base.ArgumentSet(
+		"fromAccountId", "ifFromInState", "accountId", "ifInState", "create",
+		"onSuccessDestroyOriginal", "destroyFromIfInState")); err != nil {
+		return nil, err
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
@@ -314,70 +331,70 @@ func (h *Handler) EmailCopy(ctx context.Context, accountID string, args json.Raw
 	}
 
 	created := make(map[string]*JMAPEmail)
-	notCreated := make(map[string]map[string]string)
-	notDestroyed := make(map[string]map[string]string)
+	notCreated := make(map[string]base.SetError)
+	notDestroyed := make(map[string]base.SetError)
 	forbiddenSource := !strings.EqualFold(sourceAccount, accountID)
 
 	for createID, copyReq := range req.Create {
 		if forbiddenSource {
-			notCreated[createID] = setErr("forbidden", "copying from another account is not supported")
+			notCreated[createID] = base.NewSetError("forbidden", "copying from another account is not supported")
 			continue
 		}
 		listed, err := h.deps.Storage.GetEmail(ctx, sourceAccount, copyReq.ID)
 		if err != nil || listed == nil || listed.Ref == nil || !strings.EqualFold(listed.Ref.AccountID, sourceAccount) {
-			notCreated[createID] = setErr("notFound", "Original email not found")
+			notCreated[createID] = base.NewSetError("notFound", "Original email not found")
 			continue
 		}
 		mailboxID, err := targetMailbox(copyReq.MailboxIDs)
 		if err != nil {
-			notCreated[createID] = setErr("invalidProperties", err.Error())
+			notCreated[createID] = base.NewSetError("invalidProperties", err.Error())
 			continue
 		}
 		if mailboxErr := h.checkMailboxRights(ctx, accountID, mailboxID); mailboxErr != nil {
-			notCreated[createID] = map[string]string{"type": mailboxErr.typ, "description": mailboxErr.description}
+			notCreated[createID] = base.NewSetError(mailboxErr.typ, mailboxErr.description)
 			continue
 		}
 		keywords, err := parseKeywords(copyReq.Keywords)
 		if err != nil {
-			notCreated[createID] = setErr("invalidProperties", err.Error())
+			notCreated[createID] = base.NewSetError("invalidProperties", err.Error())
 			continue
 		}
 		receivedAt, err := receivedAtFor(copyReq.ReceivedAt)
 		if err != nil {
-			notCreated[createID] = setErr("invalidArguments", err.Error())
+			notCreated[createID] = base.NewSetError("invalidArguments", err.Error())
 			continue
 		}
 		raw, err := h.deps.Storage.GetEmailRaw(ctx, sourceAccount, copyReq.ID)
 		if err != nil {
-			notCreated[createID] = setErr("serverFail", "Failed to read original email")
+			notCreated[createID] = base.NewSetError("serverFail", "Failed to read original email")
 			continue
 		}
 		message := listed.Email
 		if message == nil {
 			message, err = mailemail.Parse("", bytes.NewReader(raw))
 			if err != nil {
-				notCreated[createID] = setErr("invalidProperties", "Original email is not parsable")
+				notCreated[createID] = base.NewSetError("invalidProperties", "Original email is not parsable")
 				continue
 			}
 		}
 		jmapEmail, err := h.storeRawEmail(ctx, accountID, mailboxID, raw, message, keywords, receivedAt)
 		if err != nil {
-			notCreated[createID] = setErr("serverFail", "Failed to copy email")
+			notCreated[createID] = base.NewSetError("serverFail", "Failed to copy email")
 			continue
 		}
 		created[createID] = jmapEmail
 
 		if req.OnSuccessDestroyOriginal {
 			if destroyStateMismatch {
-				notDestroyed[copyReq.ID] = setErr("stateMismatch", "source email state mismatch")
+				notDestroyed[copyReq.ID] = base.NewSetError("stateMismatch", "source email state mismatch")
 				continue
 			}
 			if err := h.deps.Metadata.Delete(ctx, sourceAccount, copyReq.ID); err != nil {
-				notDestroyed[copyReq.ID] = setErr("serverFail", "Failed to delete original metadata")
+				notDestroyed[copyReq.ID] = base.NewSetError("serverFail", "Failed to delete original metadata")
 				continue
 			}
 			if err := h.deps.Storage.DeleteEmail(ctx, sourceAccount, copyReq.ID); err != nil {
-				notDestroyed[copyReq.ID] = setErr("serverFail", "Failed to delete original email")
+				notDestroyed[copyReq.ID] = base.NewSetError("serverFail", "Failed to delete original email")
 				continue
 			}
 			if err := h.deps.Changes.Record(ctx, sourceAccount, base.StateEmail, copyReq.ID, base.ChangeDestroy); err != nil {
@@ -390,16 +407,16 @@ func (h *Handler) EmailCopy(ctx context.Context, accountID string, args json.Raw
 	if err != nil {
 		return nil, err
 	}
-	resp := map[string]any{
-		"fromAccountId": sourceAccount,
-		"accountId":     accountID,
-		"oldState":      oldState,
-		"newState":      newState,
-		"created":       created,
-		"notCreated":    notCreated,
+	result := base.CopyImportResult{
+		AccountID:     accountID,
+		FromAccountID: sourceAccount,
+		OldState:      oldState,
+		NewState:      newState,
+		Created:       created,
+		NotCreated:    notCreated,
 	}
 	if req.OnSuccessDestroyOriginal {
-		resp["notDestroyed"] = notDestroyed
+		result.NotDestroyed = notDestroyed
 	}
-	return json.Marshal(resp)
+	return result.Marshal()
 }

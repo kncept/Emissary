@@ -31,22 +31,19 @@ func New(deps *base.Deps) *Handler { return &Handler{deps: deps} }
 
 var _ MethodHandler = (*Handler)(nil)
 
-// copyRequest is the RFC 8620 argument set plus the two optional safeguards
-// Emissary applies to copy operations described in the implementation plan.
-// ifFromInState guards the source account's blob state; onSuccessDestroyOriginal
-// removes a generic blob after it has been copied.
+// copyRequest is the RFC 8620 section 6.3 argument set plus ifFromInState,
+// an advisory guard for the source account's blob state.
 type copyRequest struct {
-	FromAccountID            string   `json:"fromAccountId"`
-	AccountID                string   `json:"accountId"`
-	BlobIDs                  []string `json:"blobIds"`
-	IfFromInState            *string  `json:"ifFromInState,omitempty"`
-	OnSuccessDestroyOriginal bool     `json:"onSuccessDestroyOriginal,omitempty"`
+	FromAccountID string   `json:"fromAccountId"`
+	AccountID     string   `json:"accountId"`
+	BlobIDs       []string `json:"blobIds"`
+	IfFromInState *string  `json:"ifFromInState,omitempty"`
 }
 
-type setError struct {
-	Type        string `json:"type"`
-	Description string `json:"description"`
-}
+// setError is the shared RFC 8620 SetError object. It is aliased so existing
+// response maps keep their local name while serialising exactly like every
+// other /set error in the server.
+type setError = base.SetError
 
 type blobChange struct {
 	accountID string
@@ -55,15 +52,14 @@ type blobChange struct {
 }
 
 func setErrorOf(typ, description string) setError {
-	return setError{Type: typ, Description: description}
+	return base.NewSetError(typ, description)
 }
 
 var copyArgumentNames = map[string]bool{
-	"fromAccountId":            true,
-	"accountId":                true,
-	"blobIds":                  true,
-	"ifFromInState":            true,
-	"onSuccessDestroyOriginal": true,
+	"fromAccountId": true,
+	"accountId":     true,
+	"blobIds":       true,
+	"ifFromInState": true,
 }
 
 // BlobCopy copies immutable blobs between accounts. Copies are performed
@@ -111,9 +107,8 @@ func (h *Handler) BlobCopy(ctx context.Context, accountID string, args json.RawM
 	if !h.accountExists(ctx, req.AccountID) {
 		return nil, base.Errorf("accountNotFound", "account %s does not exist", req.AccountID)
 	}
-	// RFC 8620 section 5.4 requires the destination of a copy to differ from
-	// its source. Without this check, onSuccessDestroyOriginal would delete
-	// the only copy while still reporting success.
+	// RFC 8620 section 6.3 copies blobs between accounts; copying within a
+	// single account has no meaning because blob ids are content-derived.
 	if req.FromAccountID == req.AccountID {
 		return nil, base.Errorf("invalidArguments", "fromAccountId and accountId must be different")
 	}
@@ -130,7 +125,6 @@ func (h *Handler) BlobCopy(ctx context.Context, accountID string, args json.RawM
 
 	copied := make(map[string]string)
 	notCopied := make(map[string]setError)
-	notDestroyed := make(map[string]setError)
 	seen := make(map[string]bool, len(req.BlobIDs))
 	var changes []blobChange
 
@@ -182,39 +176,10 @@ func (h *Handler) BlobCopy(ctx context.Context, accountID string, args json.RawM
 			continue
 		}
 
-		destroyed := false
-		if req.OnSuccessDestroyOriginal {
-			// Email-backed blob ids are opaque message ids. Destroying one
-			// would delete a mail message, which is an Email/set operation,
-			// so only generic _blobs entries are removed here.
-			if meta.EmailBacked {
-				// Deleting an email-backed blob would delete a mail message,
-				// which is an Email/set operation. Report the skip explicitly
-				// rather than silently claiming the original was destroyed.
-				notDestroyed[blobID] = setErrorOf("forbidden", "email-backed blobs cannot be destroyed by Blob/copy")
-			} else {
-				releasePin()
-				remaining, metaErr := h.deps.Storage.GetBlobMeta(ctx, req.FromAccountID, blobID)
-				if metaErr != nil || remaining.IsPinned() {
-					notDestroyed[blobID] = setErrorOf("forbidden", "blob is still referenced")
-				} else if err := h.deps.Storage.DeleteBlob(ctx, req.FromAccountID, blobID); err != nil {
-					if !existed {
-						_ = h.deps.Storage.DeleteBlob(ctx, req.AccountID, newMeta.ID)
-					}
-					notCopied[blobID] = setErrorOf("invalidProperties", "Could not destroy original blob")
-					continue
-				} else {
-					destroyed = true
-				}
-			}
-		}
 		releasePin()
 
 		if !existed {
 			changes = append(changes, blobChange{req.AccountID, newMeta.ID, base.ChangeCreate})
-		}
-		if destroyed {
-			changes = append(changes, blobChange{req.FromAccountID, blobID, base.ChangeDestroy})
 		}
 		copied[blobID] = newMeta.ID
 	}
@@ -238,9 +203,6 @@ func (h *Handler) BlobCopy(ctx context.Context, accountID string, args json.RawM
 		response["notCopied"] = notCopied
 	} else {
 		response["notCopied"] = nil
-	}
-	if len(notDestroyed) > 0 {
-		response["notDestroyed"] = notDestroyed
 	}
 	return json.Marshal(response)
 }

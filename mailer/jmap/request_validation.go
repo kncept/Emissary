@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -317,9 +316,13 @@ func decodeInvocation(raw json.RawMessage) (*Invocation, error) {
 		return nil, fmt.Errorf("must be a three-element array, got %d elements", len(tuple))
 	}
 
+	// RFC 8620 section 3.2 defines the method name as a "String"; any
+	// syntactically valid string is acceptable at this layer. Unrecognised
+	// names are reported as method-level unknownMethod errors, not as a
+	// malformed Request object.
 	name, err := decodeJSONString(tuple[0])
-	if err != nil || !validMethodName(name) {
-		return nil, fmt.Errorf("method name must be a non-empty `Type/method` string")
+	if err != nil {
+		return nil, errors.New("method name must be a string")
 	}
 
 	if isJSONNull(tuple[1]) {
@@ -351,19 +354,6 @@ func decodeJSONString(raw json.RawMessage) (string, error) {
 
 func isJSONNull(raw json.RawMessage) bool {
 	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
-}
-
-func validMethodName(name string) bool {
-	parts := strings.Split(name, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return false
-	}
-	for _, r := range name {
-		if unicode.IsSpace(r) || unicode.IsControl(r) {
-			return false
-		}
-	}
-	return true
 }
 
 // validJMAPID reports whether id satisfies the RFC 8620 Id type: 1-255 octets

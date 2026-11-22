@@ -3,6 +3,8 @@ package jmap
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -16,6 +18,7 @@ type resultRefHandler struct {
 	MethodHandler
 	emailGetArgs   map[string]json.RawMessage
 	queryResponse  json.RawMessage
+	setResponse    json.RawMessage
 	emailGetCalled bool
 }
 
@@ -99,6 +102,66 @@ func TestDispatchRequestResolvesResultReference(t *testing.T) {
 	}
 	if _, ok := handler.emailGetArgs["#ids"]; ok {
 		t.Errorf("Email/get still has a #ids argument: %v", handler.emailGetArgs)
+	}
+}
+
+// TestDispatchRequestEnforcesObjectLimitAfterResultReference verifies that a
+// "#resultRef" which expands past the advertised object limit is rejected as a
+// request-level limit error before the method runs (RFC 8620 sections 5.5 and
+// 5.6). Envelope-only validation cannot see the expanded size.
+func TestDispatchRequestEnforcesObjectLimitAfterResultReference(t *testing.T) {
+	ids := make([]string, 501)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("id-%d", i)
+	}
+	idsJSON, err := json.Marshal(ids)
+	if err != nil {
+		t.Fatalf("marshal ids: %v", err)
+	}
+	queryResponse, err := json.Marshal(map[string]any{"ids": ids})
+	if err != nil {
+		t.Fatalf("marshal query response: %v", err)
+	}
+	handler := &resultRefHandler{queryResponse: queryResponse}
+	dispatcher := NewDispatcher(handler, nil).WithLimits(RequestLimits{MaxObjectsInGet: 500})
+
+	_, err = dispatcher.DispatchRequest(context.Background(), "alice@example.com",
+		&auth.Claims{Subject: "alice@example.com"}, resultRefRequest(
+			Invocation{Name: "Email/query", ClientID: "query1", Arguments: map[string]json.RawMessage{}},
+			emailGetWithRef(`{"resultOf":"query1","name":"Email/query","path":"/ids/*"}`),
+		))
+	var requestErr *RequestError
+	if !errors.As(err, &requestErr) {
+		t.Fatalf("DispatchRequest() error = %v, want *RequestError", err)
+	}
+	if got := requestErr.Limit; got != "maxObjectsInGet" {
+		t.Errorf("limit = %q, want maxObjectsInGet", got)
+	}
+	if handler.emailGetCalled {
+		t.Error("Email/get must not be dispatched when the expanded ids exceed the limit")
+	}
+
+	// The literal equivalent must be rejected identically for consistency.
+	literalHandler := &resultRefHandler{}
+	literalDispatcher := NewDispatcher(literalHandler, nil).WithLimits(RequestLimits{MaxObjectsInGet: 500})
+	_, err = literalDispatcher.DispatchRequest(context.Background(), "alice@example.com",
+		&auth.Claims{Subject: "alice@example.com"}, resultRefRequest(
+			Invocation{
+				Name:     "Email/get",
+				ClientID: "get1",
+				Arguments: map[string]json.RawMessage{
+					"ids": idsJSON,
+				},
+			},
+		))
+	if !errors.As(err, &requestErr) {
+		t.Fatalf("literal DispatchRequest() error = %v, want *RequestError", err)
+	}
+	if got := requestErr.Limit; got != "maxObjectsInGet" {
+		t.Errorf("literal limit = %q, want maxObjectsInGet", got)
+	}
+	if literalHandler.emailGetCalled {
+		t.Error("Email/get must not be dispatched when literal ids exceed the limit")
 	}
 }
 

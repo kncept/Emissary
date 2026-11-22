@@ -56,15 +56,25 @@ export interface EmailGetRequest {
   accountId: Id;
   /** @nullable */
   ids?: Id[] | null;
-  /** @nullable */
+  /**
+     * Properties to return. If omitted or null, RFC 8621 section 4.1
+     * requires the default array
+     * `[id, blobId, threadId, mailboxIds, keywords, size, receivedAt,
+     * messageId, inReplyTo, references, sender, from, to, cc, bcc,
+     * replyTo, subject, sentAt, hasAttachment, preview, bodyValues,
+     * textBody, htmlBody, attachments]`. An explicit empty array returns
+     * only `id`. Unknown names are rejected with invalidArguments.
+     * @nullable
+     */
   properties?: string[] | null;
   /**
-     * Properties to fetch for each EmailBodyPart. Defaults to
-     * partId, blobId, size, name, type, charset, disposition, cid,
-     * language, location. An explicit empty array returns no body part
-     * properties; null means the defaults. Unknown names are rejected
-     * with invalidArguments. The `header:{name}[:as{form}][:all]`
-     * dynamic properties are also permitted (RFC 8621 §4.1).
+     * Properties to fetch for each EmailBodyPart. If omitted or null,
+     * RFC 8621 section 4.2 requires the default array
+     * `[partId, blobId, size, name, type, charset, disposition, cid,
+     * language, location]`. An explicit empty array returns no body part
+     * properties. Unknown names are rejected with invalidArguments. The
+     * `header:{name}[:as{form}][:all]` dynamic properties are also
+     * permitted (RFC 8621 §4.1).
      * @nullable
      */
   bodyProperties?: string[] | null;

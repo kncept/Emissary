@@ -19,55 +19,32 @@ import (
 )
 
 func (h *Handler) EmailSubmissionGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		IDs []string `json:"ids,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-	properties, err := base.ParseSelection(args, "properties", jmapSubmission{}, "")
-	if err != nil {
-		return nil, err
-	}
 	records, _, err := h.deps.Submissions.Load(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
-
-	list := make([]json.RawMessage, 0, len(req.IDs))
-	notFound := make([]string, 0)
-	if len(req.IDs) > 0 {
-		for _, id := range req.IDs {
-			record, ok := records[id]
-			if !ok || !strings.EqualFold(record.AccountID, accountID) {
-				notFound = append(notFound, id)
-				continue
-			}
-			item, err := properties.Filter(toJMAPSubmission(record))
-			if err != nil {
-				return nil, err
-			}
-			list = append(list, item)
-		}
-	} else {
-		for _, record := range records {
-			item, err := properties.Filter(toJMAPSubmission(record))
-			if err != nil {
-				return nil, err
-			}
-			list = append(list, item)
+	// The store returns a map; sort by id so the "all records" case is stable.
+	ordered := make([]storage.SubmissionRecord, 0, len(records))
+	for _, record := range records {
+		if strings.EqualFold(record.AccountID, accountID) {
+			ordered = append(ordered, record)
 		}
 	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
 
 	state, err := h.deps.Changes.State(ctx, accountID, base.StateSubmission)
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(map[string]interface{}{
-		"accountId": accountID,
-		"state":     state,
-		"list":      list,
-		"notFound":  notFound,
+	return base.HandleGet(ctx, accountID, args, base.GetSpec[storage.SubmissionRecord]{
+		Allowed: base.ArgumentSet("accountId", "ids", "properties"),
+		Model:   jmapSubmission{},
+		Load:    func(context.Context) ([]storage.SubmissionRecord, error) { return ordered, nil },
+		ID:      func(record storage.SubmissionRecord) string { return record.ID },
+		State:   func(context.Context) (string, error) { return state, nil },
+		Render: func(_ context.Context, record storage.SubmissionRecord, selection *base.Selection, _ json.RawMessage) (json.RawMessage, error) {
+			return selection.Filter(toJMAPSubmission(record))
+		},
 	})
 }
 
@@ -109,6 +86,28 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 		// id and onSuccessDestroyEmail by the same ids.
 		OnSuccessUpdateEmail  map[string]map[string]interface{} `json:"onSuccessUpdateEmail,omitempty"`
 		OnSuccessDestroyEmail []string                          `json:"onSuccessDestroyEmail,omitempty"`
+	}
+	if err := base.RejectUnknownArguments(args, base.ArgumentSet(
+		"accountId", "ifInState", "create", "update", "destroy",
+		"onSuccessUpdateEmail", "onSuccessDestroyEmail")); err != nil {
+		return nil, nil, err
+	}
+	// Keep the raw create/update objects so RFC 8620 property and patch
+	// validation can inspect the exact keys the client supplied.
+	var rawArgs struct {
+		Create map[string]json.RawMessage `json:"create"`
+		Update map[string]json.RawMessage `json:"update"`
+	}
+	if err := json.Unmarshal(args, &rawArgs); err != nil {
+		return nil, nil, err
+	}
+	invalidCreates := base.ValidateCreateProperties(rawArgs.Create,
+		base.ArgumentSet("identityId", "emailId", "envelope", "sendAt"),
+		base.ArgumentSet("id", "submissionId", "undoStatus"))
+	for id, raw := range rawArgs.Update {
+		if _, err := base.ApplyPatch(json.RawMessage(`{}`), raw); err != nil {
+			return nil, nil, base.Errorf("invalidPatch", "update %q: %s", id, err.Error())
+		}
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, nil, err
@@ -153,14 +152,15 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 		sessionID = claims.SID
 	}
 	for createID, submission := range req.Create {
+		if names, bad := invalidCreates[createID]; bad {
+			notCreated[createID] = base.InvalidProperties(base.SetErrorNames(names), names...)
+			continue
+		}
 		// The profile exposes exactly one synthetic identity. A missing or
 		// unknown identityId cannot be honoured, so reject it rather than
 		// silently attributing the submission to "primary".
 		if submission.IdentityID != "primary" {
-			notCreated[createID] = map[string]any{
-				"type":        "invalidProperties",
-				"description": "the only valid identityId is \"primary\"",
-			}
+			notCreated[createID] = base.NewSetError("invalidProperties", "the only valid identityId is \"primary\"")
 			continue
 		}
 
@@ -197,7 +197,7 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 		// Delivered mail must carry an account matching the request. Drafts
 		// have no account on their ref; their session scope is the check.
 		if err != nil || emailMsg == nil || (!fromDraft && (ref == nil || !strings.EqualFold(ref.AccountID, accountID))) {
-			notCreated[createID] = map[string]string{"type": "notFound", "description": "Email not found"}
+			notCreated[createID] = base.NewSetError("notFound", "Email not found")
 			continue
 		}
 
@@ -210,15 +210,12 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 		if !strings.Contains(from, "@") {
 			// An account without an email address (for example the built-in
 			// "admin" account) cannot send mail.
-			notCreated[createID] = map[string]string{
-				"type":        "invalidProperties",
-				"description": "From address must be a valid email address",
-			}
+			notCreated[createID] = base.NewSetError("invalidProperties", "From address must be a valid email address")
 			continue
 		}
 		parsed, parseErr := mail.ParseAddress(from)
 		if parseErr != nil {
-			notCreated[createID] = map[string]string{"type": "invalidProperties", "description": "Invalid from address"}
+			notCreated[createID] = base.NewSetError("invalidProperties", "Invalid from address")
 			continue
 		}
 		from = parsed.Address
@@ -231,16 +228,10 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 			if err := h.deps.FromValidator.Validate(ctx, from); err != nil {
 				if errors.Is(err, identity.ErrNotAllowed) {
 					slog.Warn("JMAP: rejected From outside verified identities", "from", from, "err", err)
-					notCreated[createID] = map[string]string{
-						"type":        "forbidden",
-						"description": "From address is not a verified email identity",
-					}
+					notCreated[createID] = base.NewSetError("forbidden", "From address is not a verified email identity")
 				} else {
 					slog.Error("JMAP: could not verify From identity", "from", from, "err", err)
-					notCreated[createID] = map[string]string{
-						"type":        "serverError",
-						"description": "Could not verify From address",
-					}
+					notCreated[createID] = base.NewSetError("serverFail", "Could not verify From address")
 				}
 				continue
 			}
@@ -259,10 +250,7 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 				}
 			}
 			if mismatch {
-				notCreated[createID] = map[string]string{
-					"type":        "invalidProperties",
-					"description": "Reply-To must match From when masquerading",
-				}
+				notCreated[createID] = base.NewSetError("invalidProperties", "Reply-To must match From when masquerading")
 				continue
 			}
 			if len(replyTo) == 0 {
@@ -291,7 +279,7 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 			for _, rcpt := range submission.Envelope.RcptTo {
 				parsed, err := mail.ParseAddress(rcpt.Email)
 				if err != nil {
-					notCreated[createID] = map[string]string{"type": "invalidRecipients", "description": "Invalid recipient address in envelope"}
+					notCreated[createID] = base.NewSetError("invalidRecipients", "Invalid recipient address in envelope")
 					envelopeInvalid = true
 					continue
 				}
@@ -300,21 +288,21 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 			// Check that all To, Cc, Bcc recipients are in the envelope
 			for _, addr := range emailMsg.To {
 				if !envelopeRecipients[addr.Address] {
-					notCreated[createID] = map[string]string{"type": "forbidden", "description": "Recipient not in envelope: " + addr.Address}
+					notCreated[createID] = base.NewSetError("forbidden", "Recipient not in envelope: "+addr.Address)
 					envelopeInvalid = true
 					continue
 				}
 			}
 			for _, addr := range emailMsg.Cc {
 				if !envelopeRecipients[addr.Address] {
-					notCreated[createID] = map[string]string{"type": "forbidden", "description": "Recipient not in envelope: " + addr.Address}
+					notCreated[createID] = base.NewSetError("forbidden", "Recipient not in envelope: "+addr.Address)
 					envelopeInvalid = true
 					continue
 				}
 			}
 			for _, addr := range emailMsg.Bcc {
 				if !envelopeRecipients[addr.Address] {
-					notCreated[createID] = map[string]string{"type": "forbidden", "description": "Recipient not in envelope: " + addr.Address}
+					notCreated[createID] = base.NewSetError("forbidden", "Recipient not in envelope: "+addr.Address)
 					envelopeInvalid = true
 					continue
 				}
@@ -328,7 +316,7 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 		}
 
 		if len(toAddresses) == 0 && len(ccAddresses) == 0 && len(bccAddresses) == 0 {
-			notCreated[createID] = map[string]string{"type": "noRecipients", "description": "No recipients"}
+			notCreated[createID] = base.NewSetError("noRecipients", "No recipients")
 			continue
 		}
 
@@ -395,14 +383,14 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 			return nil
 		}); err != nil {
 			slog.Error("JMAP: failed to persist submission", "account", accountID, "err", err)
-			notCreated[createID] = map[string]string{"type": "serverFail", "description": "Failed to record submission: " + err.Error()}
+			notCreated[createID] = base.NewSetError("serverFail", "Failed to record submission: "+err.Error())
 			continue
 		}
 
 		// Send the email
 		if sendErr := h.deps.Sender.Send(ctx, message); sendErr != nil {
 			slog.Error("JMAP: failed to send email", "account", accountID, "create_id", createID, "err", sendErr)
-			notCreated[createID] = map[string]string{"type": "serverFail", "description": "Failed to send email: " + sendErr.Error()}
+			notCreated[createID] = base.NewSetError("serverFail", "Failed to send email: "+sendErr.Error())
 			// Reflect the failure in the durable record. Best-effort: a
 			// cleanup failure must not change the error already reported.
 			_ = h.mutateSubmissions(ctx, accountID, func(records map[string]storage.SubmissionRecord) error {
@@ -450,7 +438,7 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 			for id, patch := range req.Update {
 				record, ok := records[id]
 				if !ok || !strings.EqualFold(record.AccountID, accountID) {
-					notUpdated[id] = map[string]string{"type": "notFound", "description": "Submission not found"}
+					notUpdated[id] = base.NewSetError("notFound", "Submission not found")
 					continue
 				}
 				if patch.UndoStatus != nil {
@@ -463,7 +451,7 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 			for _, id := range req.Destroy {
 				record, ok := records[id]
 				if !ok || !strings.EqualFold(record.AccountID, accountID) {
-					notDestroyed[id] = map[string]string{"type": "notFound", "description": "Submission not found"}
+					notDestroyed[id] = base.NewSetError("notFound", "Submission not found")
 					continue
 				}
 				delete(records, id)
@@ -545,18 +533,17 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 	if err != nil {
 		return nil, nil, err
 	}
-	resp := map[string]interface{}{
-		"accountId":    accountID,
-		"oldState":     oldState,
-		"newState":     newState,
-		"created":      created,
-		"notCreated":   notCreated,
-		"updated":      updated,
-		"destroyed":    destroyed,
-		"notUpdated":   notUpdated,
-		"notDestroyed": notDestroyed,
-	}
-	result, err := json.Marshal(resp)
+	result, err := base.SetResult{
+		AccountID:    accountID,
+		OldState:     &oldState,
+		NewState:     &newState,
+		Created:      created,
+		Updated:      updated,
+		Destroyed:    destroyed,
+		NotCreated:   notCreated,
+		NotUpdated:   notUpdated,
+		NotDestroyed: notDestroyed,
+	}.Marshal()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -564,112 +551,50 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 }
 
 func (h *Handler) EmailSubmissionChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		SinceState string `json:"sinceState"`
-		MaxChanges *int   `json:"maxChanges,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-	result, err := h.deps.Changes.ChangesFrom(ctx, accountID, base.StateSubmission, req.SinceState, req.MaxChanges)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(result)
+	return base.HandleChanges(ctx, accountID, args, base.ChangesSpec{
+		Allowed: base.ArgumentSet("accountId", "sinceState", "maxChanges"),
+		Changes: func(ctx context.Context, sinceState string, maxChanges *int) (map[string]any, error) {
+			return h.deps.Changes.ChangesFrom(ctx, accountID, base.StateSubmission, sinceState, maxChanges)
+		},
+	})
 }
 
 func (h *Handler) EmailSubmissionQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		Sort           []interface{} `json:"sort,omitempty"`
-		Position       *int          `json:"position,omitempty"`
-		Anchor         *string       `json:"anchor,omitempty"`
-		AnchorOffset   *int          `json:"anchorOffset,omitempty"`
-		Limit          *int          `json:"limit,omitempty"`
-		CalculateTotal *bool         `json:"calculateTotal,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-	filter, err := parseSubmissionFilter(args)
-	if err != nil {
-		return nil, err
-	}
-	property, ascending, err := submissionSortProperty(req.Sort)
-	if err != nil {
-		return nil, err
-	}
-	queryKey, err := base.QueryKey(filter, req.Sort)
-	if err != nil {
-		return nil, err
-	}
-
-	records, _, err := h.deps.Submissions.Load(ctx, accountID)
-	if err != nil {
-		return nil, err
-	}
-	allIDs := sortedSubmissionIDs(records, filter, property, ascending)
-	start, end, err := base.PageBoundsForIDs(allIDs, req.Position, req.Limit, req.Anchor, req.AnchorOffset)
-	if err != nil {
-		return nil, err
-	}
-	ids := append([]string{}, allIDs[start:end]...)
-
-	queryState, err := h.deps.Changes.SyncQuery(ctx, accountID, base.StateSubmissionQuery, queryKey, allIDs)
-	if err != nil {
-		return nil, err
-	}
-	resp := map[string]interface{}{
-		"accountId":           accountID,
-		"queryState":          queryState,
-		"canCalculateChanges": true,
-		"position":            start,
-		"ids":                 ids,
-	}
-	// RFC 8620 section 5.4: total MUST be omitted unless requested.
-	if req.CalculateTotal != nil && *req.CalculateTotal {
-		resp["total"] = len(allIDs)
-	}
-	return json.Marshal(resp)
+	return base.HandleQuery(ctx, accountID, args, h.querySpec())
 }
 
 func (h *Handler) EmailSubmissionQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		SinceQueryState string        `json:"sinceQueryState"`
-		Sort            []interface{} `json:"sort,omitempty"`
-		MaxChanges      *int          `json:"maxChanges,omitempty"`
-		UpToID          *string       `json:"upToId,omitempty"`
-		CalculateTotal  *bool         `json:"calculateTotal,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-	if req.UpToID != nil {
-		return nil, base.RejectArgument("upToId", "the change tracker cannot limit a query diff to an id")
-	}
-	filter, err := parseSubmissionFilter(args)
-	if err != nil {
-		return nil, err
-	}
-	property, ascending, err := submissionSortProperty(req.Sort)
-	if err != nil {
-		return nil, err
-	}
-	queryKey, err := base.QueryKey(filter, req.Sort)
-	if err != nil {
-		return nil, err
-	}
+	return base.HandleQueryChanges(ctx, accountID, args, h.querySpec())
+}
 
-	records, _, err := h.deps.Submissions.Load(ctx, accountID)
-	if err != nil {
-		return nil, err
+// querySpec is shared by EmailSubmission/query and /queryChanges.
+func (h *Handler) querySpec() base.QuerySpec {
+	return base.QuerySpec{
+		Allowed: base.ArgumentSet("accountId", "filter", "sort", "position", "anchor", "anchorOffset",
+			"limit", "calculateTotal"),
+		ChangesAllowed: base.ArgumentSet("accountId", "filter", "sinceQueryState", "sort", "maxChanges",
+			"upToId", "calculateTotal"),
+		SortProperties: submissionSortFields,
+		ParseFilter:    func(args json.RawMessage) (any, error) { return parseSubmissionFilter(args) },
+		AllIDs: func(ctx context.Context, accountID string, args json.RawMessage, filter any, ascending bool) ([]string, error) {
+			var raw struct {
+				Sort []interface{} `json:"sort"`
+			}
+			if err := json.Unmarshal(args, &raw); err != nil {
+				return nil, base.Errorf("invalidArguments", "query arguments must be an object")
+			}
+			property, _, err := submissionSortProperty(raw.Sort)
+			if err != nil {
+				return nil, err
+			}
+			records, _, err := h.deps.Submissions.Load(ctx, accountID)
+			if err != nil {
+				return nil, err
+			}
+			typed, _ := filter.(*submissionFilter)
+			return sortedSubmissionIDs(records, typed, property, ascending), nil
+		},
+		Tracker: h.deps.Changes,
+		Kind:    base.StateSubmissionQuery,
 	}
-	ids := sortedSubmissionIDs(records, filter, property, ascending)
-	result, err := h.deps.Changes.QueryChangesFrom(ctx, accountID, base.StateSubmissionQuery, queryKey, req.SinceQueryState, req.MaxChanges, ids)
-	if err != nil {
-		return nil, err
-	}
-	if req.CalculateTotal != nil && *req.CalculateTotal {
-		result["total"] = len(ids)
-	}
-	return json.Marshal(result)
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/kncept/Emissary/mailer/components/storage"
 	"github.com/kncept/Emissary/mailer/components/usermanager"
 	"github.com/kncept/Emissary/mailer/email"
+	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 )
 
 func newPropertyTestHandler(t *testing.T) (*Handler, context.Context) {
@@ -386,6 +387,7 @@ func TestEmailGetRealMIMEProperties(t *testing.T) {
 	result, err := handler.EmailGet(ctx, "test@example.com", json.RawMessage(
 		`{"ids":["`+id+`"],"properties":["id","blobId","threadId","size","sender","hasAttachment",`+
 			`"bodyStructure","textBody","htmlBody","attachments","headers","bodyValues","header:X-Custom-Header"],`+
+			`"bodyProperties":["partId","blobId","size","name","type","charset","disposition","cid","language","location","subParts"],`+
 			`"fetchTextBodyValues":true,"fetchHTMLBodyValues":true}`))
 	if err != nil {
 		t.Fatalf("EmailGet() error = %v", err)
@@ -496,7 +498,9 @@ func TestEmailGetRealMIMEProperties(t *testing.T) {
 }
 
 // TestRFC8621PropertyTables asserts that every property in the RFC 8621
-// section 1.1 tables for Email and Mailbox appears when properties is null.
+// property definitions for Email and Mailbox is available. Email requires an
+// explicit list because RFC 8621 section 4.1 narrows the omitted/null default;
+// Mailbox has no special default and still returns all properties on null.
 func TestRFC8621PropertyTables(t *testing.T) {
 	handler, ctx := newPropertyTestHandler(t)
 	emailProperties := []string{
@@ -505,7 +509,12 @@ func TestRFC8621PropertyTables(t *testing.T) {
 		"replyTo", "subject", "sentAt", "hasAttachment", "preview", "bodyStructure",
 		"bodyValues", "textBody", "htmlBody", "attachments", "headers",
 	}
-	emailResult, err := handler.EmailGet(ctx, "test@example.com", json.RawMessage(`{}`))
+	namesJSON, err := json.Marshal(emailProperties)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emailResult, err := handler.EmailGet(ctx, "test@example.com",
+		json.RawMessage(`{"properties":`+string(namesJSON)+`}`))
 	if err != nil {
 		t.Fatalf("EmailGet() error = %v", err)
 	}
@@ -550,6 +559,79 @@ func TestRFC8621PropertyTables(t *testing.T) {
 		if _, ok := rights[right]; !ok {
 			t.Errorf("Mailbox/myRights omitted %q", right)
 		}
+	}
+}
+
+// TestRFC8621DefaultProperties pins the exact RFC default property arrays and
+// verifies that omitted/null properties selects them while an explicit empty
+// array still selects only id (RFC 8620 section 5.1).
+func TestRFC8621DefaultProperties(t *testing.T) {
+	cases := []struct {
+		name     string
+		typeName string
+		want     []string
+	}{
+		{
+			name: "Email/get RFC 8621 section 4.1", typeName: "Email",
+			want: []string{
+				"id", "blobId", "threadId", "mailboxIds", "keywords", "size",
+				"receivedAt", "messageId", "inReplyTo", "references", "sender",
+				"from", "to", "cc", "bcc", "replyTo", "subject", "sentAt",
+				"hasAttachment", "preview", "bodyValues", "textBody", "htmlBody",
+				"attachments",
+			},
+		},
+		{
+			name: "Email/parse RFC 8621 section 4.9", typeName: "Email/parse",
+			want: []string{
+				"messageId", "inReplyTo", "references", "sender", "from", "to",
+				"cc", "bcc", "replyTo", "subject", "sentAt", "hasAttachment",
+				"preview", "bodyValues", "textBody", "htmlBody", "attachments",
+			},
+		},
+		{
+			name: "EmailBodyPart RFC 8621 section 4.2", typeName: "EmailBodyPart",
+			want: []string{
+				"partId", "blobId", "size", "name", "type", "charset",
+				"disposition", "cid", "language", "location",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := base.DefaultProperties(tc.typeName)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("DefaultProperties(%q) = %v, want %v", tc.typeName, got, tc.want)
+			}
+		})
+	}
+
+	handler, ctx := newPropertyTestHandler(t)
+	defaultKeys := append([]string(nil), base.DefaultProperties("Email")...)
+	slices.Sort(defaultKeys)
+	for _, tc := range []struct {
+		name, args string
+		want       []string
+	}{
+		{"omitted", `{}`, defaultKeys},
+		{"null", `{"properties":null}`, defaultKeys},
+		{"empty array", `{"properties":[]}`, []string{"id"}},
+	} {
+		t.Run("Email/get "+tc.name, func(t *testing.T) {
+			result, err := handler.EmailGet(ctx, "test@example.com", json.RawMessage(tc.args))
+			if err != nil {
+				t.Fatalf("EmailGet() error = %v", err)
+			}
+			_, obj := getListKeys(t, result)
+			keys := make([]string, 0, len(obj))
+			for key := range obj {
+				keys = append(keys, key)
+			}
+			slices.Sort(keys)
+			if !slices.Equal(keys, tc.want) {
+				t.Errorf("keys = %v, want %v", keys, tc.want)
+			}
+		})
 	}
 }
 

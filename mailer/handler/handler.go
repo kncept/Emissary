@@ -104,6 +104,17 @@ type Options struct {
 	SESIdentityLister SESIdentityLister
 }
 
+// jmapRequestLimits mirrors the limits advertised in the Session object. The
+// envelope validates literal ids with these values and the dispatcher repeats
+// the check after result references have been expanded.
+func jmapRequestLimits() jmap.RequestLimits {
+	return jmap.RequestLimits{
+		MaxCallsInRequest: jmapMaxCallsInRequest,
+		MaxObjectsInGet:   jmapMaxObjectsInGet,
+		MaxObjectsInSet:   jmapMaxObjectsInSet,
+	}
+}
+
 func resolvedJWTSecret(cfg *config.Config, opts Options) string {
 	if opts.JWTSecret != "" {
 		return opts.JWTSecret
@@ -227,7 +238,7 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 		return err == nil
 	})
 	pushHub.Start(ctx)
-	dispatcher := jmap.NewDispatcher(jmapHandler, emailStore, userManager)
+	dispatcher := jmap.NewDispatcher(jmapHandler, emailStore, userManager).WithLimits(jmapRequestLimits())
 
 	mux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -753,11 +764,7 @@ func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jm
 		return
 	}
 
-	req, requestErr := jmap.DecodeRequest(r.Header.Get("Content-Type"), body, jmap.RequestLimits{
-		MaxCallsInRequest: jmapMaxCallsInRequest,
-		MaxObjectsInGet:   jmapMaxObjectsInGet,
-		MaxObjectsInSet:   jmapMaxObjectsInSet,
-	})
+	req, requestErr := jmap.DecodeRequest(r.Header.Get("Content-Type"), body, jmapRequestLimits())
 	if requestErr != nil {
 		writeJMAPRequestError(w, requestErr)
 		return
@@ -776,6 +783,11 @@ func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jm
 
 	resp, err := dispatcher.DispatchRequest(r.Context(), accountID, claims, req)
 	if err != nil {
+		var requestErr *jmap.RequestError
+		if errors.As(err, &requestErr) {
+			writeJMAPRequestError(w, requestErr)
+			return
+		}
 		slog.Error("JMAP dispatch failed", "err", err)
 		writeJMAPProblem(w, http.StatusInternalServerError, "about:blank", "Internal Server Error",
 			"The request could not be processed.", "")

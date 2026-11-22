@@ -72,6 +72,7 @@ func TestJMAPMailUseCase_MimeFidelity(t *testing.T) {
 		{"Email/get", map[string]interface{}{
 			"accountId":          accountID,
 			"ids":                []string{id},
+			"properties":         []string{"id", "blobId", "size", "bodyStructure", "textBody", "htmlBody", "attachments", "bodyValues", "headers"},
 			"fetchAllBodyValues": true,
 		}, "get1"},
 	})

@@ -3,7 +3,6 @@ package blob
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -53,7 +52,6 @@ type copyResult struct {
 	AccountID     string              `json:"accountId"`
 	Copied        map[string]string   `json:"copied"`
 	NotCopied     map[string]setError `json:"notCopied"`
-	NotDestroyed  map[string]setError `json:"notDestroyed"`
 }
 
 func callBlobCopy(t *testing.T, h *Handler, ctx context.Context, args string) copyResult {
@@ -140,7 +138,7 @@ func TestEmailBackedBlobDownload(t *testing.T) {
 	}
 }
 
-func TestBlobCopyCopiesBetweenAccountsAndDestroysOriginal(t *testing.T) {
+func TestBlobCopyCopiesBetweenAccounts(t *testing.T) {
 	h, _, store, ctx := newBlobTest(t)
 	data := []byte("copy me")
 	meta, err := store.PutBlob(ctx, blobAlice, "text/plain", data)
@@ -148,7 +146,7 @@ func TestBlobCopyCopiesBetweenAccountsAndDestroysOriginal(t *testing.T) {
 		t.Fatalf("PutBlob() error = %v", err)
 	}
 
-	result := callBlobCopy(t, h, ctx, `{"fromAccountId":"alice@example.com","accountId":"bob@example.com","blobIds":["`+meta.ID+`"],"onSuccessDestroyOriginal":true}`)
+	result := callBlobCopy(t, h, ctx, `{"fromAccountId":"alice@example.com","accountId":"bob@example.com","blobIds":["`+meta.ID+`"]}`)
 	if result.FromAccountID != blobAlice || result.AccountID != blobBob {
 		t.Errorf("account ids = %q/%q, want %q/%q", result.FromAccountID, result.AccountID, blobAlice, blobBob)
 	}
@@ -160,12 +158,13 @@ func TestBlobCopyCopiesBetweenAccountsAndDestroysOriginal(t *testing.T) {
 	if err != nil || string(copiedData) != string(data) {
 		t.Errorf("GetBlob(dest) = %q, %v", copiedData, err)
 	}
-	if _, _, err := store.GetBlob(ctx, blobAlice, meta.ID); !errors.Is(err, storage.ErrNotFound) {
-		t.Errorf("original blob still present: %v", err)
+	// RFC 8620 section 6.3 has no destroy argument; the source is unchanged.
+	if _, _, err := store.GetBlob(ctx, blobAlice, meta.ID); err != nil {
+		t.Errorf("original blob was removed by Blob/copy: %v", err)
 	}
 }
 
-func TestBlobCopyDoesNotDestroyReferencedBlob(t *testing.T) {
+func TestBlobCopyReleasesTemporaryPin(t *testing.T) {
 	h, _, store, ctx := newBlobTest(t)
 	meta, err := store.PutBlob(ctx, blobAlice, "text/plain", []byte("still referenced"))
 	if err != nil {
@@ -175,20 +174,25 @@ func TestBlobCopyDoesNotDestroyReferencedBlob(t *testing.T) {
 		t.Fatalf("AddBlobRefs() error = %v", err)
 	}
 
-	result := callBlobCopy(t, h, ctx, `{"fromAccountId":"alice@example.com","accountId":"bob@example.com","blobIds":["`+meta.ID+`"],"onSuccessDestroyOriginal":true}`)
+	result := callBlobCopy(t, h, ctx, `{"fromAccountId":"alice@example.com","accountId":"bob@example.com","blobIds":["`+meta.ID+`"]}`)
 	if result.Copied[meta.ID] != meta.ID {
 		t.Fatalf("copy result = %+v, want copied id %q", result, meta.ID)
 	}
-	if err, ok := result.NotDestroyed[meta.ID]; !ok || err.Type != "forbidden" {
-		t.Fatalf("notDestroyed = %+v, want a forbidden error for the pinned blob", result.NotDestroyed)
-	}
 	if _, _, err := store.GetBlob(ctx, blobAlice, meta.ID); err != nil {
-		t.Errorf("referenced blob was destroyed inside Blob/copy: %v", err)
+		t.Errorf("referenced blob was removed inside Blob/copy: %v", err)
 	}
 	// The method's own temporary pin must be released after the call.
 	got, err := store.GetBlobMeta(ctx, blobAlice, meta.ID)
 	if err != nil || got.Refs != 1 {
 		t.Errorf("blob refs = %+v, %v, want the original single reference", got, err)
+	}
+}
+
+func TestBlobCopyRejectsNonStandardDestroyArgument(t *testing.T) {
+	h, _, _, ctx := newBlobTest(t)
+	_, err := h.BlobCopy(ctx, blobAlice, json.RawMessage(`{"fromAccountId":"alice@example.com","accountId":"bob@example.com","blobIds":["x"],"onSuccessDestroyOriginal":true}`))
+	if err == nil || !strings.HasPrefix(err.Error(), "invalidArguments:") {
+		t.Fatalf("BlobCopy() with onSuccessDestroyOriginal error = %v, want invalidArguments", err)
 	}
 }
 
@@ -232,7 +236,7 @@ func TestBlobCopyRejectsSameAccount(t *testing.T) {
 		t.Fatalf("PutBlob() error = %v", err)
 	}
 
-	_, err = h.BlobCopy(ctx, blobAlice, json.RawMessage(`{"fromAccountId":"alice@example.com","accountId":"alice@example.com","blobIds":["`+meta.ID+`"],"onSuccessDestroyOriginal":true}`))
+	_, err = h.BlobCopy(ctx, blobAlice, json.RawMessage(`{"fromAccountId":"alice@example.com","accountId":"alice@example.com","blobIds":["`+meta.ID+`"]}`))
 	if err == nil || !strings.HasPrefix(err.Error(), "invalidArguments:") {
 		t.Fatalf("same-account BlobCopy() error = %v, want invalidArguments", err)
 	}
@@ -270,13 +274,10 @@ func TestBlobCopyEmailBackedBlobKeepsOriginal(t *testing.T) {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
 
-	result := callBlobCopy(t, h, ctx, `{"fromAccountId":"alice@example.com","accountId":"bob@example.com","blobIds":["`+emailID+`"],"onSuccessDestroyOriginal":true}`)
+	result := callBlobCopy(t, h, ctx, `{"fromAccountId":"alice@example.com","accountId":"bob@example.com","blobIds":["`+emailID+`"]}`)
 	wantID := storage.BlobID(data)
 	if result.Copied[emailID] != wantID {
 		t.Fatalf("copy result = %+v, want destination id %q", result, wantID)
-	}
-	if result.NotDestroyed[emailID].Type != "forbidden" {
-		t.Errorf("notDestroyed = %+v, want forbidden for email-backed blob", result.NotDestroyed)
 	}
 	if _, _, err := store.GetBlob(ctx, blobAlice, emailID); err != nil {
 		t.Errorf("email-backed blob was destroyed: %v", err)

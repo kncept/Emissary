@@ -58,6 +58,7 @@ type Dispatcher struct {
 	handler      MethodHandler
 	sessionState storage.SessionStateStore
 	userMgr      usermanager.UserManager
+	limits       RequestLimits
 }
 
 // accountCapabilityChecker is implemented by handlers that can report which
@@ -78,6 +79,31 @@ func NewDispatcher(handler MethodHandler, sessionState storage.SessionStateStore
 		d.userMgr = userMgr[0]
 	}
 	return d
+}
+
+// WithLimits sets the advertised core object limits on the dispatcher. The
+// limits must be rechecked after result references are resolved, because the
+// envelope cannot know how many objects a "#resultRef" expands to.
+func (d *Dispatcher) WithLimits(limits RequestLimits) *Dispatcher {
+	d.limits = limits
+	return d
+}
+
+// checkObjectLimits applies maxObjectsInGet/maxObjectsInSet to a call whose
+// arguments have already been resolved. It returns a request-level error so
+// the whole request is rejected, matching literal-id enforcement.
+func (d *Dispatcher) checkObjectLimits(call Invocation) *RequestError {
+	if count, ok := getObjectCount(call); ok && d.limits.MaxObjectsInGet > 0 && count > d.limits.MaxObjectsInGet {
+		return limitError("maxObjectsInGet", 400, fmt.Sprintf(
+			"Method %s requested %d objects, exceeding the limit of %d.",
+			call.Name, count, d.limits.MaxObjectsInGet))
+	}
+	if count, ok := setObjectCount(call); ok && d.limits.MaxObjectsInSet > 0 && count > d.limits.MaxObjectsInSet {
+		return limitError("maxObjectsInSet", 400, fmt.Sprintf(
+			"Method %s contains %d object changes, exceeding the limit of %d.",
+			call.Name, count, d.limits.MaxObjectsInSet))
+	}
+	return nil
 }
 
 // MethodCall represents a single JMAP method call from the batch request.
@@ -338,6 +364,15 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 		}
 		call.Arguments = resolvedArgs
 
+		// RFC 8620 section 5.5: a result reference can expand into an arbitrary
+		// number of objects, so the advertised object limits must be enforced
+		// again now that the arguments contain their final values.
+		if requestErr := d.checkObjectLimits(call); requestErr != nil {
+			slog.Warn("JMAP: object limit exceeded after reference resolution",
+				"method", call.Name, "limit", requestErr.Limit)
+			return nil, requestErr
+		}
+
 		requiredCapability, knownMethod := MethodCapability(call.Name)
 		if knownMethod && !usingSet[requiredCapability] {
 			resp := d.errorResponse(call, fmt.Errorf("unknownMethod: %s", call.Name))
@@ -349,26 +384,30 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 		// back to the authenticated default. Convert it to the internal
 		// storage account only after authorisation; method handlers continue
 		// to see the email-shaped storage key.
-		publicAccountID := defaultAccountID
-		if call.Arguments != nil {
-			if accountIDRaw, ok := call.Arguments["accountId"]; ok {
-				var extracted string
-				if err := json.Unmarshal(accountIDRaw, &extracted); err != nil || extracted == "" {
-					resp := d.errorResponse(call, fmt.Errorf("invalidArguments: accountId must be a non-empty string"))
-					appendMethodResponse(&responses, responsesByID, createdIDs, resp)
-					continue
+		var accountID string
+		if !MethodIsAccountLess(call.Name) {
+			publicAccountID := defaultAccountID
+			if call.Arguments != nil {
+				if accountIDRaw, ok := call.Arguments["accountId"]; ok {
+					var extracted string
+					if err := json.Unmarshal(accountIDRaw, &extracted); err != nil || extracted == "" {
+						resp := d.errorResponse(call, fmt.Errorf("invalidArguments: accountId must be a non-empty string"))
+						appendMethodResponse(&responses, responsesByID, createdIDs, resp)
+						continue
+					}
+					publicAccountID = extracted
 				}
-				publicAccountID = extracted
 			}
+			resolved, err := auth.ResolveAccountID(ctx, claims, publicAccountID, d.userMgr)
+			if err != nil {
+				slog.Warn("JMAP: account resolution failed", "method", call.Name, "account", publicAccountID, "err", err)
+				resp := d.errorResponse(call, fmt.Errorf("%s", jmapAccountError(err)))
+				appendMethodResponse(&responses, responsesByID, createdIDs, resp)
+				continue
+			}
+			accountID = resolved
+			setStringArgument(call.Arguments, "accountId", accountID)
 		}
-		accountID, err := auth.ResolveAccountID(ctx, claims, publicAccountID, d.userMgr)
-		if err != nil {
-			slog.Warn("JMAP: account resolution failed", "method", call.Name, "account", publicAccountID, "err", err)
-			resp := d.errorResponse(call, fmt.Errorf("%s", jmapAccountError(err)))
-			appendMethodResponse(&responses, responsesByID, createdIDs, resp)
-			continue
-		}
-		setStringArgument(call.Arguments, "accountId", accountID)
 
 		// Blob/copy's fromAccountId is method-specific, so the dispatcher must
 		// authorise and translate it as well.
@@ -669,7 +708,6 @@ func externalizeAccountIDs(resp *Response) {
 var jmapErrorTypes = map[string]bool{
 	"accountNotFound":             true,
 	"accountNotSupportedByMethod": true,
-	"accountReadOnly":             true,
 	"anchorNotFound":              true,
 	"cannotCalculateChanges":      true,
 	"forbidden":                   true,

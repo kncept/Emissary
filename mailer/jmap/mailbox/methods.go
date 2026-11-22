@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"sort"
 	"strings"
 
 	"github.com/kncept/Emissary/mailer/components/storage"
@@ -13,52 +12,21 @@ import (
 )
 
 func (h *Handler) MailboxGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		IDs []string `json:"ids,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-	properties, err := base.ParseSelection(args, "properties", Mailbox{}, "")
-	if err != nil {
-		return nil, err
-	}
-
 	mailboxes := h.getMailboxes(ctx, accountID)
-	var list []Mailbox
-	var notFound []string
 	state, err := h.syncMailboxState(ctx, accountID, mailboxes)
 	if err != nil {
 		return nil, err
 	}
-
-	if len(req.IDs) > 0 {
-		mailboxMap := make(map[string]Mailbox, len(mailboxes))
-		for _, mb := range mailboxes {
-			mailboxMap[mb.ID] = mb
-		}
-		for _, id := range req.IDs {
-			if mb, ok := mailboxMap[id]; ok {
-				list = append(list, mb)
-			} else {
-				notFound = append(notFound, id)
-			}
-		}
-	} else {
-		list = mailboxes
-	}
-
-	selected, err := properties.Filter(list)
-	if err != nil {
-		return nil, err
-	}
-	resp := map[string]interface{}{
-		"accountId": accountID,
-		"state":     state,
-		"list":      selected,
-		"notFound":  notFound,
-	}
-	return json.Marshal(resp)
+	return base.HandleGet(ctx, accountID, args, base.GetSpec[Mailbox]{
+		Allowed: base.ArgumentSet("accountId", "ids", "properties"),
+		Model:   Mailbox{},
+		Load:    func(context.Context) ([]Mailbox, error) { return mailboxes, nil },
+		ID:      func(mb Mailbox) string { return mb.ID },
+		State:   func(context.Context) (string, error) { return state, nil },
+		Render: func(_ context.Context, mb Mailbox, selection *base.Selection, _ json.RawMessage) (json.RawMessage, error) {
+			return selection.Filter(mb)
+		},
+	})
 }
 
 type mailboxCreate struct {
@@ -78,284 +46,241 @@ type mailboxPatch struct {
 }
 
 func (h *Handler) MailboxSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		IfInState *string                    `json:"ifInState,omitempty"`
-		Create    map[string]json.RawMessage `json:"create,omitempty"`
-		Update    map[string]json.RawMessage `json:"update,omitempty"`
-		Destroy   []string                   `json:"destroy,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
+	return base.HandleSet(ctx, accountID, args, h.setSpec(accountID))
+}
 
-	oldState, err := h.deps.Changes.State(ctx, accountID, base.StateMailbox)
-	if err != nil {
-		return nil, err
-	}
-	// ifInState is advisory here; if provided and mismatched, reject whole set.
-	if req.IfInState != nil && *req.IfInState != oldState {
-		return nil, base.Errorf("stateMismatch", "mailbox state mismatch")
-	}
-
-	created := make(map[string]interface{})
-	updated := make(map[string]interface{})
-	destroyed := []string{}
-	notCreated := make(map[string]interface{})
-	notUpdated := make(map[string]interface{})
-	notDestroyed := make(map[string]interface{})
-
-	// Process creates in deterministic order for predictable ids.
-	createIDs := make([]string, 0, len(req.Create))
-	for id := range req.Create {
-		createIDs = append(createIDs, id)
-	}
-	sort.Strings(createIDs)
+// setSpec owns the per-request state needed by Mailbox/set callbacks. It is
+// created fresh for every call so creation-id references never leak between
+// JMAP requests.
+func (h *Handler) setSpec(accountID string) base.SetSpec {
 	// Track created ids within this call so parent references can resolve.
 	createdServerIDs := make(map[string]string)
-	for _, cid := range createIDs {
-		var mc mailboxCreate
-		if err := json.Unmarshal(req.Create[cid], &mc); err != nil {
-			notCreated[cid] = setError("invalidProperties", "Invalid create object")
-			continue
-		}
-		name := ""
-		if mc.Name != nil {
-			name = strings.TrimSpace(*mc.Name)
-		}
-		if name == "" {
-			notCreated[cid] = setError("invalidProperties", "name is required")
-			continue
-		}
-		// Role mailboxes are predefined; clients must not create mailboxes with a role.
-		if mc.Role != nil && strings.TrimSpace(*mc.Role) != "" {
-			notCreated[cid] = setError("invalidProperties", "cannot create a mailbox with a role")
-			continue
-		}
-		var parentID *string
-		if mc.ParentID != nil {
-			p := storage.NormalizeMailboxID(*mc.ParentID)
-			if real, ok := createdServerIDs[p]; ok {
-				p = real
+	return base.SetSpec{
+		Allowed: base.ArgumentSet("accountId", "ifInState", "create", "update", "destroy", "onDestroyRemoveEmails"),
+		State: func(ctx context.Context) (string, error) {
+			return h.syncMailboxState(ctx, accountID, h.getMailboxes(ctx, accountID))
+		},
+		Create: func(ctx context.Context, cid string, raw json.RawMessage) (json.RawMessage, *base.SetError, error) {
+			fail := func(setErr base.SetError) (json.RawMessage, *base.SetError, error) {
+				return nil, &setErr, nil
 			}
-			if p != "" {
-				notCreated[cid] = setError("invalidProperties", "only top-level mailboxes are supported")
-				continue
+			// RFC 8620 section 5: unknown or immutable create properties are
+			// rejected as invalidProperties SetErrors naming the offending keys.
+			invalid := base.ValidateCreateProperties(
+				map[string]json.RawMessage{cid: raw},
+				base.ArgumentSet("name", "parentId", "role", "sortOrder", "isSubscribed"),
+				base.ArgumentSet("id"))
+			if names, bad := invalid[cid]; bad {
+				return fail(base.InvalidProperties(base.SetErrorNames(names), names...))
 			}
-		}
-		sortOrder := 0
-		if mc.SortOrder != nil {
-			sortOrder = *mc.SortOrder
-		}
-		isSubscribed := true
-		if mc.IsSubscribed != nil {
-			isSubscribed = *mc.IsSubscribed
-		}
-		// Generate a stable-ish server id from name; ensure uniqueness.
-		serverID := storage.NormalizeMailboxID(name)
-		if serverID == "" {
-			serverID = "mailbox"
-		}
-		// avoid collisions with existing or role mailboxes
-		baseID := serverID
-		for i := 1; ; i++ {
-			_, err := h.deps.Storage.GetMailbox(ctx, accountID, serverID)
-			if err != nil {
-				break
+			var mc mailboxCreate
+			if err := json.Unmarshal(raw, &mc); err != nil {
+				return fail(base.NewSetError("invalidProperties", "Invalid create object"))
 			}
-			serverID = baseID + "-" + strings.TrimSpace(strings.ReplaceAll(string(rune('a'+(i%26))), " ", ""))
-			if i > 25 {
-				serverID = baseID + "-" + cid
-				break
+			name := ""
+			if mc.Name != nil {
+				name = strings.TrimSpace(*mc.Name)
 			}
-		}
-		mb, err := h.deps.Storage.CreateMailbox(ctx, accountID, storage.Mailbox{
-			ID:           serverID,
-			Name:         name,
-			ParentID:     parentID,
-			Role:         nil,
-			SortOrder:    sortOrder,
-			IsSubscribed: isSubscribed,
-		})
-		if err != nil {
-			switch {
-			case errors.Is(err, storage.ErrMailboxExists):
-				notCreated[cid] = setError("invalidProperties", "mailbox already exists")
-			case errors.Is(err, storage.ErrNotFound):
-				notCreated[cid] = setError("invalidProperties", "parent mailbox not found")
-			default:
-				notCreated[cid] = setError("serverFail", err.Error())
-			}
-			continue
-		}
-		createdServerIDs[cid] = mb.ID
-		j := h.toJMAPMailbox(ctx, accountID, mb)
-		created[cid] = map[string]interface{}{
-			"id":            j.ID,
-			"sortOrder":     j.SortOrder,
-			"totalEmails":   j.TotalEmails,
-			"unreadEmails":  j.UnreadEmails,
-			"totalThreads":  j.TotalThreads,
-			"unreadThreads": j.UnreadThreads,
-			"myRights":      j.MyRights,
-			"isSubscribed":  j.IsSubscribed,
-		}
-	}
-
-	// Updates
-	for id, raw := range req.Update {
-		var patch mailboxPatch
-		if err := json.Unmarshal(raw, &patch); err != nil {
-			notUpdated[id] = setError("invalidProperties", "Invalid update patch")
-			continue
-		}
-		current, err := h.deps.Storage.GetMailbox(ctx, accountID, id)
-		if err != nil {
-			notUpdated[id] = setError("notFound", "Mailbox not found")
-			continue
-		}
-		role := ""
-		if current.Role != nil {
-			role = strings.ToLower(*current.Role)
-		}
-		// Role mailboxes cannot have their role changed; ignore role patches that try to change.
-		if patch.Role != nil {
-			// Reject explicit role changes.
-			switch v := patch.Role.(type) {
-			case string:
-				if strings.ToLower(v) != role {
-					notUpdated[id] = setError("invalidProperties", "cannot change mailbox role")
-					continue
-				}
-			case nil:
-				if role != "" {
-					notUpdated[id] = setError("invalidProperties", "cannot remove mailbox role")
-					continue
-				}
-			default:
-				notUpdated[id] = setError("invalidProperties", "invalid role")
-				continue
-			}
-		}
-		if patch.Name != nil {
-			name := strings.TrimSpace(*patch.Name)
 			if name == "" {
-				notUpdated[id] = setError("invalidProperties", "name must not be empty")
-				continue
+				return fail(base.NewSetError("invalidProperties", "name is required"))
 			}
-			// Role mailboxes may not be renamed.
-			if role != "" {
-				notUpdated[id] = setError("invalidProperties", "cannot rename a mailbox with a role")
-				continue
+			// Role mailboxes are predefined; clients must not create mailboxes with a role.
+			if mc.Role != nil && strings.TrimSpace(*mc.Role) != "" {
+				return fail(base.NewSetError("invalidProperties", "cannot create a mailbox with a role"))
 			}
-			current.Name = name
-		}
-		if patch.ParentID != nil {
-			if role != "" {
-				notUpdated[id] = setError("invalidProperties", "cannot move a mailbox with a role")
-				continue
-			}
-			switch v := patch.ParentID.(type) {
-			case nil:
-				current.ParentID = nil
-			case string:
-				p := storage.NormalizeMailboxID(v)
+			if mc.ParentID != nil {
+				p := storage.NormalizeMailboxID(*mc.ParentID)
 				if real, ok := createdServerIDs[p]; ok {
 					p = real
 				}
-				if p == "" {
-					current.ParentID = nil
-				} else {
-					notUpdated[id] = setError("invalidProperties", "only top-level mailboxes are supported")
-					continue
+				if p != "" {
+					return fail(base.NewSetError("invalidProperties", "only top-level mailboxes are supported"))
 				}
-			default:
-				notUpdated[id] = setError("invalidProperties", "invalid parentId")
-				continue
 			}
-		}
-		if patch.SortOrder != nil {
-			current.SortOrder = *patch.SortOrder
-		}
-		if patch.IsSubscribed != nil {
-			current.IsSubscribed = *patch.IsSubscribed
-		}
-		if _, err := h.deps.Storage.UpdateMailbox(ctx, accountID, current); err != nil {
-			switch {
-			case errors.Is(err, storage.ErrNotFound):
-				notUpdated[id] = setError("notFound", "Mailbox not found")
-			default:
-				notUpdated[id] = setError("invalidProperties", err.Error())
+			sortOrder := 0
+			if mc.SortOrder != nil {
+				sortOrder = *mc.SortOrder
 			}
-			continue
-		}
-		updated[id] = nil
-	}
-
-	// Destroys
-	for _, id := range req.Destroy {
-		current, err := h.deps.Storage.GetMailbox(ctx, accountID, id)
-		if err != nil {
-			notDestroyed[id] = setError("notFound", "Mailbox not found")
-			continue
-		}
-		if current.Role != nil && strings.TrimSpace(*current.Role) != "" {
-			notDestroyed[id] = setError("forbidden", "Cannot destroy a mailbox with a role")
-			continue
-		}
-		// Ensure empty (messages and children).
-		if err := h.deps.Storage.DeleteMailbox(ctx, accountID, id); err != nil {
-			switch {
-			case errors.Is(err, storage.ErrNotFound):
-				notDestroyed[id] = setError("notFound", "Mailbox not found")
-			case errors.Is(err, storage.ErrMailboxNotEmpty):
-				notDestroyed[id] = setError("mailboxHasChild", "Mailbox is not empty")
-			default:
-				notDestroyed[id] = setError("serverFail", err.Error())
+			isSubscribed := true
+			if mc.IsSubscribed != nil {
+				isSubscribed = *mc.IsSubscribed
 			}
-			continue
-		}
-		destroyed = append(destroyed, id)
+			// Generate a stable-ish server id from name; ensure uniqueness.
+			serverID := storage.NormalizeMailboxID(name)
+			if serverID == "" {
+				serverID = "mailbox"
+			}
+			baseID := serverID
+			for i := 1; ; i++ {
+				_, err := h.deps.Storage.GetMailbox(ctx, accountID, serverID)
+				if err != nil {
+					break
+				}
+				serverID = baseID + "-" + strings.TrimSpace(strings.ReplaceAll(string(rune('a'+(i%26))), " ", ""))
+				if i > 25 {
+					serverID = baseID + "-" + cid
+					break
+				}
+			}
+			mb, err := h.deps.Storage.CreateMailbox(ctx, accountID, storage.Mailbox{
+				ID:           serverID,
+				Name:         name,
+				ParentID:     nil,
+				Role:         nil,
+				SortOrder:    sortOrder,
+				IsSubscribed: isSubscribed,
+			})
+			if err != nil {
+				switch {
+				case errors.Is(err, storage.ErrMailboxExists):
+					return fail(base.NewSetError("invalidProperties", "mailbox already exists"))
+				case errors.Is(err, storage.ErrNotFound):
+					return fail(base.NewSetError("invalidProperties", "parent mailbox not found"))
+				default:
+					return fail(base.NewSetError("serverFail", err.Error()))
+				}
+			}
+			createdServerIDs[cid] = mb.ID
+			j := h.toJMAPMailbox(ctx, accountID, mb)
+			result, err := json.Marshal(map[string]any{
+				"id":            j.ID,
+				"sortOrder":     j.SortOrder,
+				"totalEmails":   j.TotalEmails,
+				"unreadEmails":  j.UnreadEmails,
+				"totalThreads":  j.TotalThreads,
+				"unreadThreads": j.UnreadThreads,
+				"myRights":      j.MyRights,
+				"isSubscribed":  j.IsSubscribed,
+			})
+			return result, nil, err
+		},
+		Update: func(ctx context.Context, id string, raw json.RawMessage) (json.RawMessage, *base.SetError, error) {
+			fail := func(setErr base.SetError) (json.RawMessage, *base.SetError, error) {
+				return nil, &setErr, nil
+			}
+			current, err := h.deps.Storage.GetMailbox(ctx, accountID, id)
+			if err != nil {
+				return fail(base.NewSetError("notFound", "Mailbox not found"))
+			}
+			// RFC 8620 section 5.3: validate the PatchObject structure (JSON
+			// Pointer escapes, no array traversal, existing parents, no prefix
+			// conflicts) before applying any semantic changes.
+			patchCurrent, _ := json.Marshal(map[string]any{
+				"name": current.Name, "parentId": current.ParentID, "role": current.Role,
+				"sortOrder": current.SortOrder, "isSubscribed": current.IsSubscribed,
+			})
+			if _, err := base.ApplyPatch(patchCurrent, raw); err != nil {
+				return fail(base.NewSetError("invalidPatch", err.Error()))
+			}
+			var patch mailboxPatch
+			if err := json.Unmarshal(raw, &patch); err != nil {
+				return fail(base.NewSetError("invalidPatch", "Invalid update patch"))
+			}
+			role := ""
+			if current.Role != nil {
+				role = strings.ToLower(*current.Role)
+			}
+			// Role mailboxes cannot have their role changed.
+			if patch.Role != nil {
+				switch v := patch.Role.(type) {
+				case string:
+					if strings.ToLower(v) != role {
+						return fail(base.NewSetError("invalidProperties", "cannot change mailbox role"))
+					}
+				case nil:
+					if role != "" {
+						return fail(base.NewSetError("invalidProperties", "cannot remove mailbox role"))
+					}
+				default:
+					return fail(base.NewSetError("invalidProperties", "invalid role"))
+				}
+			}
+			if patch.Name != nil {
+				name := strings.TrimSpace(*patch.Name)
+				if name == "" {
+					return fail(base.NewSetError("invalidProperties", "name must not be empty"))
+				}
+				if role != "" {
+					return fail(base.NewSetError("invalidProperties", "cannot rename a mailbox with a role"))
+				}
+				current.Name = name
+			}
+			if patch.ParentID != nil {
+				if role != "" {
+					return fail(base.NewSetError("invalidProperties", "cannot move a mailbox with a role"))
+				}
+				switch v := patch.ParentID.(type) {
+				case nil:
+					current.ParentID = nil
+				case string:
+					p := storage.NormalizeMailboxID(v)
+					if real, ok := createdServerIDs[p]; ok {
+						p = real
+					}
+					if p == "" {
+						current.ParentID = nil
+					} else {
+						return fail(base.NewSetError("invalidProperties", "only top-level mailboxes are supported"))
+					}
+				default:
+					return fail(base.NewSetError("invalidProperties", "invalid parentId"))
+				}
+			}
+			if patch.SortOrder != nil {
+				current.SortOrder = *patch.SortOrder
+			}
+			if patch.IsSubscribed != nil {
+				current.IsSubscribed = *patch.IsSubscribed
+			}
+			if _, err := h.deps.Storage.UpdateMailbox(ctx, accountID, current); err != nil {
+				if errors.Is(err, storage.ErrNotFound) {
+					return fail(base.NewSetError("notFound", "Mailbox not found"))
+				}
+				return fail(base.NewSetError("invalidProperties", err.Error()))
+			}
+			// Phase 3 will add updatedProperties; preserve the current
+			// response shape until that task lands.
+			return json.RawMessage("null"), nil, nil
+		},
+		Destroy: func(ctx context.Context, id string) *base.SetError {
+			current, err := h.deps.Storage.GetMailbox(ctx, accountID, id)
+			if err != nil {
+				setErr := base.NewSetError("notFound", "Mailbox not found")
+				return &setErr
+			}
+			if current.Role != nil && strings.TrimSpace(*current.Role) != "" {
+				setErr := base.NewSetError("forbidden", "Cannot destroy a mailbox with a role")
+				return &setErr
+			}
+			// Ensure empty (messages and children).
+			if err := h.deps.Storage.DeleteMailbox(ctx, accountID, id); err != nil {
+				setErr := base.SetError{}
+				switch {
+				case errors.Is(err, storage.ErrNotFound):
+					setErr = base.NewSetError("notFound", "Mailbox not found")
+				case errors.Is(err, storage.ErrMailboxNotEmpty):
+					setErr = base.NewSetError("mailboxHasChild", "Mailbox is not empty")
+				default:
+					setErr = base.NewSetError("serverFail", err.Error())
+				}
+				return &setErr
+			}
+			return nil
+		},
 	}
-
-	newState, err := h.syncMailboxState(ctx, accountID, h.getMailboxes(ctx, accountID))
-	if err != nil {
-		newState = oldState
-	}
-	resp := map[string]interface{}{
-		"accountId":    accountID,
-		"oldState":     oldState,
-		"newState":     newState,
-		"created":      created,
-		"updated":      updated,
-		"destroyed":    destroyed,
-		"notCreated":   notCreated,
-		"notUpdated":   notUpdated,
-		"notDestroyed": notDestroyed,
-	}
-	return json.Marshal(resp)
-}
-
-func setError(typ, description string) map[string]string {
-	return map[string]string{"type": typ, "description": description}
 }
 
 func (h *Handler) MailboxChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		SinceState string `json:"sinceState"`
-		MaxChanges *int   `json:"maxChanges,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-
-	if _, err := h.syncMailboxState(ctx, accountID, h.getMailboxes(ctx, accountID)); err != nil {
-		return nil, err
-	}
-	result, err := h.deps.Changes.ChangesFrom(ctx, accountID, base.StateMailbox, req.SinceState, req.MaxChanges)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(result)
+	return base.HandleChanges(ctx, accountID, args, base.ChangesSpec{
+		Allowed: base.ArgumentSet("accountId", "sinceState", "maxChanges"),
+		Sync: func(ctx context.Context) error {
+			_, err := h.syncMailboxState(ctx, accountID, h.getMailboxes(ctx, accountID))
+			return err
+		},
+		Changes: func(ctx context.Context, sinceState string, maxChanges *int) (map[string]any, error) {
+			return h.deps.Changes.ChangesFrom(ctx, accountID, base.StateMailbox, sinceState, maxChanges)
+		},
+	})
 }
 
 // mailboxFilter is shared by Mailbox/query and Mailbox/queryChanges so the
@@ -453,95 +378,28 @@ func (h *Handler) queryMailboxIDs(ctx context.Context, accountID string, filter 
 }
 
 func (h *Handler) MailboxQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		Sort           []interface{} `json:"sort,omitempty"`
-		Position       *int          `json:"position,omitempty"`
-		Anchor         *string       `json:"anchor,omitempty"`
-		AnchorOffset   *int          `json:"anchorOffset,omitempty"`
-		Limit          *int          `json:"limit,omitempty"`
-		CalculateTotal *bool         `json:"calculateTotal,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-	// Mailbox ordering comes from the storage layer; no comparator is applied
-	// here, so any requested sort must be rejected rather than ignored.
-	if _, err := base.SortAscending(req.Sort, nil); err != nil {
-		return nil, err
-	}
-	filter, err := parseMailboxFilter(args)
-	if err != nil {
-		return nil, err
-	}
-	queryKey, err := base.QueryKey(filter, req.Sort)
-	if err != nil {
-		return nil, err
-	}
-
-	allIDs, err := h.queryMailboxIDs(ctx, accountID, filter)
-	if err != nil {
-		return nil, err
-	}
-	start, end, err := base.PageBoundsForIDs(allIDs, req.Position, req.Limit, req.Anchor, req.AnchorOffset)
-	if err != nil {
-		return nil, err
-	}
-	ids := append([]string{}, allIDs[start:end]...)
-	queryState, err := h.deps.Changes.SyncQuery(ctx, accountID, base.StateMailboxQuery, queryKey, allIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	resp := map[string]interface{}{
-		"accountId":           accountID,
-		"queryState":          queryState,
-		"canCalculateChanges": true,
-		"position":            start,
-		"ids":                 ids,
-	}
-	// RFC 8620 section 5.4: total MUST be omitted unless requested.
-	if req.CalculateTotal != nil && *req.CalculateTotal {
-		resp["total"] = len(allIDs)
-	}
-	return json.Marshal(resp)
+	return base.HandleQuery(ctx, accountID, args, h.querySpec())
 }
 
 func (h *Handler) MailboxQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		SinceQueryState string        `json:"sinceQueryState"`
-		Sort            []interface{} `json:"sort,omitempty"`
-		MaxChanges      *int          `json:"maxChanges,omitempty"`
-		UpToID          *string       `json:"upToId,omitempty"`
-		CalculateTotal  *bool         `json:"calculateTotal,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-	if _, err := base.SortAscending(req.Sort, nil); err != nil {
-		return nil, err
-	}
-	filter, err := parseMailboxFilter(args)
-	if err != nil {
-		return nil, err
-	}
-	if req.UpToID != nil {
-		return nil, base.RejectArgument("upToId", "the change tracker cannot limit a query diff to an id")
-	}
-	queryKey, err := base.QueryKey(filter, req.Sort)
-	if err != nil {
-		return nil, err
-	}
+	return base.HandleQueryChanges(ctx, accountID, args, h.querySpec())
+}
 
-	ids, err := h.queryMailboxIDs(ctx, accountID, filter)
-	if err != nil {
-		return nil, err
+// querySpec is shared by Mailbox/query and Mailbox/queryChanges so filter,
+// ordering and query state are derived identically in both methods.
+func (h *Handler) querySpec() base.QuerySpec {
+	return base.QuerySpec{
+		// Mailbox ordering comes from storage; no sort is implemented yet.
+		Allowed: base.ArgumentSet("accountId", "filter", "sort", "position", "anchor", "anchorOffset",
+			"limit", "calculateTotal"),
+		ChangesAllowed: base.ArgumentSet("accountId", "filter", "sinceQueryState", "sort", "maxChanges",
+			"upToId", "calculateTotal"),
+		ParseFilter: func(args json.RawMessage) (any, error) { return parseMailboxFilter(args) },
+		AllIDs: func(ctx context.Context, accountID string, _ json.RawMessage, filter any, _ bool) ([]string, error) {
+			typed, _ := filter.(*mailboxFilter)
+			return h.queryMailboxIDs(ctx, accountID, typed)
+		},
+		Tracker: h.deps.Changes,
+		Kind:    base.StateMailboxQuery,
 	}
-	result, err := h.deps.Changes.QueryChangesFrom(ctx, accountID, base.StateMailboxQuery, queryKey, req.SinceQueryState, req.MaxChanges, ids)
-	if err != nil {
-		return nil, err
-	}
-	if req.CalculateTotal != nil && *req.CalculateTotal {
-		result["total"] = len(ids)
-	}
-	return json.Marshal(result)
 }

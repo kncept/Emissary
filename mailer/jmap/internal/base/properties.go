@@ -17,26 +17,77 @@ type Selection struct {
 	recurseKey    string
 }
 
+// DefaultProperties returns the RFC-defined default `properties` array for a
+// JMAP data type. A nil result means the type has no special default and the
+// RFC 8620 section 5.1 default of "all properties" applies. RFC 8621 overrides
+// this for Email (section 4.1), Email/parse (section 4.9) and EmailBodyPart
+// (the bodyProperties argument of sections 4.2 and 4.9).
+func DefaultProperties(typeName string) []string {
+	switch typeName {
+	case "Email":
+		return []string{
+			"id", "blobId", "threadId", "mailboxIds", "keywords", "size",
+			"receivedAt", "messageId", "inReplyTo", "references", "sender",
+			"from", "to", "cc", "bcc", "replyTo", "subject", "sentAt",
+			"hasAttachment", "preview", "bodyValues", "textBody", "htmlBody",
+			"attachments",
+		}
+	case "Email/parse":
+		return []string{
+			"messageId", "inReplyTo", "references", "sender", "from", "to",
+			"cc", "bcc", "replyTo", "subject", "sentAt", "hasAttachment",
+			"preview", "bodyValues", "textBody", "htmlBody", "attachments",
+		}
+	case "EmailBodyPart":
+		return []string{
+			"partId", "blobId", "size", "name", "type", "charset",
+			"disposition", "cid", "language", "location",
+		}
+	default:
+		return nil
+	}
+}
+
 // ParseSelection reads the named argument from a /get call and validates every
 // requested name against the JSON property names of model. A dynamicPrefix
 // (for example "header:") additionally permits names with that prefix, which
 // RFC 8621 defines as dynamic properties. An absent or null argument yields a
 // nil Selection; an unknown name yields an invalidArguments method error.
 func ParseSelection(args json.RawMessage, key string, model any, dynamicPrefix string) (*Selection, error) {
+	return parseSelection(args, key, model, dynamicPrefix, nil)
+}
+
+// ParseSelectionWithDefault is ParseSelection but applies defaultNames when
+// the argument is omitted or null. Passing nil keeps the RFC 8620 section 5.1
+// behaviour of returning every property. The default is validated against the
+// model exactly like an explicit list, so it cannot request unknown names.
+func ParseSelectionWithDefault(args json.RawMessage, key string, model any, dynamicPrefix string, defaultNames []string) (*Selection, error) {
+	return parseSelection(args, key, model, dynamicPrefix, defaultNames)
+}
+
+func parseSelection(args json.RawMessage, key string, model any, dynamicPrefix string, defaultNames []string) (*Selection, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(args, &raw); err != nil {
 		return nil, err
 	}
 	value, ok := raw[key]
 	if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-		return nil, nil
+		if defaultNames == nil {
+			return nil, nil
+		}
+		names := append([]string(nil), defaultNames...)
+		return newSelection(names, model, key, dynamicPrefix)
 	}
 
 	var names []string
 	if err := json.Unmarshal(value, &names); err != nil {
 		return nil, Errorf("invalidArguments", "%s must be an array of strings or null", key)
 	}
+	return newSelection(names, model, key, dynamicPrefix)
+}
 
+// newSelection validates a list of property names and builds a Selection.
+func newSelection(names []string, model any, key, dynamicPrefix string) (*Selection, error) {
 	allowed := propertyNames(model)
 	selected := make(map[string]bool, len(names))
 	for _, name := range names {
@@ -164,6 +215,13 @@ func (s *Selection) Apply(obj map[string]json.RawMessage) map[string]json.RawMes
 		}
 	}
 	return out
+}
+
+// ArgumentNames returns the JSON argument names declared by a struct. It is
+// the companion to RejectUnknownArguments so a method can derive its allowed
+// argument set from the request struct it already decodes into.
+func ArgumentNames(model any) map[string]bool {
+	return propertyNames(model)
 }
 
 // propertyNames returns the JSON property names declared by a model struct.

@@ -921,7 +921,7 @@ func TestEmailSubmissionSetChecksFromIdentity(t *testing.T) {
 		{
 			"identity lookup failure is a server error",
 			stubFromValidator{errors.New("SES unavailable")},
-			"serverError",
+			"serverFail",
 			false,
 		},
 	}

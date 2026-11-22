@@ -587,9 +587,12 @@ func TestJMAPRequestLevelErrors(t *testing.T) {
 			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
 		},
 		{
-			name: "malformed method name", contentType: "application/json",
-			body:       `{"using":[],"methodCalls":[["Echo",{},"c1"]]}`,
-			wantStatus: 400, wantType: "urn:ietf:params:jmap:error:notRequest",
+			// RFC 8620 section 3.2 defines the name as a String. "Echo" is a
+			// syntactically valid but unknown method, so it is a method-level
+			// unknownMethod error with HTTP 200, not a notRequest error.
+			name: "syntactically valid unknown method name", contentType: "application/json",
+			body:       `{"using":["urn:ietf:params:jmap:core"],"methodCalls":[["Echo",{},"c1"]]}`,
+			wantStatus: 200,
 		},
 		{
 			name: "methodCallId not string", contentType: "application/json",
@@ -682,6 +685,27 @@ func TestJMAPRequestLevelErrors(t *testing.T) {
 			assertJMAPProblem(t, w, tc.wantStatus, tc.wantType, tc.wantLimit)
 		})
 	}
+}
+
+// TestJMAPObjectLimitAfterResultReference verifies that a result reference
+// expanding past maxObjectsInGet is rejected as a request-level limit error
+// (HTTP 400, type=limit), matching the literal-id case. Core/echo is used to
+// produce the oversized id list without needing that many stored emails.
+func TestJMAPObjectLimitAfterResultReference(t *testing.T) {
+	h := newJMAPLimitHandler(t, 1<<20)
+	token := jmapToken(t, h)
+
+	ids := jmapJSONArray("e", jmapMaxObjectsInGet+1)
+	body := fmt.Sprintf(`{
+		"using":["urn:ietf:params:jmap:core","urn:ietf:params:jmap:mail"],
+		"methodCalls":[
+			["Core/echo",{"ids":%s},"echo1"],
+			["Email/get",{"accountId":"admin","#ids":{"resultOf":"echo1","name":"Core/echo","path":"/ids/*"}},"get1"]
+		]
+	}`, ids)
+
+	w := jmapRequestWithContentType(t, h, token, "application/json", body)
+	assertJMAPProblem(t, w, http.StatusBadRequest, "urn:ietf:params:jmap:error:limit", "maxObjectsInGet")
 }
 
 func TestJMAPUnknownMethodRemainsMethodLevelError(t *testing.T) {

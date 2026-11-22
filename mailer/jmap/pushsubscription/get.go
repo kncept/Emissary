@@ -27,56 +27,20 @@ func (h *Handler) PushSubscriptionGet(ctx context.Context, _ string, args json.R
 	if err := rejectPrivateProperties(args); err != nil {
 		return nil, err
 	}
-	selection, err := base.ParseSelection(args, "properties", view{}, "")
-	if err != nil {
-		return nil, err
-	}
-
 	subs, err := h.load(ctx, CredentialID(ctx))
 	if err != nil {
 		return nil, base.Errorf("serverFail", "could not load push subscriptions: %v", err)
 	}
-	byID := make(map[string]storage.PushSubscription, len(subs))
-	for _, sub := range subs {
-		byID[sub.ID] = sub
-	}
 
-	var request struct {
-		IDs []string `json:"ids,omitempty"`
-	}
-	if err := json.Unmarshal(args, &request); err != nil {
-		return nil, base.Errorf("invalidArguments", "invalid ids argument")
-	}
-
-	list := make([]view, 0, len(subs))
-	notFound := []string{}
-	if request.IDs == nil {
-		for _, sub := range subs {
-			list = append(list, toView(sub))
-		}
-	} else {
-		seen := make(map[string]bool, len(request.IDs))
-		for _, id := range request.IDs {
-			if seen[id] {
-				continue
-			}
-			seen[id] = true
-			sub, ok := byID[id]
-			if !ok {
-				notFound = append(notFound, id)
-				continue
-			}
-			list = append(list, toView(sub))
-		}
-	}
-
-	filtered, err := selection.Filter(list)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(map[string]any{
-		"list":     filtered,
-		"notFound": notFound,
+	return base.HandleGet(ctx, "", args, base.GetSpec[storage.PushSubscription]{
+		Allowed:     getArgumentNames,
+		Model:       view{},
+		AccountLess: true,
+		Load:        func(context.Context) ([]storage.PushSubscription, error) { return subs, nil },
+		ID:          func(sub storage.PushSubscription) string { return sub.ID },
+		Render: func(_ context.Context, sub storage.PushSubscription, selection *base.Selection, _ json.RawMessage) (json.RawMessage, error) {
+			return selection.Filter(toView(sub))
+		},
 	})
 }
 

@@ -130,6 +130,18 @@ func MethodCapability(name string) (string, bool) {
 	return capability, ok
 }
 
+// accountLessMethods do not accept an accountId argument and must not have one
+// injected by the dispatcher. RFC 8620 section 7 defines PushSubscription
+// methods as account-less; Core/echo must return its arguments unchanged.
+var accountLessMethods = map[string]bool{
+	MethodCoreEcho:            true,
+	MethodPushSubscriptionGet: true,
+	MethodPushSubscriptionSet: true,
+}
+
+// MethodIsAccountLess reports whether a method is account-less.
+func MethodIsAccountLess(name string) bool { return accountLessMethods[name] }
+
 // AllMethods returns a list of all JMAP method names.
 func AllMethods() []string {
 	groups := [][]string{

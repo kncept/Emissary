@@ -43,6 +43,10 @@ func (h *Handler) SearchSnippetGet(ctx context.Context, accountID string, args j
 		EmailIDs []string        `json:"emailIds"`
 		Filter   json.RawMessage `json:"filter,omitempty"`
 	}
+	if err := base.RejectUnknownArguments(args, base.ArgumentSet(
+		"accountId", "emailIds", "filter")); err != nil {
+		return nil, err
+	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
@@ -62,12 +66,11 @@ func (h *Handler) SearchSnippetGet(ctx context.Context, accountID string, args j
 		}
 		list = append(list, snippet{EmailID: id, Subject: nil, Preview: nil})
 	}
-	resp := map[string]any{
-		"accountId": accountID,
-		"list":      list,
-		"notFound":  notFound,
-	}
-	return json.Marshal(resp)
+	return base.GetResult{
+		AccountID: accountID,
+		List:      list,
+		NotFound:  notFound,
+	}.Marshal()
 }
 
 var _ MethodHandler = (*Handler)(nil)

@@ -102,13 +102,12 @@ func toView(sub storage.PushSubscription) view {
 	return v
 }
 
-type setError struct {
-	Type        string `json:"type"`
-	Description string `json:"description"`
-}
+// setError is the shared RFC 8620 SetError object, aliased so the package's
+// response maps keep their local name.
+type setError = base.SetError
 
 func setErrorOf(typ, description string) setError {
-	return setError{Type: typ, Description: description}
+	return base.NewSetError(typ, description)
 }
 
 // CredentialID derives a storage-safe identifier for the credentials that

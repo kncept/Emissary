@@ -151,10 +151,6 @@ func handlePatch(raw json.RawMessage) (updatePatch, error) {
 	return patch, nil
 }
 
-func setError(typ, description string) map[string]string {
-	return map[string]string{"type": typ, "description": description}
-}
-
 // fingerprint derives the value used to detect changes to the singleton so
 // the RFC 8620 state token only advances when the settings actually change.
 func fingerprint(v usermanager.VacationResponse) string {
@@ -201,17 +197,6 @@ func (h *Handler) accountEmail(ctx context.Context, accountID string) (string, e
 }
 
 func (h *Handler) VacationResponseGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		IDs []string `json:"ids,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-	properties, err := base.ParseSelection(args, "properties", VacationResponse{}, "")
-	if err != nil {
-		return nil, err
-	}
-
 	email, err := h.accountEmail(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -224,63 +209,20 @@ func (h *Handler) VacationResponseGet(ctx context.Context, accountID string, arg
 	if err != nil {
 		return nil, err
 	}
-
-	list := []VacationResponse{}
-	notFound := []string{}
-	found := false
-	for _, id := range req.IDs {
-		if id == SingletonID {
-			if !found {
-				list = append(list, fromStored(stored))
-				found = true
-			}
-		} else {
-			notFound = append(notFound, id)
-		}
-	}
-	if len(req.IDs) == 0 {
-		list = append(list, fromStored(stored))
-	}
-
-	selected, err := properties.Filter(list)
-	if err != nil {
-		return nil, err
-	}
-	resp := map[string]any{
-		"accountId": accountID,
-		"state":     state,
-		"list":      selected,
-		"notFound":  notFound,
-	}
-	return json.Marshal(resp)
+	record := fromStored(stored)
+	return base.HandleGet(ctx, accountID, args, base.GetSpec[VacationResponse]{
+		Allowed: base.ArgumentSet("accountId", "ids", "properties"),
+		Model:   VacationResponse{},
+		Load:    func(context.Context) ([]VacationResponse, error) { return []VacationResponse{record}, nil },
+		ID:      func(VacationResponse) string { return SingletonID },
+		State:   func(context.Context) (string, error) { return state, nil },
+		Render: func(_ context.Context, v VacationResponse, selection *base.Selection, _ json.RawMessage) (json.RawMessage, error) {
+			return selection.Filter(v)
+		},
+	})
 }
 
 func (h *Handler) VacationResponseSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		IfInState *string                    `json:"ifInState,omitempty"`
-		Create    map[string]json.RawMessage `json:"create,omitempty"`
-		Update    map[string]json.RawMessage `json:"update,omitempty"`
-		Destroy   []string                   `json:"destroy,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-
-	oldState, err := h.deps.Changes.State(ctx, accountID, base.StateVacation)
-	if err != nil {
-		return nil, err
-	}
-	if req.IfInState != nil && *req.IfInState != oldState {
-		return nil, base.Errorf("stateMismatch", "VacationResponse state mismatch")
-	}
-
-	created := map[string]VacationResponse{}
-	updated := map[string]VacationResponse{}
-	destroyed := []string{}
-	notCreated := map[string]map[string]string{}
-	notUpdated := map[string]map[string]string{}
-	notDestroyed := map[string]map[string]string{}
-
 	email, err := h.accountEmail(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -290,62 +232,56 @@ func (h *Handler) VacationResponseSet(ctx context.Context, accountID string, arg
 		return nil, err
 	}
 
-	// The singleton always exists, so a create is rejected with alreadyExists.
-	for id := range req.Create {
-		if id == SingletonID {
-			notCreated[id] = setError("alreadyExists", "the VacationResponse singleton already exists")
-		} else {
-			notCreated[id] = setError("invalidProperties", "the only valid VacationResponse id is \"singleton\"")
-		}
-	}
-
-	for id, raw := range req.Update {
-		if id != SingletonID {
-			notUpdated[id] = setError("notFound", "the only valid VacationResponse id is \"singleton\"")
-			continue
-		}
-		patch, err := handlePatch(raw)
-		if err != nil {
-			notUpdated[id] = setError("invalidProperties", err.Error())
-			continue
-		}
-		patch.apply(&stored)
-	}
-
-	for _, id := range req.Destroy {
-		if id == SingletonID {
-			notDestroyed[id] = setError("notFound", "the VacationResponse singleton cannot be destroyed")
-		} else {
-			notDestroyed[id] = setError("notFound", "the only valid VacationResponse id is \"singleton\"")
-		}
-	}
-
-	// The singleton can only be changed through update. A no-op update is still
-	// reported as successful, but the state token stays unchanged because the
-	// fingerprint is identical.
-	_, updateFailed := notUpdated[SingletonID]
-	if _, requested := req.Update[SingletonID]; requested && !updateFailed {
-		if err := h.store().SaveVacationResponse(ctx, email, stored); err != nil {
-			return nil, err
-		}
-		updated[SingletonID] = fromStored(stored)
-	}
-
-	newState, err := h.syncState(ctx, accountID, stored)
-	if err != nil {
-		return nil, err
-	}
-
-	resp := map[string]any{
-		"accountId":    accountID,
-		"oldState":     oldState,
-		"newState":     newState,
-		"created":      created,
-		"updated":      updated,
-		"destroyed":    destroyed,
-		"notCreated":   notCreated,
-		"notUpdated":   notUpdated,
-		"notDestroyed": notDestroyed,
-	}
-	return json.Marshal(resp)
+	return base.HandleSet(ctx, accountID, args, base.SetSpec{
+		Allowed: base.ArgumentSet("accountId", "ifInState", "create", "update", "destroy"),
+		State: func(ctx context.Context) (string, error) {
+			return h.deps.Changes.State(ctx, accountID, base.StateVacation)
+		},
+		Create: func(_ context.Context, id string, _ json.RawMessage) (json.RawMessage, *base.SetError, error) {
+			// The singleton always exists, so a create is rejected.
+			err := base.SetError{}
+			if id == SingletonID {
+				err = base.AlreadyExists("the VacationResponse singleton already exists", SingletonID)
+			} else {
+				err = base.NewSetError("invalidProperties", "the only valid VacationResponse id is \"singleton\"")
+			}
+			return nil, &err, nil
+		},
+		Update: func(ctx context.Context, id string, patch json.RawMessage) (json.RawMessage, *base.SetError, error) {
+			if id != SingletonID {
+				setErr := base.NewSetError("notFound", "the only valid VacationResponse id is \"singleton\"")
+				return nil, &setErr, nil
+			}
+			// RFC 8620 section 5.3: validate the PatchObject structure before
+			// applying property semantics.
+			currentJSON, _ := json.Marshal(fromStored(stored))
+			if _, err := base.ApplyPatch(currentJSON, patch); err != nil {
+				setErr := base.NewSetError("invalidPatch", err.Error())
+				return nil, &setErr, nil
+			}
+			changes, err := handlePatch(patch)
+			if err != nil {
+				setErr := base.NewSetError("invalidProperties", err.Error())
+				return nil, &setErr, nil
+			}
+			changes.apply(&stored)
+			if err := h.store().SaveVacationResponse(ctx, email, stored); err != nil {
+				return nil, nil, err
+			}
+			// Refresh the derived state so HandleSet's newState read sees the
+			// mutation. The fingerprint makes a no-op update state-neutral.
+			if _, err := h.syncState(ctx, accountID, stored); err != nil {
+				return nil, nil, err
+			}
+			result, err := json.Marshal(fromStored(stored))
+			return result, nil, err
+		},
+		Destroy: func(_ context.Context, id string) *base.SetError {
+			err := base.NewSetError("notFound", "the only valid VacationResponse id is \"singleton\"")
+			if id == SingletonID {
+				err = base.NewSetError("notFound", "the VacationResponse singleton cannot be destroyed")
+			}
+			return &err
+		},
+	})
 }

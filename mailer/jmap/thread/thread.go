@@ -38,17 +38,6 @@ type Thread struct {
 var _ MethodHandler = (*Handler)(nil)
 
 func (h *Handler) ThreadGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		IDs []string `json:"ids,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-	properties, err := base.ParseSelection(args, "properties", Thread{}, "")
-	if err != nil {
-		return nil, err
-	}
-
 	threads, err := h.getThreads(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -57,36 +46,16 @@ func (h *Handler) ThreadGet(ctx context.Context, accountID string, args json.Raw
 	if err != nil {
 		return nil, err
 	}
-	var list []Thread
-	var notFound []string
-
-	if len(req.IDs) > 0 {
-		threadMap := make(map[string]Thread)
-		for _, t := range threads {
-			threadMap[t.ID] = t
-		}
-		for _, id := range req.IDs {
-			if t, ok := threadMap[id]; ok {
-				list = append(list, t)
-			} else {
-				notFound = append(notFound, id)
-			}
-		}
-	} else {
-		list = threads
-	}
-
-	selected, err := properties.Filter(list)
-	if err != nil {
-		return nil, err
-	}
-	resp := map[string]interface{}{
-		"accountId": accountID,
-		"state":     state,
-		"list":      selected,
-		"notFound":  notFound,
-	}
-	return json.Marshal(resp)
+	return base.HandleGet(ctx, accountID, args, base.GetSpec[Thread]{
+		Allowed: base.ArgumentSet("accountId", "ids", "properties"),
+		Model:   Thread{},
+		Load:    func(context.Context) ([]Thread, error) { return threads, nil },
+		ID:      func(t Thread) string { return t.ID },
+		State:   func(context.Context) (string, error) { return state, nil },
+		Render: func(_ context.Context, t Thread, selection *base.Selection, _ json.RawMessage) (json.RawMessage, error) {
+			return selection.Filter(t)
+		},
+	})
 }
 
 // SyncState refreshes the Thread state from the stored messages.
@@ -99,26 +68,20 @@ func (h *Handler) SyncState(ctx context.Context, accountID string) (string, erro
 }
 
 func (h *Handler) ThreadChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		SinceState string `json:"sinceState"`
-		MaxChanges *int   `json:"maxChanges,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-
-	threads, err := h.getThreads(ctx, accountID)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := h.syncThreadState(ctx, accountID, threads); err != nil {
-		return nil, err
-	}
-	result, err := h.deps.Changes.ChangesFrom(ctx, accountID, base.StateThread, req.SinceState, req.MaxChanges)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(result)
+	return base.HandleChanges(ctx, accountID, args, base.ChangesSpec{
+		Allowed: base.ArgumentSet("accountId", "sinceState", "maxChanges"),
+		Sync: func(ctx context.Context) error {
+			threads, err := h.getThreads(ctx, accountID)
+			if err != nil {
+				return err
+			}
+			_, err = h.syncThreadState(ctx, accountID, threads)
+			return err
+		},
+		Changes: func(ctx context.Context, sinceState string, maxChanges *int) (map[string]any, error) {
+			return h.deps.Changes.ChangesFrom(ctx, accountID, base.StateThread, sinceState, maxChanges)
+		},
+	})
 }
 
 // getThreads derives threads from the stored messages. A real implementation

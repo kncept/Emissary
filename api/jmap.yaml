@@ -766,9 +766,11 @@ components:
             type: string
           nullable: true
           description: |-
-            Properties to return. Null or omitted means all properties; an
-            explicit empty array returns only `id`. Unknown names are rejected
-            with invalidArguments.
+            Properties to return. Null or omitted returns all properties for
+            most types, but RFC 8621 section 4.1 defines a narrower default
+            for Email/get (see EmailGetRequest) and section 4.9 for
+            Email/parse. An explicit empty array returns only `id`. Unknown
+            names are rejected with invalidArguments.
       additionalProperties: true
     ChangesRequest:
       type: object
@@ -1639,15 +1641,24 @@ components:
           items:
             type: string
           nullable: true
+          description: |-
+            Properties to return. If omitted or null, RFC 8621 section 4.1
+            requires the default array
+            `[id, blobId, threadId, mailboxIds, keywords, size, receivedAt,
+            messageId, inReplyTo, references, sender, from, to, cc, bcc,
+            replyTo, subject, sentAt, hasAttachment, preview, bodyValues,
+            textBody, htmlBody, attachments]`. An explicit empty array returns
+            only `id`. Unknown names are rejected with invalidArguments.
         bodyProperties:
           type: array
           description: |-
-            Properties to fetch for each EmailBodyPart. Defaults to
-            partId, blobId, size, name, type, charset, disposition, cid,
-            language, location. An explicit empty array returns no body part
-            properties; null means the defaults. Unknown names are rejected
-            with invalidArguments. The `header:{name}[:as{form}][:all]`
-            dynamic properties are also permitted (RFC 8621 §4.1).
+            Properties to fetch for each EmailBodyPart. If omitted or null,
+            RFC 8621 section 4.2 requires the default array
+            `[partId, blobId, size, name, type, charset, disposition, cid,
+            language, location]`. An explicit empty array returns no body part
+            properties. Unknown names are rejected with invalidArguments. The
+            `header:{name}[:as{form}][:all]` dynamic properties are also
+            permitted (RFC 8621 §4.1).
           items:
             type: string
           nullable: true
@@ -2044,10 +2055,21 @@ components:
           items:
             type: string
           nullable: true
+          description: |-
+            Properties to return. If omitted or null, RFC 8621 section 4.9
+            requires the default array
+            `[messageId, inReplyTo, references, sender, from, to, cc, bcc,
+            replyTo, subject, sentAt, hasAttachment, preview, bodyValues,
+            textBody, htmlBody, attachments]`. The `id`, `mailboxIds`,
+            `keywords`, and `receivedAt` metadata properties are null when
+            explicitly requested. An explicit empty array returns only `id`.
         bodyProperties:
           type: array
           items:
             type: string
+          description: |-
+            If omitted or null, defaults to the Email/get `bodyProperties`
+            default (RFC 8621 section 4.9).
         fetchTextBodyValues:
           type: boolean
           default: false
@@ -2849,6 +2871,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Id'
+        ifFromInState:
+          type: string
+          nullable: true
+          description: >-
+            Advisory guard for the source account's blob state. This is an
+            Emissary safeguard layered on RFC 8620 section 6.3; clients that
+            send only the three RFC arguments are unaffected.
       additionalProperties: false
     BlobCopyResponse:
       type: object

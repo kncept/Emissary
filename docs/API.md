@@ -584,13 +584,13 @@ not retain raw headers, so no value is returned for them today.
 
 `Blob/copy` copies immutable blobs between different accounts; the source and
 destination account ids must differ. The optional `ifFromInState` argument
-guards the source account's blob state using `stateMismatch`, and
-`onSuccessDestroyOriginal` removes a copied generic blob from the source.
-Failures are reported per blob in `notCopied`; an email-backed blob cannot be
-destroyed this way and is reported in the `notDestroyed` map instead. An
-unknown source account produces the method-level `fromAccountNotFound` error.
-Blob bytes are stored under `users/<account>/_blobs`, which is reserved and
-never exposed as a mailbox.
+guards the source account's blob state using `stateMismatch`. Failures are
+reported per blob in `notCopied`. An unknown source account produces the
+method-level `fromAccountNotFound` error. Blob bytes are stored under
+`users/<account>/_blobs`, which is reserved and never exposed as a mailbox.
+RFC 8620 section 6.3 does not define an `onSuccessDestroyOriginal` argument;
+Emissary therefore does not accept one (use `Email/copy` when the source email
+itself must be removed).
 
 ### PushSubscription
 

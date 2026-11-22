@@ -59,9 +59,11 @@ export interface GetRequest {
      */
   ids?: Id[] | null;
   /**
-     * Properties to return. Null or omitted means all properties; an
-     * explicit empty array returns only `id`. Unknown names are rejected
-     * with invalidArguments.
+     * Properties to return. Null or omitted returns all properties for
+     * most types, but RFC 8621 section 4.1 defines a narrower default
+     * for Email/get (see EmailGetRequest) and section 4.9 for
+     * Email/parse. An explicit empty array returns only `id`. Unknown
+     * names are rejected with invalidArguments.
      * @nullable
      */
   properties?: string[] | null;

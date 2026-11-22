@@ -55,8 +55,21 @@ import type { UnsignedInt } from './unsignedInt';
 export interface EmailParseRequest {
   accountId: Id;
   blobIds: Id[];
-  /** @nullable */
+  /**
+     * Properties to return. If omitted or null, RFC 8621 section 4.9
+     * requires the default array
+     * `[messageId, inReplyTo, references, sender, from, to, cc, bcc,
+     * replyTo, subject, sentAt, hasAttachment, preview, bodyValues,
+     * textBody, htmlBody, attachments]`. The `id`, `mailboxIds`,
+     * `keywords`, and `receivedAt` metadata properties are null when
+     * explicitly requested. An explicit empty array returns only `id`.
+     * @nullable
+     */
   properties?: string[] | null;
+  /**
+     * If omitted or null, defaults to the Email/get `bodyProperties`
+     * default (RFC 8621 section 4.9).
+     */
   bodyProperties?: string[];
   fetchTextBodyValues?: boolean;
   fetchHTMLBodyValues?: boolean;

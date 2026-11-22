@@ -18,286 +18,299 @@ import (
 
 func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		IDs                 []string `json:"ids,omitempty"`
-		FetchTextBodyValues bool     `json:"fetchTextBodyValues"`
-		FetchHTMLBodyValues bool     `json:"fetchHTMLBodyValues"`
-		FetchAllBodyValues  bool     `json:"fetchAllBodyValues"`
-		MaxBodyValueBytes   int      `json:"maxBodyValueBytes"`
+		FetchTextBodyValues bool `json:"fetchTextBodyValues"`
+		FetchHTMLBodyValues bool `json:"fetchHTMLBodyValues"`
+		FetchAllBodyValues  bool `json:"fetchAllBodyValues"`
+		MaxBodyValueBytes   int  `json:"maxBodyValueBytes"`
+	}
+	allowed := base.ArgumentSet(
+		"accountId", "ids", "properties", "bodyProperties", "fetchTextBodyValues",
+		"fetchHTMLBodyValues", "fetchAllBodyValues", "maxBodyValueBytes")
+	if err := base.RejectUnknownArguments(args, allowed); err != nil {
+		return nil, err
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
-	properties, err := base.ParseSelection(args, "properties", JMAPEmail{}, "header:")
-	if err != nil {
-		return nil, err
+	if req.MaxBodyValueBytes < 0 {
+		return nil, base.Errorf("invalidArguments", "maxBodyValueBytes must not be negative")
 	}
-	bodyProperties, err := base.ParseSelection(args, "bodyProperties", EmailBodyPart{}, "header:")
+	// RFC 8621 section 4.1 replaces the RFC 8620 "all properties" default
+	// with a fixed metadata/body list; section 4.2 does the same for
+	// bodyProperties. The kernel applies the properties default; these two
+	// selections are needed by Render for body values and nested body parts.
+	bodyProperties, err := base.ParseSelectionWithDefault(args, "bodyProperties", EmailBodyPart{}, "header:", base.DefaultProperties("EmailBodyPart"))
 	if err != nil {
 		return nil, err
 	}
 	bodyProperties = bodyProperties.WithRecursion("subParts")
-	if req.MaxBodyValueBytes < 0 {
-		return nil, base.Errorf("invalidArguments", "maxBodyValueBytes must not be negative")
-	}
 	fetchText := req.FetchTextBodyValues || req.FetchAllBodyValues
 	fetchHTML := req.FetchHTMLBodyValues || req.FetchAllBodyValues
 
-	var list []json.RawMessage
-	var notFound []string
-
-	if len(req.IDs) > 0 {
-		for _, id := range req.IDs {
-			listed, err := h.deps.Storage.GetEmail(ctx, accountID, id)
-			if err != nil || listed == nil || listed.Ref == nil || !strings.EqualFold(listed.Ref.AccountID, accountID) {
-				notFound = append(notFound, id)
-				continue
-			}
-			jmapEmail, err := h.toJMAPEmail(ctx, listed)
-			if err != nil {
-				continue
-			}
-			jmapEmail.setBodyValues(fetchText, fetchHTML, req.FetchAllBodyValues, req.MaxBodyValueBytes)
-			item, err := jmapEmail.filtered(properties, bodyProperties)
-			if err != nil {
-				return nil, err
-			}
-			list = append(list, item)
-		}
-	} else {
-		emails, err := h.deps.Storage.ListEmails(ctx, accountID, "")
-		if err != nil {
-			return nil, err
-		}
-		for _, e := range emails {
-			if e == nil || e.Ref == nil || e.Email == nil {
-				continue
-			}
-			jmapEmail, err := h.toJMAPEmail(ctx, e)
-			if err != nil {
-				continue
-			}
-			jmapEmail.setBodyValues(fetchText, fetchHTML, req.FetchAllBodyValues, req.MaxBodyValueBytes)
-			item, err := jmapEmail.filtered(properties, bodyProperties)
-			if err != nil {
-				return nil, err
-			}
-			list = append(list, item)
-		}
+	// State is derived from the same records clients see, so a server-side
+	// change or per-request property selection does not affect it.
+	listed, err := h.deps.Storage.ListEmails(ctx, accountID, "")
+	if err != nil {
+		return nil, err
 	}
-
-	// State is derived from the same record content clients see, so a
-	// server-side change or per-request property selection does not affect it.
-	stateListed, _ := h.deps.Storage.ListEmails(ctx, accountID, "")
-	state, err := h.syncEmailStateFromListed(ctx, accountID, stateListed)
+	state, err := h.syncEmailStateFromListed(ctx, accountID, listed)
 	if err != nil {
 		return nil, err
 	}
 
-	resp := map[string]interface{}{
-		"accountId": accountID,
-		"state":     state,
-		"list":      list,
-		"notFound":  notFound,
-	}
-	return json.Marshal(resp)
+	return base.HandleGet(ctx, accountID, args, base.GetSpec[*mailemail.ListedEmail]{
+		Allowed:       allowed,
+		Model:         JMAPEmail{},
+		Defaults:      base.DefaultProperties("Email"),
+		DynamicPrefix: "header:",
+		Load:          func(context.Context) ([]*mailemail.ListedEmail, error) { return listed, nil },
+		LoadIDs: func(ctx context.Context, ids []string) ([]*mailemail.ListedEmail, []string, error) {
+			found := make([]*mailemail.ListedEmail, 0, len(ids))
+			var notFound []string
+			for _, id := range ids {
+				email, err := h.deps.Storage.GetEmail(ctx, accountID, id)
+				if err != nil || email == nil || email.Ref == nil || !strings.EqualFold(email.Ref.AccountID, accountID) {
+					notFound = append(notFound, id)
+					continue
+				}
+				found = append(found, email)
+			}
+			return found, notFound, nil
+		},
+		ID:    func(email *mailemail.ListedEmail) string { return email.Ref.ID },
+		State: func(context.Context) (string, error) { return state, nil },
+		Render: func(ctx context.Context, email *mailemail.ListedEmail, properties *base.Selection, _ json.RawMessage) (json.RawMessage, error) {
+			// Hydration failure must never silently omit a requested email.
+			jmapEmail, err := h.toJMAPEmail(ctx, email)
+			if err != nil {
+				return nil, err
+			}
+			jmapEmail.setBodyValues(fetchText, fetchHTML, req.FetchAllBodyValues, req.MaxBodyValueBytes)
+			return jmapEmail.filtered(properties, bodyProperties)
+		},
+	})
 }
 
 func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		IfInState *string                    `json:"ifInState,omitempty"`
-		Create    map[string]json.RawMessage `json:"create,omitempty"`
-		Update    map[string]json.RawMessage `json:"update,omitempty"`
-		Destroy   []string                   `json:"destroy,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
+	return base.HandleSet(ctx, accountID, args, h.setSpec(accountID))
+}
 
-	oldState, err := h.deps.Changes.State(ctx, accountID, base.StateEmail)
-	if err != nil {
-		return nil, err
-	}
-	if req.IfInState != nil && *req.IfInState != oldState {
-		return nil, base.Errorf("stateMismatch", "email state mismatch")
-	}
-
-	created := make(map[string]interface{})
-	updated := make(map[string]interface{})
-	destroyed := []string{}
-	notCreated := make(map[string]interface{})
-	notUpdated := make(map[string]interface{})
-	notDestroyed := make(map[string]interface{})
-
-	// Handle destroy. Verify the message belongs to the requested account so
-	// a crafted id cannot delete another user's mail. Metadata is removed
-	// first; if storage deletion then fails, the original metadata is restored
-	// so neither store is left half-updated.
-	for _, id := range req.Destroy {
-		listed, err := h.deps.Storage.GetEmail(ctx, accountID, id)
-		if err != nil || listed == nil || listed.Ref == nil || !strings.EqualFold(listed.Ref.AccountID, accountID) {
-			notDestroyed[id] = setErr("notFound", "Email not found")
-			continue
-		}
-		mbID := listed.Ref.MailboxID
-		if mbID == "" {
-			mbID = "inbox"
-		}
-		mb, mbErr := h.deps.Storage.GetMailbox(ctx, accountID, mbID)
-		if mbErr == nil {
-			if rights := base.RightsForRole(roleOf(mb)); !rights.MayRemoveItems {
-				notDestroyed[id] = setErr("forbidden", "May not remove items from this mailbox")
-				continue
+// setSpec returns the type-specific callbacks for Email/set. A fresh spec is
+// built per request so no per-request state leaks between invocations.
+func (h *Handler) setSpec(accountID string) base.SetSpec {
+	// Destroy cannot return a method error (only a SetError), so a rare change
+	// tracker failure is captured here and surfaced by Finalize.
+	var destroyErr error
+	return base.SetSpec{
+		Allowed: base.ArgumentSet("accountId", "ifInState", "create", "update", "destroy"),
+		State: func(ctx context.Context) (string, error) {
+			return h.deps.Changes.State(ctx, accountID, base.StateEmail)
+		},
+		Finalize: func(ctx context.Context) error {
+			if destroyErr != nil {
+				return destroyErr
 			}
-		}
-		originalMeta := base.EmailMetadata(ctx, h.deps, accountID, id)
-		if err := h.deps.Metadata.Delete(ctx, accountID, id); err != nil {
-			slog.Error("JMAP: failed to delete email metadata", "account", accountID, "id", id, "err", err)
-			notDestroyed[id] = setErr("serverFail", "Failed to delete email metadata")
-			continue
-		}
-		if err := h.deps.Storage.DeleteEmail(ctx, accountID, id); err != nil {
-			if restoreErr := h.deps.Metadata.Save(ctx, originalMeta); restoreErr != nil {
-				slog.Error("JMAP: failed to restore email metadata", "account", accountID, "id", id, "err", restoreErr)
+			_, err := h.syncEmailState(ctx, accountID)
+			return err
+		},
+		Destroy: func(ctx context.Context, id string) *base.SetError {
+			fail := func(setErr base.SetError) *base.SetError { return &setErr }
+			// Verify the message belongs to the requested account so a
+			// crafted id cannot delete another user's mail. Metadata is
+			// removed first; if storage deletion then fails, the original
+			// metadata is restored so neither store is half-updated.
+			listed, err := h.deps.Storage.GetEmail(ctx, accountID, id)
+			if err != nil || listed == nil || listed.Ref == nil || !strings.EqualFold(listed.Ref.AccountID, accountID) {
+				return fail(base.NewSetError("notFound", "Email not found"))
 			}
-			if errors.Is(err, storage.ErrNotFound) {
-				notDestroyed[id] = setErr("notFound", "Email not found")
-			} else {
+			mbID := listed.Ref.MailboxID
+			if mbID == "" {
+				mbID = "inbox"
+			}
+			mb, mbErr := h.deps.Storage.GetMailbox(ctx, accountID, mbID)
+			if mbErr == nil {
+				if rights := base.RightsForRole(roleOf(mb)); !rights.MayRemoveItems {
+					return fail(base.NewSetError("forbidden", "May not remove items from this mailbox"))
+				}
+			}
+			originalMeta := base.EmailMetadata(ctx, h.deps, accountID, id)
+			if err := h.deps.Metadata.Delete(ctx, accountID, id); err != nil {
+				slog.Error("JMAP: failed to delete email metadata", "account", accountID, "id", id, "err", err)
+				return fail(base.NewSetError("serverFail", "Failed to delete email metadata"))
+			}
+			if err := h.deps.Storage.DeleteEmail(ctx, accountID, id); err != nil {
+				if restoreErr := h.deps.Metadata.Save(ctx, originalMeta); restoreErr != nil {
+					slog.Error("JMAP: failed to restore email metadata", "account", accountID, "id", id, "err", restoreErr)
+				}
+				if errors.Is(err, storage.ErrNotFound) {
+					return fail(base.NewSetError("notFound", "Email not found"))
+				}
 				slog.Error("JMAP: failed to delete email", "account", accountID, "id", id, "err", err)
-				notDestroyed[id] = setErr("serverFail", "Failed to delete email")
+				return fail(base.NewSetError("serverFail", "Failed to delete email"))
 			}
-			continue
-		}
-		if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, id, base.ChangeDestroy); err != nil {
-			return nil, err
-		}
-		destroyed = append(destroyed, id)
-	}
+			if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, id, base.ChangeDestroy); err != nil {
+				destroyErr = err
+			}
+			return nil
+		},
+		Create: func(ctx context.Context, createID string, raw json.RawMessage) (json.RawMessage, *base.SetError, error) {
+			fail := func(setErr base.SetError) (json.RawMessage, *base.SetError, error) {
+				return nil, &setErr, nil
+			}
+			var createMap map[string]interface{}
+			if err := json.Unmarshal(raw, &createMap); err != nil {
+				return fail(base.NewSetError("invalidProperties", "Invalid create object"))
+			}
+			subject, _ := createMap["subject"].(string)
+			replyTo, err := jmapAddressList(createMap, "replyTo")
+			if err != nil {
+				return nil, nil, base.Errorf("invalidArguments", "%s", err.Error())
+			}
+			to, err := jmapAddressList(createMap, "to")
+			if err != nil {
+				return nil, nil, base.Errorf("invalidArguments", "%s", err.Error())
+			}
+			cc, err := jmapAddressList(createMap, "cc")
+			if err != nil {
+				return nil, nil, base.Errorf("invalidArguments", "%s", err.Error())
+			}
+			bcc, err := jmapAddressList(createMap, "bcc")
+			if err != nil {
+				return nil, nil, base.Errorf("invalidArguments", "%s", err.Error())
+			}
 
-	// Handle create
-	for createID, raw := range req.Create {
-		var createMap map[string]interface{}
-		if err := json.Unmarshal(raw, &createMap); err != nil {
-			notCreated[createID] = setErr("invalidProperties", "Invalid create object")
-			continue
-		}
-		subject, _ := createMap["subject"].(string)
-		replyTo, err := jmapAddressList(createMap, "replyTo")
-		if err != nil {
-			return nil, base.Errorf("invalidArguments", "%s", err.Error())
-		}
-		to, err := jmapAddressList(createMap, "to")
-		if err != nil {
-			return nil, base.Errorf("invalidArguments", "%s", err.Error())
-		}
-		cc, err := jmapAddressList(createMap, "cc")
-		if err != nil {
-			return nil, base.Errorf("invalidArguments", "%s", err.Error())
-		}
-		bcc, err := jmapAddressList(createMap, "bcc")
-		if err != nil {
-			return nil, base.Errorf("invalidArguments", "%s", err.Error())
-		}
+			// Locked From: submissions/creates send as the caller's own
+			// account, or as the target account when a user manager
+			// masquerades.
+			lockedFrom, _ := base.LockedFrom(ctx, accountID)
+			if !strings.Contains(lockedFrom, "@") {
+				// keep a reasonable fallback for non-email accounts in tests
+				if f, _ := createMap["from"].(string); strings.Contains(f, "@") {
+					lockedFrom = f
+				} else if farr, ok := createMap["from"].([]interface{}); ok && len(farr) > 0 {
+					if m, ok := farr[0].(map[string]interface{}); ok {
+						if e, ok := m["email"].(string); ok && strings.Contains(e, "@") {
+							lockedFrom = e
+						}
+					}
+				}
+				if lockedFrom == "" {
+					lockedFrom = accountID
+				}
+			}
 
-		// Locked From: submissions/creates send as the caller's own account,
-		// or as the target account when a user manager masquerades.
-		lockedFrom, _ := base.LockedFrom(ctx, accountID)
-		if !strings.Contains(lockedFrom, "@") {
-			// keep a reasonable fallback for non-email accounts in tests
-			if f, _ := createMap["from"].(string); strings.Contains(f, "@") {
-				lockedFrom = f
-			} else if farr, ok := createMap["from"].([]interface{}); ok && len(farr) > 0 {
-				if m, ok := farr[0].(map[string]interface{}); ok {
-					if e, ok := m["email"].(string); ok && strings.Contains(e, "@") {
-						lockedFrom = e
+			text, html := extractCreateBodies(createMap)
+
+			inReplyTo := ""
+			if irt, ok := createMap["inReplyTo"].(string); ok {
+				inReplyTo = irt
+			}
+			var references []string
+			if refArr, ok := createMap["references"].([]interface{}); ok {
+				for _, v := range refArr {
+					if s, ok := v.(string); ok {
+						references = append(references, s)
 					}
 				}
 			}
-			if lockedFrom == "" {
-				lockedFrom = accountID
-			}
-		}
 
-		text, html := extractCreateBodies(createMap)
-
-		inReplyTo := ""
-		if irt, ok := createMap["inReplyTo"].(string); ok {
-			inReplyTo = irt
-		}
-		var references []string
-		if refArr, ok := createMap["references"].([]interface{}); ok {
-			for _, v := range refArr {
-				if s, ok := v.(string); ok {
-					references = append(references, s)
+			// Determine target mailbox from mailboxIds (default inbox).
+			targetMailbox := "inbox"
+			if mbIDs, ok := createMap["mailboxIds"].(map[string]interface{}); ok {
+				targets := make([]string, 0, len(mbIDs))
+				for k, v := range mbIDs {
+					b, ok := v.(bool)
+					if !ok || !b {
+						continue
+					}
+					targets = append(targets, storage.NormalizeMailboxID(k))
+				}
+				if len(targets) > 1 {
+					return fail(base.NewSetError("invalidProperties", "Only one mailbox is supported per email"))
+				}
+				if len(targets) == 1 {
+					targetMailbox = targets[0]
 				}
 			}
-		}
+			mb, mbErr := h.deps.Storage.GetMailbox(ctx, accountID, targetMailbox)
+			if mbErr != nil {
+				return fail(base.NewSetError("invalidProperties", "Target mailbox not found"))
+			}
+			if rights := base.RightsForRole(roleOf(mb)); !rights.MayAddItems {
+				return fail(base.NewSetError("forbidden", "May not add items to this mailbox"))
+			}
 
-		// Determine target mailbox from mailboxIds (default inbox).
-		targetMailbox := "inbox"
-		if mbIDs, ok := createMap["mailboxIds"].(map[string]interface{}); ok {
-			targets := make([]string, 0, len(mbIDs))
-			for k, v := range mbIDs {
-				b, ok := v.(bool)
-				if !ok || !b {
-					continue
+			now := time.Now().UTC()
+			inReplyToList := []string{}
+			if strings.TrimSpace(inReplyTo) != "" {
+				inReplyToList = []string{strings.TrimSpace(inReplyTo)}
+			}
+			newEmail := &mailemail.UserEmail{
+				From:       mailemail.Address{Address: lockedFrom},
+				ReplyTo:    replyTo,
+				To:         to,
+				Cc:         cc,
+				Bcc:        bcc,
+				Subject:    subject,
+				Date:       now,
+				Text:       text,
+				HTML:       html,
+				Size:       int64(len(text) + len(html)),
+				MessageID:  mailemail.GenerateMessageID(messageIDDomain(lockedFrom)),
+				InReplyTo:  inReplyToList,
+				References: references,
+			}
+			// Render before storage so the same bytes back blobId, size and
+			// the MIME tree returned by a later Email/get.
+			rawBytes := mailemail.RawFromUserEmail(newEmail)
+			blobID := storage.BlobID(rawBytes)
+
+			// A session draft is stored separately (durable across lambda
+			// invocations) and is only valid in drafts mailbox context.
+			if claims := auth.ClaimsFromContext(ctx); claims != nil && claims.SID != "" {
+				newID, err := h.deps.Storage.PutDraft(ctx, claims.SID, createID, newEmail)
+				if err != nil {
+					return fail(base.NewSetError("serverFail", "Failed to create email"))
 				}
-				targets = append(targets, storage.NormalizeMailboxID(k))
+				threadID := base.ThreadID(newID, newEmail)
+				meta := metadata.NewEmailMetadata(accountID, newID)
+				meta.ReceivedAt = now.UTC().Format(time.RFC3339)
+				meta.Keywords[metadata.KeywordDraft] = true
+				// Apply requested keywords if provided.
+				if kw, ok := createMap["keywords"].(map[string]interface{}); ok {
+					if patched, ok2, _ := ApplyKeywordPatch(meta, map[string]interface{}{"keywords": kw}); ok2 {
+						meta = patched
+					}
+				}
+				if err := h.deps.Metadata.Save(ctx, meta); err != nil {
+					slog.Warn("JMAP: failed to save draft metadata", "account", accountID, "id", newID, "err", err)
+				}
+				if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, newID, base.ChangeCreate); err != nil {
+					return nil, nil, err
+				}
+				result, err := json.Marshal(map[string]interface{}{
+					"id":         newID,
+					"threadId":   threadID,
+					"blobId":     blobID,
+					"receivedAt": meta.ReceivedAt,
+					"mailboxIds": map[string]bool{"drafts": true},
+				})
+				return result, nil, err
 			}
-			if len(targets) > 1 {
-				notCreated[createID] = setErr("invalidProperties", "Only one mailbox is supported per email")
-				continue
-			}
-			if len(targets) == 1 {
-				targetMailbox = targets[0]
-			}
-		}
-		mb, mbErr := h.deps.Storage.GetMailbox(ctx, accountID, targetMailbox)
-		if mbErr != nil {
-			notCreated[createID] = setErr("invalidProperties", "Target mailbox not found")
-			continue
-		}
-		if rights := base.RightsForRole(roleOf(mb)); !rights.MayAddItems {
-			notCreated[createID] = setErr("forbidden", "May not add items to this mailbox")
-			continue
-		}
 
-		now := time.Now().UTC()
-		inReplyToList := []string{}
-		if strings.TrimSpace(inReplyTo) != "" {
-			inReplyToList = []string{strings.TrimSpace(inReplyTo)}
-		}
-		newEmail := &mailemail.UserEmail{
-			From:       mailemail.Address{Address: lockedFrom},
-			ReplyTo:    replyTo,
-			To:         to,
-			Cc:         cc,
-			Bcc:        bcc,
-			Subject:    subject,
-			Date:       now,
-			Text:       text,
-			HTML:       html,
-			Size:       int64(len(text) + len(html)),
-			MessageID:  mailemail.GenerateMessageID(messageIDDomain(lockedFrom)),
-			InReplyTo:  inReplyToList,
-			References: references,
-		}
-		// Render before storage so the same bytes back blobId, size and the
-		// MIME tree returned by a later Email/get.
-		raw := mailemail.RawFromUserEmail(newEmail)
-		blobID := storage.BlobID(raw)
-
-		// A session draft is stored separately (durable across lambda
-		// invocations) and is only valid in drafts mailbox context.
-		if claims := auth.ClaimsFromContext(ctx); claims != nil && claims.SID != "" {
-			newID, err := h.deps.Storage.PutDraft(ctx, claims.SID, createID, newEmail)
+			newID, err := h.deps.Storage.AddEmail(ctx, accountID, targetMailbox, newEmail, rawBytes)
 			if err != nil {
-				notCreated[createID] = setErr("serverFail", "Failed to create email")
-				continue
+				return fail(base.NewSetError("serverFail", "Failed to create email"))
 			}
 			threadID := base.ThreadID(newID, newEmail)
+			// Registration is best effort: the message is already durable and
+			// the blob id is content-derived, so a blob-store outage cannot
+			// create a second copy of the email.
+			if _, err := storage.RegisterEmailBlobs(ctx, h.deps.Storage, accountID, rawBytes); err != nil {
+				slog.Warn("JMAP: failed to register created email blob", "account", accountID, "id", newID, "err", err)
+			}
 			meta := metadata.NewEmailMetadata(accountID, newID)
 			meta.ReceivedAt = now.UTC().Format(time.RFC3339)
-			meta.Keywords[metadata.KeywordDraft] = true
 			// Apply requested keywords if provided.
 			if kw, ok := createMap["keywords"].(map[string]interface{}); ok {
 				if patched, ok2, _ := ApplyKeywordPatch(meta, map[string]interface{}{"keywords": kw}); ok2 {
@@ -305,237 +318,146 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 				}
 			}
 			if err := h.deps.Metadata.Save(ctx, meta); err != nil {
-				slog.Warn("JMAP: failed to save draft metadata", "account", accountID, "id", newID, "err", err)
+				slog.Warn("JMAP: failed to save created email metadata", "account", accountID, "id", newID, "err", err)
 			}
 			if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, newID, base.ChangeCreate); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			created[createID] = map[string]interface{}{
+			result, err := json.Marshal(map[string]interface{}{
 				"id":         newID,
 				"threadId":   threadID,
 				"blobId":     blobID,
 				"receivedAt": meta.ReceivedAt,
-				"mailboxIds": map[string]bool{"drafts": true},
+				"mailboxIds": map[string]bool{targetMailbox: true},
+			})
+			return result, nil, err
+		},
+		Update: func(ctx context.Context, id string, raw json.RawMessage) (json.RawMessage, *base.SetError, error) {
+			fail := func(setErr base.SetError) (json.RawMessage, *base.SetError, error) {
+				return nil, &setErr, nil
 			}
-			continue
-		}
-
-		newID, err := h.deps.Storage.AddEmail(ctx, accountID, targetMailbox, newEmail, raw)
-		if err != nil {
-			notCreated[createID] = setErr("serverFail", "Failed to create email")
-			continue
-		}
-		threadID := base.ThreadID(newID, newEmail)
-		// Registration is best effort: the message is already durable and the
-		// blob id is content-derived, so a blob-store outage cannot create a
-		// second copy of the email.
-		if _, err := storage.RegisterEmailBlobs(ctx, h.deps.Storage, accountID, raw); err != nil {
-			slog.Warn("JMAP: failed to register created email blob", "account", accountID, "id", newID, "err", err)
-		}
-		meta := metadata.NewEmailMetadata(accountID, newID)
-		meta.ReceivedAt = now.UTC().Format(time.RFC3339)
-		// Apply requested keywords if provided.
-		if kw, ok := createMap["keywords"].(map[string]interface{}); ok {
-			if patched, ok2, _ := ApplyKeywordPatch(meta, map[string]interface{}{"keywords": kw}); ok2 {
-				meta = patched
+			var updateMap map[string]interface{}
+			if err := json.Unmarshal(raw, &updateMap); err != nil {
+				return fail(base.NewSetError("invalidProperties", "Invalid update patch"))
 			}
-		}
-		if err := h.deps.Metadata.Save(ctx, meta); err != nil {
-			slog.Warn("JMAP: failed to save created email metadata", "account", accountID, "id", newID, "err", err)
-		}
-		if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, newID, base.ChangeCreate); err != nil {
-			return nil, err
-		}
-		created[createID] = map[string]interface{}{
-			"id":         newID,
-			"threadId":   threadID,
-			"blobId":     blobID,
-			"receivedAt": meta.ReceivedAt,
-			"mailboxIds": map[string]bool{targetMailbox: true},
-		}
-	}
 
-	// Handle update. All validation for a single Email happens before any
-	// mutation, so an invalid patch cannot leave an email half-updated (for
-	// example moved to another mailbox with unchanged keywords).
-	type emailUpdate struct {
-		id             string
-		currentMailbox string
-		targetMailbox  string
-		mailboxChanged bool
-		draft          bool
-		meta           metadata.EmailMetadata
-	}
-	plans := make([]emailUpdate, 0, len(req.Update))
+			// Resolve current location.
+			listed, err := h.deps.Storage.GetEmail(ctx, accountID, id)
+			if err != nil || listed == nil || listed.Ref == nil || !strings.EqualFold(listed.Ref.AccountID, accountID) {
+				// Draft updates are limited to metadata; storage location fixed.
+				if claims := auth.ClaimsFromContext(ctx); claims != nil && claims.SID != "" {
+					if _, derr := h.deps.Storage.GetDraft(ctx, claims.SID, id); derr == nil {
+						meta := base.EmailMetadata(ctx, h.deps, accountID, id)
+						patched, ok, errType := ApplyKeywordPatch(meta, updateMap)
+						if !ok {
+							return fail(base.NewSetError(errType, "Invalid keyword update"))
+						}
+						if err := h.deps.Metadata.Save(ctx, patched); err != nil {
+							return fail(base.NewSetError("serverFail", "Failed to save email metadata"))
+						}
+						if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, id, base.ChangeUpdate); err != nil {
+							return nil, nil, err
+						}
+						return json.RawMessage("null"), nil, nil
+					}
+				}
+				return fail(base.NewSetError("notFound", "Email not found"))
+			}
 
-	for id, raw := range req.Update {
-		var updateMap map[string]interface{}
-		if err := json.Unmarshal(raw, &updateMap); err != nil {
-			notUpdated[id] = setErr("invalidProperties", "Invalid update patch")
-			continue
-		}
+			currentMailbox := listed.Ref.MailboxID
+			if currentMailbox == "" {
+				currentMailbox = "inbox"
+			}
 
-		// Resolve current location.
-		listed, err := h.deps.Storage.GetEmail(ctx, accountID, id)
-		if err != nil || listed == nil || listed.Ref == nil || !strings.EqualFold(listed.Ref.AccountID, accountID) {
-			// Draft updates are limited to metadata; storage location fixed.
-			if claims := auth.ClaimsFromContext(ctx); claims != nil && claims.SID != "" {
-				if _, derr := h.deps.Storage.GetDraft(ctx, claims.SID, id); derr == nil {
-					meta := base.EmailMetadata(ctx, h.deps, accountID, id)
-					patched, ok, errType := ApplyKeywordPatch(meta, updateMap)
-					if !ok {
-						notUpdated[id] = setErr(errType, "Invalid keyword update")
+			// mailboxIds patch/move: accept full replacement and/or "mailboxIds/<id>" patches.
+			targetMailbox := currentMailbox
+			mailboxChanged := false
+			if v, ok := updateMap["mailboxIds"]; ok {
+				mbMap, ok := v.(map[string]interface{})
+				if !ok {
+					return fail(base.NewSetError("invalidProperties", "Invalid mailboxIds"))
+				}
+				targets := make([]string, 0, len(mbMap))
+				for k, mv := range mbMap {
+					b, ok := mv.(bool)
+					if !ok || !b {
 						continue
 					}
-					plans = append(plans, emailUpdate{id: id, draft: true, meta: patched})
-					continue
+					targets = append(targets, storage.NormalizeMailboxID(k))
 				}
-			}
-			notUpdated[id] = setErr("notFound", "Email not found")
-			continue
-		}
-
-		currentMailbox := listed.Ref.MailboxID
-		if currentMailbox == "" {
-			currentMailbox = "inbox"
-		}
-
-		// mailboxIds patch/move: accept full replacement and/or "mailboxIds/<id>" patches.
-		targetMailbox := currentMailbox
-		mailboxChanged := false
-		if v, ok := updateMap["mailboxIds"]; ok {
-			mbMap, ok := v.(map[string]interface{})
-			if !ok {
-				notUpdated[id] = setErr("invalidProperties", "Invalid mailboxIds")
-				continue
-			}
-			targets := make([]string, 0, len(mbMap))
-			for k, mv := range mbMap {
-				b, ok := mv.(bool)
-				if !ok || !b {
-					continue
+				if len(targets) != 1 {
+					return fail(base.NewSetError("invalidProperties", "Exactly one mailbox is required"))
 				}
-				targets = append(targets, storage.NormalizeMailboxID(k))
-			}
-			if len(targets) != 1 {
-				notUpdated[id] = setErr("invalidProperties", "Exactly one mailbox is required")
-				continue
-			}
-			targetMailbox = targets[0]
-			mailboxChanged = !strings.EqualFold(targetMailbox, currentMailbox)
-		}
-		mailboxPatchInvalid := false
-		for prop, v := range updateMap {
-			if !strings.HasPrefix(prop, "mailboxIds/") {
-				continue
-			}
-			mbID := storage.NormalizeMailboxID(strings.TrimPrefix(prop, "mailboxIds/"))
-			b, ok := v.(bool)
-			if !ok {
-				notUpdated[id] = setErr("invalidProperties", "Invalid mailboxIds patch")
-				mailboxPatchInvalid = true
-				break
-			}
-			if b {
-				targetMailbox = mbID
+				targetMailbox = targets[0]
 				mailboxChanged = !strings.EqualFold(targetMailbox, currentMailbox)
-			} else if strings.EqualFold(mbID, targetMailbox) {
-				// removing current/target without adding another is invalid here
-				notUpdated[id] = setErr("invalidProperties", "Email must remain in a mailbox")
-				mailboxPatchInvalid = true
-				break
 			}
-		}
-		if mailboxPatchInvalid {
-			continue
-		}
-
-		// Validate the move and the keyword patch before mutating anything.
-		if mailboxChanged {
-			srcMb, srcErr := h.deps.Storage.GetMailbox(ctx, accountID, currentMailbox)
-			dstMb, dstErr := h.deps.Storage.GetMailbox(ctx, accountID, targetMailbox)
-			if dstErr != nil {
-				notUpdated[id] = setErr("invalidProperties", "Target mailbox not found")
-				continue
-			}
-			if srcErr == nil {
-				if rights := base.RightsForRole(roleOf(srcMb)); !rights.MayRemoveItems {
-					notUpdated[id] = setErr("forbidden", "May not remove items from source mailbox")
+			for prop, v := range updateMap {
+				if !strings.HasPrefix(prop, "mailboxIds/") {
 					continue
 				}
-			}
-			if rights := base.RightsForRole(roleOf(dstMb)); !rights.MayAddItems {
-				notUpdated[id] = setErr("forbidden", "May not add items to target mailbox")
-				continue
-			}
-		}
-
-		patched, ok, errType := ApplyKeywordPatch(base.EmailMetadata(ctx, h.deps, accountID, id), updateMap)
-		if !ok {
-			notUpdated[id] = setErr(errType, "Invalid keyword update")
-			continue
-		}
-		plans = append(plans, emailUpdate{
-			id:             id,
-			currentMailbox: currentMailbox,
-			targetMailbox:  targetMailbox,
-			mailboxChanged: mailboxChanged,
-			meta:           patched,
-		})
-	}
-
-	// Apply validated updates one Email at a time. A failed metadata write is
-	// rolled back by moving the message back to its original mailbox.
-	for _, plan := range plans {
-		if plan.mailboxChanged {
-			if _, err := h.deps.Storage.MoveEmail(ctx, accountID, plan.id, plan.targetMailbox); err != nil {
-				if errors.Is(err, storage.ErrNotFound) {
-					notUpdated[plan.id] = setErr("notFound", "Email not found")
-				} else {
-					slog.Error("JMAP: failed to move email", "account", accountID, "id", plan.id, "from", plan.currentMailbox, "to", plan.targetMailbox, "err", err)
-					notUpdated[plan.id] = setErr("serverFail", "Failed to move email")
+				mbID := storage.NormalizeMailboxID(strings.TrimPrefix(prop, "mailboxIds/"))
+				b, ok := v.(bool)
+				if !ok {
+					return fail(base.NewSetError("invalidProperties", "Invalid mailboxIds patch"))
 				}
-				continue
+				if b {
+					targetMailbox = mbID
+					mailboxChanged = !strings.EqualFold(targetMailbox, currentMailbox)
+				} else if strings.EqualFold(mbID, targetMailbox) {
+					// removing current/target without adding another is invalid here
+					return fail(base.NewSetError("invalidProperties", "Email must remain in a mailbox"))
+				}
 			}
-		}
-		if err := h.deps.Metadata.Save(ctx, plan.meta); err != nil {
-			if errors.Is(err, metadata.ErrVersionConflict) {
-				notUpdated[plan.id] = setErr("serverFail", "Concurrent modification: email metadata was modified by another request")
-				continue
-			}
-			slog.Error("JMAP: failed to save email metadata", "account", accountID, "id", plan.id, "err", err)
-			if plan.mailboxChanged {
-				_, _ = h.deps.Storage.MoveEmail(ctx, accountID, plan.id, plan.currentMailbox)
-			}
-			notUpdated[plan.id] = setErr("serverFail", "Failed to save email metadata")
-			continue
-		}
-		if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, plan.id, base.ChangeUpdate); err != nil {
-			return nil, err
-		}
-		updated[plan.id] = nil
-	}
 
-	newState, err := h.syncEmailState(ctx, accountID)
-	if err != nil {
-		return nil, err
-	}
-	resp := map[string]interface{}{
-		"accountId":    accountID,
-		"oldState":     oldState,
-		"newState":     newState,
-		"created":      created,
-		"updated":      updated,
-		"destroyed":    destroyed,
-		"notCreated":   notCreated,
-		"notUpdated":   notUpdated,
-		"notDestroyed": notDestroyed,
-	}
-	return json.Marshal(resp)
-}
+			// Validate the move and the keyword patch before mutating anything.
+			if mailboxChanged {
+				srcMb, srcErr := h.deps.Storage.GetMailbox(ctx, accountID, currentMailbox)
+				dstMb, dstErr := h.deps.Storage.GetMailbox(ctx, accountID, targetMailbox)
+				if dstErr != nil {
+					return fail(base.NewSetError("invalidProperties", "Target mailbox not found"))
+				}
+				if srcErr == nil {
+					if rights := base.RightsForRole(roleOf(srcMb)); !rights.MayRemoveItems {
+						return fail(base.NewSetError("forbidden", "May not remove items from source mailbox"))
+					}
+				}
+				if rights := base.RightsForRole(roleOf(dstMb)); !rights.MayAddItems {
+					return fail(base.NewSetError("forbidden", "May not add items to target mailbox"))
+				}
+			}
 
-func setErr(typ, description string) map[string]string {
-	return map[string]string{"type": typ, "description": description}
+			patched, ok, errType := ApplyKeywordPatch(base.EmailMetadata(ctx, h.deps, accountID, id), updateMap)
+			if !ok {
+				return fail(base.NewSetError(errType, "Invalid keyword update"))
+			}
+
+			// Apply the validated move and metadata write. A failed metadata
+			// write is rolled back by moving the message back.
+			if mailboxChanged {
+				if _, err := h.deps.Storage.MoveEmail(ctx, accountID, id, targetMailbox); err != nil {
+					if errors.Is(err, storage.ErrNotFound) {
+						return fail(base.NewSetError("notFound", "Email not found"))
+					}
+					slog.Error("JMAP: failed to move email", "account", accountID, "id", id, "from", currentMailbox, "to", targetMailbox, "err", err)
+					return fail(base.NewSetError("serverFail", "Failed to move email"))
+				}
+			}
+			if err := h.deps.Metadata.Save(ctx, patched); err != nil {
+				if errors.Is(err, metadata.ErrVersionConflict) {
+					return fail(base.NewSetError("serverFail", "Concurrent modification: email metadata was modified by another request"))
+				}
+				slog.Error("JMAP: failed to save email metadata", "account", accountID, "id", id, "err", err)
+				if mailboxChanged {
+					_, _ = h.deps.Storage.MoveEmail(ctx, accountID, id, currentMailbox)
+				}
+				return fail(base.NewSetError("serverFail", "Failed to save email metadata"))
+			}
+			if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, id, base.ChangeUpdate); err != nil {
+				return nil, nil, err
+			}
+			return json.RawMessage("null"), nil, nil
+		},
+	}
 }
 
 func roleOf(mb storage.Mailbox) string {
@@ -546,83 +468,23 @@ func roleOf(mb storage.Mailbox) string {
 }
 
 func (h *Handler) EmailChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		SinceState string `json:"sinceState"`
-		MaxChanges *int   `json:"maxChanges,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-	if _, err := h.syncEmailState(ctx, accountID); err != nil {
-		return nil, err
-	}
-	result, err := h.deps.Changes.ChangesFrom(ctx, accountID, base.StateEmail, req.SinceState, req.MaxChanges)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(result)
+	return base.HandleChanges(ctx, accountID, args, base.ChangesSpec{
+		Allowed: base.ArgumentSet("accountId", "sinceState", "maxChanges"),
+		Sync: func(ctx context.Context) error {
+			_, err := h.syncEmailState(ctx, accountID)
+			return err
+		},
+		Changes: func(ctx context.Context, sinceState string, maxChanges *int) (map[string]any, error) {
+			return h.deps.Changes.ChangesFrom(ctx, accountID, base.StateEmail, sinceState, maxChanges)
+		},
+	})
 }
 
 // supportedEmailSortProperties mirrors the Session's emailQuerySortOptions.
 var supportedEmailSortProperties = map[string]bool{"receivedAt": true}
 
 func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		Sort            []interface{} `json:"sort,omitempty"`
-		Position        *int          `json:"position,omitempty"`
-		Anchor          *string       `json:"anchor,omitempty"`
-		AnchorOffset    *int          `json:"anchorOffset,omitempty"`
-		Limit           *int          `json:"limit,omitempty"`
-		CalculateTotal  *bool         `json:"calculateTotal,omitempty"`
-		CollapseThreads *bool         `json:"collapseThreads,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-	ascending, err := base.SortAscending(req.Sort, supportedEmailSortProperties)
-	if err != nil {
-		return nil, err
-	}
-	filter, err := parseEmailFilter(args)
-	if err != nil {
-		return nil, err
-	}
-	if req.CollapseThreads != nil && *req.CollapseThreads {
-		// Threads are not collapsed by the underlying store; rejecting is
-		// preferable to returning a result set with duplicate threads.
-		return nil, base.Errorf("unsupportedFilter", "collapseThreads is not supported")
-	}
-	queryKey, err := base.QueryKey(filter, req.Sort)
-	if err != nil {
-		return nil, err
-	}
-
-	allIDs, err := h.queryEmailIDs(ctx, accountID, filter, ascending)
-	if err != nil {
-		return nil, err
-	}
-	start, end, err := base.PageBoundsForIDs(allIDs, req.Position, req.Limit, req.Anchor, req.AnchorOffset)
-	if err != nil {
-		return nil, err
-	}
-	ids := append([]string{}, allIDs[start:end]...)
-
-	queryState, err := h.deps.Changes.SyncQuery(ctx, accountID, base.StateEmailQuery, queryKey, allIDs)
-	if err != nil {
-		return nil, err
-	}
-	resp := map[string]interface{}{
-		"accountId":           accountID,
-		"queryState":          queryState,
-		"canCalculateChanges": true,
-		"position":            start,
-		"ids":                 ids,
-	}
-	// RFC 8620 section 5.4: total MUST be omitted unless requested.
-	if req.CalculateTotal != nil && *req.CalculateTotal {
-		resp["total"] = len(allIDs)
-	}
-	return json.Marshal(resp)
+	return base.HandleQuery(ctx, accountID, args, h.querySpec())
 }
 
 // queryEmailIDs returns the full ordered result set for a query, before
@@ -668,46 +530,38 @@ func (h *Handler) queryEmailIDs(ctx context.Context, accountID string, filter *E
 }
 
 func (h *Handler) EmailQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
-	var req struct {
-		SinceQueryState string        `json:"sinceQueryState"`
-		Sort            []interface{} `json:"sort,omitempty"`
-		MaxChanges      *int          `json:"maxChanges,omitempty"`
-		UpToID          *string       `json:"upToId,omitempty"`
-		CalculateTotal  *bool         `json:"calculateTotal,omitempty"`
-		CollapseThreads *bool         `json:"collapseThreads,omitempty"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, err
-	}
-	ascending, err := base.SortAscending(req.Sort, supportedEmailSortProperties)
-	if err != nil {
-		return nil, err
-	}
-	filter, err := parseEmailFilter(args)
-	if err != nil {
-		return nil, err
-	}
-	if req.UpToID != nil {
-		return nil, base.RejectArgument("upToId", "the change tracker cannot limit a query diff to an id")
-	}
-	if req.CollapseThreads != nil && *req.CollapseThreads {
-		return nil, base.Errorf("unsupportedFilter", "collapseThreads is not supported")
-	}
-	queryKey, err := base.QueryKey(filter, req.Sort)
-	if err != nil {
-		return nil, err
-	}
+	return base.HandleQueryChanges(ctx, accountID, args, h.querySpec())
+}
 
-	ids, err := h.queryEmailIDs(ctx, accountID, filter, ascending)
-	if err != nil {
-		return nil, err
+// querySpec is shared by Email/query and Email/queryChanges so filter,
+// ordering and query state are derived identically in both methods.
+func (h *Handler) querySpec() base.QuerySpec {
+	return base.QuerySpec{
+		Allowed: base.ArgumentSet("accountId", "filter", "sort", "position", "anchor", "anchorOffset",
+			"limit", "calculateTotal", "collapseThreads"),
+		ChangesAllowed: base.ArgumentSet("accountId", "filter", "sinceQueryState", "sort", "maxChanges",
+			"upToId", "calculateTotal", "collapseThreads"),
+		SortProperties: supportedEmailSortProperties,
+		ParseFilter:    func(args json.RawMessage) (any, error) { return parseEmailFilter(args) },
+		Extra: func(args json.RawMessage) error {
+			var req struct {
+				CollapseThreads *bool `json:"collapseThreads"`
+			}
+			if err := json.Unmarshal(args, &req); err != nil {
+				return base.Errorf("invalidArguments", "query arguments must be an object")
+			}
+			// Threads are not collapsed by the underlying store; rejecting is
+			// preferable to returning a result set with duplicate threads.
+			if req.CollapseThreads != nil && *req.CollapseThreads {
+				return base.Errorf("unsupportedFilter", "collapseThreads is not supported")
+			}
+			return nil
+		},
+		AllIDs: func(ctx context.Context, accountID string, _ json.RawMessage, filter any, ascending bool) ([]string, error) {
+			typed, _ := filter.(*EmailFilter)
+			return h.queryEmailIDs(ctx, accountID, typed, ascending)
+		},
+		Tracker: h.deps.Changes,
+		Kind:    base.StateEmailQuery,
 	}
-	result, err := h.deps.Changes.QueryChangesFrom(ctx, accountID, base.StateEmailQuery, queryKey, req.SinceQueryState, req.MaxChanges, ids)
-	if err != nil {
-		return nil, err
-	}
-	if req.CalculateTotal != nil && *req.CalculateTotal {
-		result["total"] = len(ids)
-	}
-	return json.Marshal(result)
 }
