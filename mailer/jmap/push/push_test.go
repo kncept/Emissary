@@ -55,7 +55,7 @@ func pushContext(sid string) context.Context {
 	})
 }
 
-func newTestHub(source *memoryState, store storage.PushSubscriptionStore) *Hub {
+func newTestHub(source *memoryState, store HubStore) *Hub {
 	hub := NewHub(source, source, store)
 	hub.pollInterval = 10 * time.Millisecond
 	hub.coalesce = 0
@@ -425,10 +425,13 @@ func TestWebhookRateLimitBackoffCoalescesPendingStates(t *testing.T) {
 		t.Fatalf("webhook attempts = %d, want 1", attempts)
 	}
 
-	// Advance time by moving the backoff deadline into the past.
-	hub.mu.Lock()
-	hub.backoff[credential] = time.Now().Add(-time.Second)
-	hub.mu.Unlock()
+	// Advance time by moving the durable backoff deadline into the past.
+	if err := hub.durable.updateWebhook(ctx, credential, func(record *durableWebhook) (bool, error) {
+		record.BackoffUntil = time.Now().Add(-time.Second)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	state.set(base.StateThread, "thread-429")
 	if err := hub.Refresh(ctx, "alice@example.com"); err != nil {
 		t.Fatal(err)

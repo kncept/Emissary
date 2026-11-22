@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sort"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	"github.com/kncept/Emissary/mailer/email"
 )
 
@@ -24,6 +26,8 @@ const testMessage = "From: alice@example.com\r\n" +
 
 type fakeS3 struct {
 	objects   map[string]string
+	etags     map[string]string
+	nextETag  int
 	requested []string
 }
 
@@ -31,7 +35,7 @@ func newFakeS3(objects map[string]string) *fakeS3 {
 	if objects == nil {
 		objects = map[string]string{}
 	}
-	return &fakeS3{objects: objects}
+	return &fakeS3{objects: objects, etags: make(map[string]string)}
 }
 
 func (f *fakeS3) ListObjectsV2(_ context.Context, input *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
@@ -74,20 +78,39 @@ func (f *fakeS3) GetObject(_ context.Context, input *s3.GetObjectInput, _ ...fun
 	if !ok {
 		return nil, &types.NoSuchKey{}
 	}
-	return &s3.GetObjectOutput{Body: io.NopCloser(strings.NewReader(body))}, nil
+	etag := f.etags[key]
+	return &s3.GetObjectOutput{Body: io.NopCloser(strings.NewReader(body)), ETag: aws.String(etag)}, nil
 }
 
+// PutObject honours the conditional headers used by the revision-aware state
+// stores while still allowing unconditional writes (drafts, mail, blobs).
 func (f *fakeS3) PutObject(_ context.Context, input *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	body, err := io.ReadAll(input.Body)
 	if err != nil {
 		return nil, err
 	}
-	f.objects[aws.ToString(input.Key)] = string(body)
-	return &s3.PutObjectOutput{}, nil
+	key := aws.ToString(input.Key)
+	_, exists := f.objects[key]
+	if exists && aws.ToString(input.IfNoneMatch) == "*" {
+		return nil, &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "object exists"}
+	}
+	if input.IfMatch != nil && (!exists || aws.ToString(input.IfMatch) != f.etags[key]) {
+		return nil, &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "etag mismatch"}
+	}
+	f.objects[key] = string(body)
+	f.nextETag++
+	etag := fmt.Sprintf("\"etag-%d\"", f.nextETag)
+	if f.etags == nil {
+		f.etags = make(map[string]string)
+	}
+	f.etags[key] = etag
+	return &s3.PutObjectOutput{ETag: aws.String(etag)}, nil
 }
 
 func (f *fakeS3) DeleteObject(_ context.Context, input *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
-	delete(f.objects, aws.ToString(input.Key))
+	key := aws.ToString(input.Key)
+	delete(f.objects, key)
+	delete(f.etags, key)
 	return &s3.DeleteObjectOutput{}, nil
 }
 
@@ -500,14 +523,14 @@ func TestS3StorageSessionDraftsAndCreatedIDs(t *testing.T) {
 		t.Errorf("loaded draft = %+v, want subject %q and text %q", loaded, message.Subject, message.Text)
 	}
 
-	if err := store.SaveCreatedIDs(ctx, "session-1", map[string]string{"create1": id}); err != nil {
+	if _, err := store.SaveCreatedIDs(ctx, "session-1", map[string]string{"create1": id}, ""); err != nil {
 		t.Fatalf("SaveCreatedIDs() error = %v", err)
 	}
 	createdKey := "_storage/session-1/created-ids.json"
 	if _, ok := fake.objects[createdKey]; !ok {
 		t.Fatalf("created ids were not stored under %q: %v", createdKey, fake.objects)
 	}
-	ids, err := store.LoadCreatedIDs(ctx, "session-1")
+	ids, _, err := store.LoadCreatedIDs(ctx, "session-1")
 	if err != nil {
 		t.Fatalf("LoadCreatedIDs() error = %v", err)
 	}

@@ -32,13 +32,15 @@ type memoryBlob struct {
 // MemoryStorage is a small in-memory store. It is useful for local
 // development and tests; messages are lost when the process exits.
 type MemoryStorage struct {
-	mu                sync.RWMutex
-	accounts          map[string]*memoryAccount
-	drafts            map[string]map[string][]byte
-	sessionIDs        map[string]map[string]string
-	jmapStates        map[string]jmapStateRecord
-	pushSubscriptions map[string][]PushSubscription
-	jmapStateRevision uint64
+	mu                  sync.RWMutex
+	accounts            map[string]*memoryAccount
+	drafts              map[string]map[string][]byte
+	sessionIDs          map[string]map[string]string
+	sessionRevisions    map[string]string
+	jmapStates          map[string]jmapStateRecord
+	pushSubscriptions   map[string][]PushSubscription
+	jmapStateRevision   uint64
+	sessionStateVersion uint64
 }
 
 // jmapStateRecord models the revisioned blob held by the in-memory store.
@@ -52,6 +54,7 @@ func NewMemoryStorage() *MemoryStorage {
 		accounts:          make(map[string]*memoryAccount),
 		drafts:            make(map[string]map[string][]byte),
 		sessionIDs:        make(map[string]map[string]string),
+		sessionRevisions:  make(map[string]string),
 		jmapStates:        make(map[string]jmapStateRecord),
 		pushSubscriptions: make(map[string][]PushSubscription),
 	}
@@ -438,27 +441,35 @@ func (s *MemoryStorage) DeleteDraft(_ context.Context, sessionID, id string) err
 	return nil
 }
 
-// LoadCreatedIDs implements SessionStateStore.
-func (s *MemoryStorage) LoadCreatedIDs(_ context.Context, sessionID string) (map[string]string, error) {
+// LoadCreatedIDs implements SessionStateStore with a revision for optimistic
+// concurrency, mirroring the in-memory JMAP state store.
+func (s *MemoryStorage) LoadCreatedIDs(_ context.Context, sessionID string) (map[string]string, string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	ids := make(map[string]string, len(s.sessionIDs[sessionID]))
 	for id, real := range s.sessionIDs[sessionID] {
 		ids[id] = real
 	}
-	return ids, nil
+	return ids, s.sessionRevisions[sessionID], nil
 }
 
-// SaveCreatedIDs implements SessionStateStore.
-func (s *MemoryStorage) SaveCreatedIDs(_ context.Context, sessionID string, ids map[string]string) error {
+// SaveCreatedIDs implements SessionStateStore with a compare-and-swap on the
+// session revision.
+func (s *MemoryStorage) SaveCreatedIDs(_ context.Context, sessionID string, ids map[string]string, revision string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	copy := make(map[string]string, len(ids))
-	for id, real := range ids {
-		copy[id] = real
+	if s.sessionRevisions[sessionID] != revision {
+		return "", ErrSessionStateConflict
 	}
-	s.sessionIDs[sessionID] = copy
-	return nil
+	stored := make(map[string]string, len(ids))
+	for id, real := range ids {
+		stored[id] = real
+	}
+	s.sessionStateVersion++
+	newRevision := fmt.Sprintf("s%d", s.sessionStateVersion)
+	s.sessionIDs[sessionID] = stored
+	s.sessionRevisions[sessionID] = newRevision
+	return newRevision, nil
 }
 
 // PutBlob implements BlobStore. Blobs are content-addressed so repeated puts

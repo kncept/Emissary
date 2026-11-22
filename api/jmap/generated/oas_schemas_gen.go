@@ -162,6 +162,10 @@ type ApiRequestRequestEntityTooLarge ProblemDetails
 
 func (*ApiRequestRequestEntityTooLarge) apiRequestRes() {}
 
+type ApiRequestTooManyRequests ProblemDetails
+
+func (*ApiRequestTooManyRequests) apiRequestRes() {}
+
 type ApiRequestUnauthorized ProblemDetails
 
 func (*ApiRequestUnauthorized) apiRequestRes() {}
@@ -1680,6 +1684,10 @@ func (s UploadBinaryReq) Read(p []byte) (n int, err error) {
 	}
 	return s.Data.Read(p)
 }
+
+type UploadBinaryTooManyRequests ProblemDetails
+
+func (*UploadBinaryTooManyRequests) uploadBinaryRes() {}
 
 type UploadBinaryUnauthorized ProblemDetails
 

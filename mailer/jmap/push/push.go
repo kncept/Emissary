@@ -97,6 +97,14 @@ type StateReader interface {
 	States(ctx context.Context, accountID string) (map[base.StateKind]string, error)
 }
 
+// HubStore is the durable storage the hub needs: subscriptions plus the
+// revision-aware state store used for cold-start-safe delivery state. The full
+// storage.Storage satisfies it, so production wiring passes one shared store.
+type HubStore interface {
+	storage.PushSubscriptionStore
+	storage.JMAPStateStore
+}
+
 type subscriber struct {
 	id         uint64
 	accountID  string
@@ -111,10 +119,11 @@ type subscriber struct {
 // subscriptions. All mutable fields are guarded by mu; network calls are made
 // outside the lock.
 type Hub struct {
-	reader StateSource
-	states StateReader
-	store  storage.PushSubscriptionStore
-	client *http.Client
+	reader  StateSource
+	states  StateReader
+	store   storage.PushSubscriptionStore
+	durable durableState
+	client  *http.Client
 	// validateURL is a seam for tests; production uses the same SSRF checks
 	// applied when the subscription was created.
 	validateURL  func(ctx context.Context, value string) error
@@ -125,6 +134,10 @@ type Hub struct {
 	coalesce      time.Duration
 	maxConnection int
 
+	// subs and credentials are process-local caches. subs holds live SSE
+	// channels (which cannot be shared across instances); credentials is
+	// reloaded from the durable credential index on every Refresh. Delivery
+	// state (last, backoff, pending) is durable too.
 	mu          sync.Mutex
 	nextID      uint64
 	closed      bool
@@ -133,17 +146,20 @@ type Hub struct {
 	last        map[string]map[base.StateKind]string
 	deferred    map[string]map[base.StateKind]string
 	published   map[string]time.Time
-	pending     map[string]map[string]map[string]string // credential -> account -> type -> token
-	backoff     map[string]time.Time
 }
 
 // NewHub creates a push hub. reader may be nil in tests that only exercise
 // state delivery; production wiring always supplies a JMAP handler.
-func NewHub(reader StateSource, tracker StateReader, store storage.PushSubscriptionStore) *Hub {
+func NewHub(reader StateSource, tracker StateReader, store HubStore) *Hub {
+	var durable durableState
+	if store != nil {
+		durable.store = store
+	}
 	return &Hub{
 		reader:        reader,
 		states:        tracker,
 		store:         store,
+		durable:       durable,
 		client:        &http.Client{Timeout: 10 * time.Second},
 		validateURL:   pushsubscription.ValidateURL,
 		pingInterval:  func(seconds int) time.Duration { return time.Duration(seconds) * time.Second },
@@ -155,8 +171,6 @@ func NewHub(reader StateSource, tracker StateReader, store storage.PushSubscript
 		last:          make(map[string]map[base.StateKind]string),
 		deferred:      make(map[string]map[base.StateKind]string),
 		published:     make(map[string]time.Time),
-		pending:       make(map[string]map[string]map[string]string),
-		backoff:       make(map[string]time.Time),
 	}
 }
 
@@ -172,17 +186,66 @@ func (h *Hub) SetHTTPClient(client *http.Client) {
 // Remember records which credentials may receive changes for an account.
 // Webhook subscriptions are scoped to credentials rather than accounts, so
 // this index lets a JMAP request deliver the changes that request produced.
+// The index is durable: an instance that did not serve the original request
+// loads it on Refresh and still finds the subscription in shared storage.
 func (h *Hub) Remember(ctx context.Context, accountID string) {
 	if accountID == "" {
 		return
 	}
 	credential := pushsubscription.CredentialID(ctx)
+	if err := h.durable.rememberCredential(ctx, accountID, credential); err != nil {
+		slog.Warn("JMAP push: could not persist credential association", "account", accountID, "err", err)
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.credentials[accountID] == nil {
 		h.credentials[accountID] = make(map[string]struct{})
 	}
 	h.credentials[accountID][credential] = struct{}{}
+}
+
+// loadDurableCredentials merges the durable credential index into the local
+// cache. The cache is never authoritative: every Refresh reloads the index.
+func (h *Hub) loadDurableCredentials(ctx context.Context, accountID string) error {
+	credentials, err := h.durable.loadCredentials(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if len(credentials) == 0 {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.credentials[accountID] == nil {
+		h.credentials[accountID] = make(map[string]struct{})
+	}
+	for _, credential := range credentials {
+		h.credentials[accountID][credential] = struct{}{}
+	}
+	return nil
+}
+
+// loadDurableLast seeds the in-memory baseline from the durable store. It is
+// deliberately reloaded on every Refresh so a baseline published by another
+// instance is never re-emitted as a duplicate by this one.
+func (h *Hub) loadDurableLast(ctx context.Context, accountID string) error {
+	tokens, err := h.durable.loadLast(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if tokens == nil {
+		return nil
+	}
+	h.mu.Lock()
+	h.last[accountID] = decodeTokens(tokens)
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *Hub) persistDurableLast(ctx context.Context, accountID string, states map[base.StateKind]string) {
+	if err := h.durable.saveLast(ctx, accountID, encodeTokens(states)); err != nil {
+		slog.Warn("JMAP push: could not persist baseline", "account", accountID, "err", err)
+	}
 }
 
 // Refresh computes the type states that have changed for an account and
@@ -200,15 +263,29 @@ func (h *Hub) Refresh(ctx context.Context, accountID string) error {
 	if err != nil {
 		return err
 	}
+	if err := h.loadDurableLast(ctx, accountID); err != nil {
+		return err
+	}
+	if err := h.loadDurableCredentials(ctx, accountID); err != nil {
+		return err
+	}
+	// Whatever this refresh decides, the resulting baseline becomes the
+	// durable one so a cold start never re-publishes an already-delivered
+	// change and never loses the baseline for a change made while down.
+	defer h.persistDurableLast(ctx, accountID, states)
 
-	h.mu.Lock()
 	// A session-less access token scopes subscriptions by subject, which is
-	// the account id itself. Record that association so changes discovered
-	// from durable state alone (notably inbound delivery) reach webhooks.
+	// the account id itself. Record that association durably so changes
+	// discovered from state alone (notably inbound delivery) reach webhooks.
+	subjectCredential := pushsubscription.CredentialFromSubject(accountID)
+	if err := h.durable.rememberCredential(ctx, accountID, subjectCredential); err != nil {
+		slog.Warn("JMAP push: could not persist subject credential", "account", accountID, "err", err)
+	}
+	h.mu.Lock()
 	if h.credentials[accountID] == nil {
 		h.credentials[accountID] = make(map[string]struct{})
 	}
-	h.credentials[accountID][pushsubscription.CredentialFromSubject(accountID)] = struct{}{}
+	h.credentials[accountID][subjectCredential] = struct{}{}
 	previous, seen := h.last[accountID]
 	if !seen {
 		h.last[accountID] = states
@@ -334,28 +411,41 @@ func (h *Hub) deliverToCredential(ctx context.Context, credential, accountID str
 	if h.store == nil {
 		return
 	}
-	now := time.Now()
-	h.mu.Lock()
-	if until, ok := h.backoff[credential]; ok && now.Before(until) {
-		pending := h.pendingCredential(credential, accountID)
-		for name, token := range types {
-			pending[name] = token
+	inputTypes := types
+	effective := make(map[string]string, len(inputTypes))
+	for name, token := range inputTypes {
+		effective[name] = token
+	}
+	backedOff := false
+	err := h.durable.updateWebhook(ctx, credential, func(record *durableWebhook) (bool, error) {
+		// A CAS conflict re-runs this closure, so derive everything from
+		// inputTypes rather than from a previously mutated map.
+		backedOff = false
+		effective = make(map[string]string, len(inputTypes))
+		for name, token := range inputTypes {
+			effective[name] = token
 		}
-		h.mu.Unlock()
+		if record.BackoffUntil.After(time.Now()) {
+			mergePending(record, accountID, inputTypes)
+			backedOff = true
+			return true, nil
+		}
+		if pending := record.Pending[accountID]; len(pending) > 0 {
+			for name, token := range pending {
+				effective[name] = token
+			}
+			delete(record.Pending, accountID)
+			return true, nil
+		}
+		return false, nil
+	})
+	if err != nil {
+		slog.Warn("JMAP push: could not update webhook state", "credential", credential, "err", err)
 		return
 	}
-	if pending := h.pending[credential][accountID]; len(pending) > 0 {
-		merged := make(map[string]string, len(types)+len(pending))
-		for name, token := range pending {
-			merged[name] = token
-		}
-		for name, token := range types {
-			merged[name] = token
-		}
-		types = merged
-		delete(h.pending[credential], accountID)
+	if backedOff {
+		return
 	}
-	h.mu.Unlock()
 
 	subs, err := h.store.LoadPushSubscriptions(ctx, credential)
 	if err != nil {
@@ -363,7 +453,7 @@ func (h *Hub) deliverToCredential(ctx context.Context, credential, accountID str
 		return
 	}
 	for _, sub := range subs {
-		selected := subscriptionTypes(sub, accountID, types)
+		selected := subscriptionTypes(sub, accountID, effective)
 		if len(selected) == 0 {
 			continue
 		}
@@ -371,28 +461,31 @@ func (h *Hub) deliverToCredential(ctx context.Context, credential, accountID str
 			slog.Warn("JMAP push: webhook delivery failed", "subscription", sub.ID, "err", err)
 			var rateLimited *rateLimitError
 			if errors.As(err, &rateLimited) {
-				h.mu.Lock()
-				h.backoff[credential] = time.Now().Add(backoffAfterRateLimit)
-				pending := h.pendingCredential(credential, accountID)
-				for name, token := range selected {
-					pending[name] = token
+				// Backoff and pending changes are durable so a cold start
+				// neither hammers the endpoint nor drops the queued change.
+				if err := h.durable.updateWebhook(ctx, credential, func(record *durableWebhook) (bool, error) {
+					record.BackoffUntil = time.Now().Add(backoffAfterRateLimit)
+					mergePending(record, accountID, selected)
+					return true, nil
+				}); err != nil {
+					slog.Warn("JMAP push: could not persist webhook backoff", "credential", credential, "err", err)
 				}
-				h.mu.Unlock()
 				break
 			}
 		}
 	}
 }
 
-// pendingCredential must be called with mu held.
-func (h *Hub) pendingCredential(credential, accountID string) map[string]string {
-	if h.pending[credential] == nil {
-		h.pending[credential] = make(map[string]map[string]string)
+func mergePending(record *durableWebhook, accountID string, types map[string]string) {
+	if record.Pending == nil {
+		record.Pending = make(map[string]map[string]string)
 	}
-	if h.pending[credential][accountID] == nil {
-		h.pending[credential][accountID] = make(map[string]string)
+	if record.Pending[accountID] == nil {
+		record.Pending[accountID] = make(map[string]string)
 	}
-	return h.pending[credential][accountID]
+	for name, token := range types {
+		record.Pending[accountID][name] = token
+	}
 }
 
 func subscriptionTypes(sub storage.PushSubscription, accountID string, types map[string]string) map[string]string {

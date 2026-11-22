@@ -197,6 +197,7 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 	// valid (and advertised) unreferenced-blob quota.
 	blobLifecycle := storage.NewBlobLifecycle(emailStore, maxFileSize)
 	uploadSlots := make(chan struct{}, jmapMaxConcurrentUpload)
+	requestSlots := make(chan struct{}, jmapMaxConcurrentRequests)
 
 	// One lister is shared by the From validator and the receiver rules editor.
 	// Remember whether the caller injected one: an injected lister enables the
@@ -309,7 +310,7 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 	})))
 	mux.Handle("GET /eventsource", requireEventSourceAuth(authenticator, http.HandlerFunc(pushHub.ServeHTTP)))
 	mux.Handle("POST /api/jmap/", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleJMAPAPIRequest(w, r, dispatcher, maxFileSize, pushHub)
+		handleJMAPAPIRequest(w, r, dispatcher, maxFileSize, pushHub, requestSlots)
 	})))
 	mux.Handle("POST /upload/{accountId}", requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPUpload(w, r, blobLifecycle, userManager, maxFileSize, uploadSlots)
@@ -397,10 +398,10 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 	mux.HandleFunc("/", serveFrontend)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		slog.Debug("HTTP request", "method", r.Method, "path", r.URL.Path)
+		slog.Debug("HTTP request", "method", r.Method, "path", safeRequestTarget(r))
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.Error("Panic serving request", "method", r.Method, "path", r.URL.Path, "panic", recovered)
+				slog.Error("Panic serving request", "method", r.Method, "path", safeRequestTarget(r), "panic", recovered)
 				writeError(w, http.StatusInternalServerError, "internal server error")
 			}
 		}()
@@ -497,17 +498,33 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
+// safeRequestTarget returns a loggable request path. The EventSource `token`
+// query parameter is a bearer token (the browser EventSource API cannot set an
+// Authorization header), so it is redacted before any log line is emitted.
+// Without a token the path is returned unchanged, as before.
+func safeRequestTarget(r *http.Request) string {
+	if r.URL == nil {
+		return ""
+	}
+	query := r.URL.Query()
+	if !query.Has("token") {
+		return r.URL.Path
+	}
+	query.Set("token", "[REDACTED]")
+	return r.URL.Path + "?" + query.Encode()
+}
+
 // logRequestError records a request that failed because of a server-side
 // problem. These are included at the default ERROR level.
 func logRequestError(r *http.Request, operation string, err error) {
-	slog.Error("Request failed", "method", r.Method, "path", r.URL.Path, "operation", operation, "err", err)
+	slog.Error("Request failed", "method", r.Method, "path", safeRequestTarget(r), "operation", operation, "err", err)
 }
 
 // logRequestWarn records a request that failed for a client-controlled reason
 // (bad input, invalid credentials, aborted response). These are useful when
 // diagnosing issues but stay out of the quiet default configuration.
 func logRequestWarn(r *http.Request, operation string, err error) {
-	slog.Warn("Request rejected", "method", r.Method, "path", r.URL.Path, "operation", operation, "err", err)
+	slog.Warn("Request rejected", "method", r.Method, "path", safeRequestTarget(r), "operation", operation, "err", err)
 }
 
 var frontendFS = func() http.FileSystem {
@@ -635,11 +652,28 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 		"state":          jmapSessionState,
 	}
 
+	// The Session object reflects per-account state and capabilities; browsers
+	// and proxies must never serve a cached copy in place of a fresh one.
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(session)
 }
 
-func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jmap.Dispatcher, maxFileSize int64, pushHub *push.Hub) {
+func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jmap.Dispatcher, maxFileSize int64, pushHub *push.Hub, slots chan struct{}) {
+	// Enforce the advertised maxConcurrentRequests limit before reading the
+	// body, mirroring the upload semaphore. Rejecting immediately also keeps a
+	// saturated Lambda from buffering more request bodies.
+	select {
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
+	default:
+		writeJMAPProblem(w, http.StatusTooManyRequests, "urn:ietf:params:jmap:error:limit",
+			"Request exceeds server limit",
+			fmt.Sprintf("Too many concurrent JMAP requests (limit %d)", jmapMaxConcurrentRequests),
+			"maxConcurrentRequests")
+		return
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError

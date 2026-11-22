@@ -76,6 +76,51 @@ func assertContractRaw(t *testing.T, store Storage, accountID, id string, want [
 	}
 }
 
+// TestStorageContractCreatedIDsUseRevisions exercises the revision-aware
+// SessionStateStore contract on every backend. Concurrent Lambda invocations
+// rely on this to avoid losing each other's creation ids.
+func TestStorageContractCreatedIDsUseRevisions(t *testing.T) {
+	ctx := context.Background()
+	for _, backend := range contractBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			store := backend.open(t)
+
+			ids, revision, err := store.LoadCreatedIDs(ctx, "session-1")
+			if err != nil || len(ids) != 0 || revision != "" {
+				t.Fatalf("empty load = %v / %q / %v", ids, revision, err)
+			}
+
+			revision, err = store.SaveCreatedIDs(ctx, "session-1", map[string]string{"create1": "id-1"}, "")
+			if err != nil || revision == "" {
+				t.Fatalf("SaveCreatedIDs() = %q / %v, want a revision", revision, err)
+			}
+			if _, err := store.SaveCreatedIDs(ctx, "session-1", map[string]string{"create2": "id-2"}, ""); !errors.Is(err, ErrSessionStateConflict) {
+				t.Fatalf("stale create error = %v, want ErrSessionStateConflict", err)
+			}
+
+			nextRevision, err := store.SaveCreatedIDs(ctx, "session-1",
+				map[string]string{"create1": "id-1", "create2": "id-2"}, revision)
+			if err != nil || nextRevision == "" || nextRevision == revision {
+				t.Fatalf("conditional save = %q / %v, want a new revision", nextRevision, err)
+			}
+			if _, err := store.SaveCreatedIDs(ctx, "session-1", map[string]string{"stale": "x"}, revision); !errors.Is(err, ErrSessionStateConflict) {
+				t.Fatalf("stale update error = %v, want ErrSessionStateConflict", err)
+			}
+
+			ids, loadedRevision, err := store.LoadCreatedIDs(ctx, "session-1")
+			if err != nil {
+				t.Fatalf("LoadCreatedIDs() error = %v", err)
+			}
+			if loadedRevision != nextRevision {
+				t.Errorf("loaded revision = %q, want %q", loadedRevision, nextRevision)
+			}
+			if ids["create1"] != "id-1" || ids["create2"] != "id-2" || len(ids) != 2 {
+				t.Errorf("loaded ids = %v, want create1 and create2", ids)
+			}
+		})
+	}
+}
+
 func TestStorageContractMailboxes(t *testing.T) {
 	ctx := context.Background()
 	accountID := contractAccountID()

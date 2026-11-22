@@ -146,6 +146,48 @@ func TestS3JMAPStateStoreUsesETagConditionalWrites(t *testing.T) {
 	}
 }
 
+func TestS3CreatedIDsConflictReloadAndMerge(t *testing.T) {
+	ctx := context.Background()
+	store := &S3Storage{
+		client: &conditionalS3{objects: make(map[string]conditionalS3Object)},
+		bucket: "test-bucket",
+	}
+
+	first, firstRevision, err := store.LoadCreatedIDs(ctx, "session-1")
+	if err != nil || len(first) != 0 || firstRevision != "" {
+		t.Fatalf("empty load = %v / %q / %v", first, firstRevision, err)
+	}
+	second, secondRevision, err := store.LoadCreatedIDs(ctx, "session-1")
+	if err != nil || secondRevision != firstRevision {
+		t.Fatalf("second load revision = %q, want %q (err %v)", secondRevision, firstRevision, err)
+	}
+
+	first["create1"] = "id-1"
+	if _, err := store.SaveCreatedIDs(ctx, "session-1", first, firstRevision); err != nil {
+		t.Fatalf("first SaveCreatedIDs() error = %v", err)
+	}
+	second["create2"] = "id-2"
+	if _, err := store.SaveCreatedIDs(ctx, "session-1", second, secondRevision); !errors.Is(err, ErrSessionStateConflict) {
+		t.Fatalf("stale SaveCreatedIDs() error = %v, want ErrSessionStateConflict", err)
+	}
+
+	merged, revision, err := store.LoadCreatedIDs(ctx, "session-1")
+	if err != nil {
+		t.Fatalf("reload error = %v", err)
+	}
+	merged["create2"] = "id-2"
+	if _, err := store.SaveCreatedIDs(ctx, "session-1", merged, revision); err != nil {
+		t.Fatalf("merged SaveCreatedIDs() error = %v", err)
+	}
+	stored, _, err := store.LoadCreatedIDs(ctx, "session-1")
+	if err != nil {
+		t.Fatalf("final load error = %v", err)
+	}
+	if stored["create1"] != "id-1" || stored["create2"] != "id-2" {
+		t.Errorf("final ids = %v, want both concurrent ids", stored)
+	}
+}
+
 func TestFileJMAPStateStorePersistsAcrossInstances(t *testing.T) {
 	ctx := context.Background()
 	store, root := newTestFileStorage(t)

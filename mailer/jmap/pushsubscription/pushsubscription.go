@@ -47,18 +47,17 @@ type Handler struct {
 	// resolvable URL requirement.
 	allowPrivateURLs bool
 
-	// mu guards createTimes and setLocks.
-	mu          sync.Mutex
-	createTimes map[string][]time.Time
-	setLocks    map[string]*sync.Mutex
+	// mu guards setLocks. The creation-rate window is durable (see set.go),
+	// so no per-process counter map is authoritative here.
+	mu       sync.Mutex
+	setLocks map[string]*sync.Mutex
 }
 
 // New creates a PushSubscription method handler.
 func New(deps *base.Deps) *Handler {
 	return &Handler{
-		deps:        deps,
-		createTimes: make(map[string][]time.Time),
-		setLocks:    make(map[string]*sync.Mutex),
+		deps:     deps,
+		setLocks: make(map[string]*sync.Mutex),
 	}
 }
 

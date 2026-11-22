@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/components/metadata"
@@ -284,7 +286,7 @@ func TestDispatchRequestPersistsCreatedIDsPerSession(t *testing.T) {
 		t.Fatalf("first DispatchRequest() error = %v", err)
 	}
 
-	stored, err := store.LoadCreatedIDs(ctx, claims.SID)
+	stored, _, err := store.LoadCreatedIDs(ctx, claims.SID)
 	if err != nil {
 		t.Fatalf("LoadCreatedIDs() error = %v", err)
 	}
@@ -312,6 +314,86 @@ func TestDispatchRequestPersistsCreatedIDsPerSession(t *testing.T) {
 	submission := string(handler.submissionSetArgs["create"])
 	if !strings.Contains(submission, `"emailId":"real-email-id"`) {
 		t.Errorf("persisted reference was not resolved: %s", submission)
+	}
+}
+
+// blockingCreatedIDHandler lets a test hold one dispatcher after its initial
+// load but before it records a creation id, forcing a revision conflict.
+type blockingCreatedIDHandler struct {
+	MethodHandler
+	createdID string
+	started   chan struct{}
+	release   chan struct{}
+}
+
+func (h *blockingCreatedIDHandler) EmailSet(_ context.Context, _ string, _ json.RawMessage) (json.RawMessage, error) {
+	if h.started != nil {
+		close(h.started)
+		select {
+		case <-h.release:
+		case <-time.After(5 * time.Second):
+			return nil, errors.New("timed out waiting for test release")
+		}
+	}
+	return json.RawMessage(fmt.Sprintf(`{"created":{%q:{"id":%q}},"notCreated":{}}`, h.createdID, h.createdID)), nil
+}
+
+func createdIDRequest(creationID string) *Request {
+	return &Request{
+		MethodCalls: []Invocation{{
+			Name:     "Email/set",
+			ClientID: "call-" + creationID,
+			Arguments: map[string]json.RawMessage{
+				"accountId": json.RawMessage(`"alice@example.com"`),
+				"create": json.RawMessage(fmt.Sprintf(
+					`{%q:{"from":[{"email":"alice@example.com"}],"to":[]}}`, creationID)),
+			},
+		}},
+	}
+}
+
+func TestDispatchRequestConcurrentSessionsDoNotLoseCreatedIDs(t *testing.T) {
+	store := storage.NewMemoryStorage()
+	claims := &auth.Claims{Subject: "alice@example.com", SID: "session-1"}
+	ctx := context.Background()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	first := NewDispatcher(&blockingCreatedIDHandler{
+		createdID: "id-from-first", started: started, release: release,
+	}, store)
+	second := NewDispatcher(&blockingCreatedIDHandler{createdID: "id-from-second"}, store)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := first.DispatchRequest(ctx, claims.Subject, claims, createdIDRequest("created-first"))
+		firstDone <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first dispatcher did not reach Email/set")
+	}
+	if _, err := second.DispatchRequest(ctx, claims.Subject, claims, createdIDRequest("created-second")); err != nil {
+		t.Fatalf("second DispatchRequest() error = %v", err)
+	}
+	close(release)
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first DispatchRequest() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("first dispatcher did not finish after conflict retry")
+	}
+
+	stored, _, err := store.LoadCreatedIDs(ctx, claims.SID)
+	if err != nil {
+		t.Fatalf("LoadCreatedIDs() error = %v", err)
+	}
+	if stored["id-from-first"] != "id-from-first" || stored["id-from-second"] != "id-from-second" {
+		t.Errorf("stored ids = %v, want both invocations' ids", stored)
 	}
 }
 
@@ -382,11 +464,42 @@ func TestJMAPErrorTypeMapping(t *testing.T) {
 		{errors.New("fromAccountNotFound: no such account"), "fromAccountNotFound"},
 		{errors.New("stateMismatch: stale state"), "stateMismatch"},
 		{errors.New("forbidden: denied"), "forbidden"},
-		{errors.New("wrap: unknown prefix"), "unknownMethod"},
+		{errors.New("invalidProperties: unrecognised patch property"), "invalidProperties"},
+		{errors.New("rateLimit: too many requests"), "rateLimit"},
+		{errors.New("serverPartialFail: partial changes"), "serverPartialFail"},
+		{errors.New("wrap: unknown prefix"), "serverFail"},
+		{errors.New("no typed prefix"), "serverFail"},
 	} {
 		if got := jmapErrorType(tc.err); got != tc.want {
 			t.Errorf("jmapErrorType(%q) = %q, want %q", tc.err, got, tc.want)
 		}
+	}
+}
+
+func TestJMAPStubReturnsServerFail(t *testing.T) {
+	handler := NewHandler(storage.NewMemoryStorage(), metadata.NewMemoryMetadata(),
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+	dispatcher := NewDispatcher(handler, nil)
+	req := &Request{
+		MethodCalls: []Invocation{{
+			Name: "Email/copy", ClientID: "c1", Arguments: map[string]json.RawMessage{},
+		}},
+	}
+	resp, err := dispatcher.DispatchRequest(context.Background(), "alice@example.com",
+		&auth.Claims{Subject: "alice@example.com"}, req)
+	if err != nil {
+		t.Fatalf("DispatchRequest() error = %v", err)
+	}
+	if len(resp.MethodResponses) != 1 || resp.MethodResponses[0].Name != "error" {
+		t.Fatalf("responses = %+v, want one error", resp.MethodResponses)
+	}
+	var errorType string
+	if err := json.Unmarshal(resp.MethodResponses[0].Arguments["type"], &errorType); err != nil {
+		t.Fatalf("unmarshal error type: %v", err)
+	}
+	if errorType != "serverFail" {
+		t.Errorf("error type = %q, want serverFail", errorType)
 	}
 }
 

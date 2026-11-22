@@ -152,19 +152,47 @@ func TestFileStorageDraftsAndSessionState(t *testing.T) {
 		t.Errorf("DeleteDraft() again = %v, want nil", err)
 	}
 
-	ids, err := store.LoadCreatedIDs(ctx, "session-1")
+	ids, _, err := store.LoadCreatedIDs(ctx, "session-1")
 	if err != nil || len(ids) != 0 {
 		t.Fatalf("LoadCreatedIDs() = %v, %v", ids, err)
 	}
-	if err := store.SaveCreatedIDs(ctx, "session-1", map[string]string{"c1": id}); err != nil {
+	if _, err := store.SaveCreatedIDs(ctx, "session-1", map[string]string{"c1": id}, ""); err != nil {
 		t.Fatalf("SaveCreatedIDs() error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "_storage", "session-1", createdIDsFile)); err != nil {
 		t.Fatalf("created ids file missing: %v", err)
 	}
-	ids, err = store.LoadCreatedIDs(ctx, "session-1")
+	ids, _, err = store.LoadCreatedIDs(ctx, "session-1")
 	if err != nil || ids["c1"] != id {
 		t.Errorf("LoadCreatedIDs() = %v, %v", ids, err)
+	}
+}
+
+func TestFileStorageCreatedIDsRevisionAcrossInstances(t *testing.T) {
+	ctx := context.Background()
+	store, root := newTestFileStorage(t)
+
+	revision, err := store.SaveCreatedIDs(ctx, "session-1", map[string]string{"create1": "id-1"}, "")
+	if err != nil {
+		t.Fatalf("SaveCreatedIDs() error = %v", err)
+	}
+	restarted, err := NewFileStorage(root)
+	if err != nil {
+		t.Fatalf("NewFileStorage() error = %v", err)
+	}
+	ids, loadedRevision, err := restarted.LoadCreatedIDs(ctx, "session-1")
+	if err != nil || loadedRevision != revision || ids["create1"] != "id-1" {
+		t.Fatalf("restart load = %v / %q / %v", ids, loadedRevision, err)
+	}
+	if _, err := store.SaveCreatedIDs(ctx, "session-1", map[string]string{"stale": "x"}, ""); !errors.Is(err, ErrSessionStateConflict) {
+		t.Fatalf("stale create error = %v, want ErrSessionStateConflict", err)
+	}
+	if _, err := restarted.SaveCreatedIDs(ctx, "session-1", map[string]string{"create1": "id-1", "create2": "id-2"}, loadedRevision); err != nil {
+		t.Fatalf("conditional update error = %v", err)
+	}
+	ids, _, err = store.LoadCreatedIDs(ctx, "session-1")
+	if err != nil || ids["create1"] != "id-1" || ids["create2"] != "id-2" {
+		t.Fatalf("final ids = %v / %v", ids, err)
 	}
 }
 

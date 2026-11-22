@@ -1147,48 +1147,63 @@ func (s *FileStorage) DeletePushSubscriptions(_ context.Context, credentialID st
 }
 
 // LoadCreatedIDs implements SessionStateStore. A session with no stored map
-// simply returns an empty one.
-func (s *FileStorage) LoadCreatedIDs(_ context.Context, sessionID string) (map[string]string, error) {
+// simply returns an empty one and an empty revision. The revision is a hash of
+// the stored bytes, matching the file backend's JMAP state contract.
+func (s *FileStorage) LoadCreatedIDs(_ context.Context, sessionID string) (map[string]string, string, error) {
 	key, err := sessionCreatedIDsKey(sessionID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	objectPath, err := s.objectPath(key)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	body, err := os.ReadFile(objectPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[string]string{}, nil
+			return map[string]string{}, "", nil
 		}
-		return nil, fmt.Errorf("failed to read created ids %q: %w", key, err)
+		return nil, "", fmt.Errorf("failed to read created ids %q: %w", key, err)
 	}
 	ids := make(map[string]string)
 	if err := json.Unmarshal(body, &ids); err != nil {
-		return nil, fmt.Errorf("failed to parse created ids %q: %w", key, err)
+		return nil, "", fmt.Errorf("failed to parse created ids %q: %w", key, err)
 	}
-	return ids, nil
+	return ids, fileStateRevision(body), nil
 }
 
-// SaveCreatedIDs implements SessionStateStore.
-func (s *FileStorage) SaveCreatedIDs(_ context.Context, sessionID string, ids map[string]string) error {
+// SaveCreatedIDs implements SessionStateStore. The revision check and atomic
+// replace are serialised within the process; across processes the content hash
+// still detects a stale writer in the common case. See file_state.go for the
+// identical cross-process caveat on JMAP state.
+func (s *FileStorage) SaveCreatedIDs(_ context.Context, sessionID string, ids map[string]string, revision string) (string, error) {
 	key, err := sessionCreatedIDsKey(sessionID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	body, err := json.Marshal(ids)
 	if err != nil {
-		return fmt.Errorf("marshal created ids: %w", err)
+		return "", fmt.Errorf("marshal created ids: %w", err)
 	}
 	objectPath, err := s.objectPath(key)
 	if err != nil {
-		return err
+		return "", err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := fsutil.WriteFileAtomically(objectPath, body, 0600); err != nil {
-		return fmt.Errorf("failed to store created ids %q: %w", key, err)
+	current, err := os.ReadFile(objectPath)
+	switch {
+	case err == nil && fileStateRevision(current) != revision:
+		return "", ErrSessionStateConflict
+	case err != nil && !os.IsNotExist(err):
+		return "", fmt.Errorf("failed to read created ids %q: %w", key, err)
+	case os.IsNotExist(err) && revision != "":
+		return "", ErrSessionStateConflict
 	}
-	return nil
+	if err := fsutil.WriteFileAtomically(objectPath, body, 0600); err != nil {
+		return "", fmt.Errorf("failed to store created ids %q: %w", key, err)
+	}
+	return fileStateRevision(body), nil
 }

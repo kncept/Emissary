@@ -13,6 +13,11 @@ import (
 // backing store.
 var ErrNotFound = errors.New("not found")
 
+// ErrSessionStateConflict reports that a per-session state record (the JMAP
+// creation-id map) changed between a load and the matching save. Callers must
+// reload, re-merge and retry instead of overwriting the newer version.
+var ErrSessionStateConflict = errors.New("session state changed concurrently")
+
 // ErrMailboxExists is returned when creating a mailbox whose id already exists.
 var ErrMailboxExists = errors.New("mailbox already exists")
 
@@ -102,10 +107,13 @@ type DraftStorage interface {
 }
 
 // SessionStateStore persists small per-session JSON state, such as the JMAP
-// creation-id map, in the same durable scratch area as drafts.
+// creation-id map, in the same durable scratch area as drafts. The revision is
+// an opaque optimistic-concurrency token returned by Load; Save must reject a
+// stale revision with ErrSessionStateConflict. An empty revision means the
+// record must not exist yet.
 type SessionStateStore interface {
-	LoadCreatedIDs(ctx context.Context, sessionID string) (map[string]string, error)
-	SaveCreatedIDs(ctx context.Context, sessionID string, ids map[string]string) error
+	LoadCreatedIDs(ctx context.Context, sessionID string) (ids map[string]string, revision string, err error)
+	SaveCreatedIDs(ctx context.Context, sessionID string, ids map[string]string, revision string) (newRevision string, err error)
 }
 
 // Storage is the mail source. New providers can be added by implementing

@@ -82,7 +82,7 @@ func (h *Handler) PushSubscriptionSet(ctx context.Context, _ string, args json.R
 			notCreated[createID] = setErrorOf("invalidProperties", err.Error())
 			continue
 		}
-		if err := h.allowCreate(credentialID, len(subs)); err != nil {
+		if err := h.allowCreate(ctx, credentialID, len(subs)); err != nil {
 			notCreated[createID] = setErrorOf("rateLimit", err.Error())
 			continue
 		}
@@ -364,29 +364,51 @@ func isPublicPushIP(ip net.IP) bool {
 		!ip.IsUnspecified()
 }
 
+// pushRateKey is a synthetic JMAP-state key holding the recent creation
+// timestamps for one credential. Sharing it through durable storage means the
+// RFC 8620 section 8.6 rate limit applies across Lambda instances, not just
+// within one process.
+func pushRateKey(credentialID string) string { return "push:ratelimit:" + credentialID }
+
 // allowCreate enforces the per-credential subscription count and creation
 // rate limits. Callers mark a create as failed with a rateLimit SetError when
-// this returns an error.
-func (h *Handler) allowCreate(credentialID string, activeCount int) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	now := time.Now()
-	cutoff := now.Add(-pushCreateRateWindow)
-	recent := h.createTimes[credentialID]
-	kept := recent[:0]
-	for _, stamp := range recent {
-		if stamp.After(cutoff) {
-			kept = append(kept, stamp)
-		}
-	}
+// this returns an error. The count comes from the durable subscription store;
+// the sliding window is updated in the same revision-aware state family used
+// by the change tracker and created ids.
+func (h *Handler) allowCreate(ctx context.Context, credentialID string, activeCount int) error {
 	if activeCount >= maxPushSubscriptionsPerCredential {
 		return fmt.Errorf("push subscription limit reached")
 	}
-	if len(kept) >= maxPushCreatesPerMinute {
+	now := time.Now()
+	cutoff := now.Add(-pushCreateRateWindow).UnixNano()
+	limited := false
+	err := base.UpdateState(ctx, h.deps.Storage, pushRateKey(credentialID), func(data []byte) ([]byte, bool, error) {
+		var stamps []int64
+		if len(data) != 0 {
+			if err := json.Unmarshal(data, &stamps); err != nil {
+				return nil, false, err
+			}
+		}
+		kept := stamps[:0]
+		for _, stamp := range stamps {
+			if stamp > cutoff {
+				kept = append(kept, stamp)
+			}
+		}
+		if len(kept) >= maxPushCreatesPerMinute {
+			limited = true
+			return nil, false, nil
+		}
+		kept = append(kept, now.UnixNano())
+		next, err := json.Marshal(kept)
+		return next, true, err
+	})
+	if err != nil {
+		return fmt.Errorf("record push creation: %w", err)
+	}
+	if limited {
 		return fmt.Errorf("push subscription creation rate limit reached")
 	}
-	h.createTimes[credentialID] = append(kept, now)
 	return nil
 }
 

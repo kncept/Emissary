@@ -237,6 +237,12 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          description: Request exceeded maxConcurrentRequests (RFC 7807 problem details)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
   /upload/{accountId}:
     post:
       tags:
@@ -277,6 +283,12 @@ paths:
           description: Authentication required
           content:
             application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          description: Upload exceeded maxConcurrentUpload (RFC 7807 problem details)
+          content:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
   /download/{accountId}/{blobId}/{name}:

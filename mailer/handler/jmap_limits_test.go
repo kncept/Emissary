@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,13 +18,18 @@ import (
 // so the size limit can be exercised without allocating megabytes.
 func newJMAPLimitHandler(t *testing.T, maxFileSize int64) http.Handler {
 	t.Helper()
+	return newJMAPLimitHandlerWithStorage(t, maxFileSize, storage.NewMemoryStorage())
+}
+
+func newJMAPLimitHandlerWithStorage(t *testing.T, maxFileSize int64, store storage.Storage) http.Handler {
+	t.Helper()
 	h, err := newTestHandler(t, handlerTestConfig{
 		AuthUser:     "admin",
 		AuthPass:     "secret",
 		JWTSecret:    "secret",
 		JWTSecretTTL: time.Hour,
 		MetadataType: "memory",
-		Storage:      storage.NewMemoryStorage(),
+		Storage:      store,
 		UserDomain:   "example.com",
 		Sender:       sender.NewInMemoryRecording(),
 		UserManager: &testUserManager{
@@ -83,6 +89,40 @@ func fetchJMAPSession(t *testing.T, h http.Handler, token string) jmapTestSessio
 		t.Fatalf("decode session: %v (body %s)", err, w.Body.String())
 	}
 	return session
+}
+
+func TestJMAPSessionIsNotCacheable(t *testing.T) {
+	h := newJMAPLimitHandler(t, 4096)
+	token := jmapToken(t, h)
+	w := request(t, h, http.MethodGet, "/.well-known/jmap", "", token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("session status = %d, want 200", w.Code)
+	}
+	const want = "no-cache, no-store, must-revalidate"
+	if got := w.Header().Get("Cache-Control"); got != want {
+		t.Errorf("Session Cache-Control = %q, want %q", got, want)
+	}
+}
+
+func TestSafeRequestTargetRedactsToken(t *testing.T) {
+	const secret = "eyJhbGciOi-secret-value"
+	req := httptest.NewRequest(http.MethodGet,
+		"/eventsource?token="+secret+"&types=Email&closeafter=state", nil)
+	got := safeRequestTarget(req)
+	if strings.Contains(got, secret) {
+		t.Errorf("safeRequestTarget leaked the token: %q", got)
+	}
+	if !strings.HasPrefix(got, "/eventsource?") ||
+		!strings.Contains(got, "types=Email") ||
+		!strings.Contains(got, "closeafter=state") ||
+		!strings.Contains(got, "token=%5BREDACTED%5D") {
+		t.Errorf("safeRequestTarget = %q, want path with other params and redacted token", got)
+	}
+
+	plain := httptest.NewRequest(http.MethodGet, "/eventsource?types=Email", nil)
+	if got := safeRequestTarget(plain); got != "/eventsource" {
+		t.Errorf("safeRequestTarget without token = %q, want path only", got)
+	}
 }
 
 func TestJMAPSessionAdvertisesConfiguredLimits(t *testing.T) {
@@ -690,5 +730,117 @@ func TestJMAPGetPropertySelectionEndToEnd(t *testing.T) {
 	}
 	if args.Type != "invalidArguments" {
 		t.Errorf("error type = %q, want invalidArguments", args.Type)
+	}
+}
+
+// blockingStorage holds a request after its handler has acquired a concurrency
+// slot. Only the configured seam blocks; all other storage calls pass through.
+type blockingStorage struct {
+	storage.Storage
+	createdIDsEntered chan struct{}
+	uploadEntered     chan struct{}
+	release           chan struct{}
+}
+
+func (s *blockingStorage) block(entered chan struct{}) {
+	if entered == nil {
+		return
+	}
+	select {
+	case entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-s.release:
+	case <-time.After(5 * time.Second):
+	}
+}
+
+func (s *blockingStorage) LoadCreatedIDs(ctx context.Context, sessionID string) (map[string]string, string, error) {
+	s.block(s.createdIDsEntered)
+	return s.Storage.LoadCreatedIDs(ctx, sessionID)
+}
+
+func (s *blockingStorage) UploadBlob(ctx context.Context, accountID, uploaderID, contentType string, data []byte, now time.Time) (storage.Blob, error) {
+	s.block(s.uploadEntered)
+	return s.Storage.UploadBlob(ctx, accountID, uploaderID, contentType, data, now)
+}
+
+func waitForBlocked(t *testing.T, entered <-chan struct{}, count int) {
+	t.Helper()
+	for i := 0; i < count; i++ {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d of %d requests reached the blocking seam", i, count)
+		}
+	}
+}
+
+func TestJMAPMaxConcurrentRequestsLimit(t *testing.T) {
+	store := &blockingStorage{
+		Storage:           storage.NewMemoryStorage(),
+		createdIDsEntered: make(chan struct{}, jmapMaxConcurrentRequests),
+		release:           make(chan struct{}),
+	}
+	h := newJMAPLimitHandlerWithStorage(t, 4096, store)
+	token := jmapToken(t, h)
+	const body = `{"using":["urn:ietf:params:jmap:core"],"methodCalls":[["Core/echo",{},"c1"]]}`
+
+	results := make(chan *httptest.ResponseRecorder, jmapMaxConcurrentRequests)
+	for i := 0; i < jmapMaxConcurrentRequests; i++ {
+		go func() { results <- request(t, h, http.MethodPost, "/api/jmap/", body, token) }()
+	}
+	waitForBlocked(t, store.createdIDsEntered, jmapMaxConcurrentRequests)
+
+	// Every slot is held: the excess request must fail at the HTTP level with
+	// the exact advertised limit, not as a method-level error.
+	w := jmapRequestWithContentType(t, h, token, "application/json", body)
+	assertJMAPProblem(t, w, http.StatusTooManyRequests, "urn:ietf:params:jmap:error:limit", "maxConcurrentRequests")
+
+	close(store.release)
+	for i := 0; i < jmapMaxConcurrentRequests; i++ {
+		select {
+		case held := <-results:
+			if held.Code != http.StatusOK {
+				t.Errorf("held request status = %d, want 200 (body %s)", held.Code, held.Body.String())
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("held JMAP request did not finish after release")
+		}
+	}
+}
+
+func TestJMAPMaxConcurrentUploadLimit(t *testing.T) {
+	store := &blockingStorage{
+		Storage:       storage.NewMemoryStorage(),
+		uploadEntered: make(chan struct{}, jmapMaxConcurrentUpload),
+		release:       make(chan struct{}),
+	}
+	h := newJMAPLimitHandlerWithStorage(t, 4096, store)
+	token := jmapToken(t, h)
+
+	results := make(chan *httptest.ResponseRecorder, jmapMaxConcurrentUpload)
+	for i := 0; i < jmapMaxConcurrentUpload; i++ {
+		go func() {
+			results <- binaryRequest(t, h, http.MethodPost, "/upload/admin",
+				"payload", "application/octet-stream", token)
+		}()
+	}
+	waitForBlocked(t, store.uploadEntered, jmapMaxConcurrentUpload)
+
+	w := binaryRequest(t, h, http.MethodPost, "/upload/admin", "payload", "application/octet-stream", token)
+	assertJMAPProblem(t, w, http.StatusTooManyRequests, "urn:ietf:params:jmap:error:limit", "maxConcurrentUpload")
+
+	close(store.release)
+	for i := 0; i < jmapMaxConcurrentUpload; i++ {
+		select {
+		case held := <-results:
+			if held.Code != http.StatusOK {
+				t.Errorf("held upload status = %d, want 200 (body %s)", held.Code, held.Body.String())
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("held upload did not finish after release")
+		}
 	}
 }

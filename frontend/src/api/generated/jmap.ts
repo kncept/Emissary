@@ -233,10 +233,15 @@ export type apiRequestResponse413 = {
   status: 413
 }
 
+export type apiRequestResponse429 = {
+  data: ProblemDetails
+  status: 429
+}
+
 export type apiRequestResponseSuccess = (apiRequestResponse200) & {
   headers: Headers;
 };
-export type apiRequestResponseError = (apiRequestResponse400 | apiRequestResponse401 | apiRequestResponse413) & {
+export type apiRequestResponseError = (apiRequestResponse400 | apiRequestResponse401 | apiRequestResponse413 | apiRequestResponse429) & {
   headers: Headers;
 };
 
@@ -292,10 +297,15 @@ export type uploadBinaryResponse401 = {
   status: 401
 }
 
+export type uploadBinaryResponse429 = {
+  data: ProblemDetails
+  status: 429
+}
+
 export type uploadBinaryResponseSuccess = (uploadBinaryResponse200) & {
   headers: Headers;
 };
-export type uploadBinaryResponseError = (uploadBinaryResponse400 | uploadBinaryResponse401) & {
+export type uploadBinaryResponseError = (uploadBinaryResponse400 | uploadBinaryResponse401 | uploadBinaryResponse429) & {
   headers: Headers;
 };
 

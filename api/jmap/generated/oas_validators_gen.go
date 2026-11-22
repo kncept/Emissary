@@ -115,6 +115,14 @@ func (s *ApiRequestRequestEntityTooLarge) Validate() error {
 	return nil
 }
 
+func (s *ApiRequestTooManyRequests) Validate() error {
+	alias := (*ProblemDetails)(s)
+	if err := alias.Validate(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *ApiRequestUnauthorized) Validate() error {
 	alias := (*ProblemDetails)(s)
 	if err := alias.Validate(); err != nil {
@@ -821,6 +829,14 @@ func (s UnsignedInt) Validate() error {
 }
 
 func (s *UploadBinaryBadRequest) Validate() error {
+	alias := (*ProblemDetails)(s)
+	if err := alias.Validate(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *UploadBinaryTooManyRequests) Validate() error {
 	alias := (*ProblemDetails)(s)
 	if err := alias.Validate(); err != nil {
 		return err

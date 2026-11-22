@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -11,6 +12,11 @@ import (
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/components/storage"
 )
+
+// createdIDSaveRetries bounds optimistic-concurrency retries when persisting
+// the per-session creation-id map. A conflict means another Lambda invocation
+// changed the same session, so the map is reloaded and merged before retrying.
+const createdIDSaveRetries = 8
 
 // UnmarshalJSON implements custom JSON unmarshaling for Invocation.
 // JMAP uses a 3-element array format: [methodName, arguments, clientId]
@@ -260,12 +266,14 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 		sessionID = claims.SID
 	}
 	createdIDs := make(map[string]string, len(req.CreatedIDs))
+	revision := ""
 	if sessionID != "" && d.sessionState != nil {
-		stored, err := d.sessionState.LoadCreatedIDs(ctx, sessionID)
+		stored, storedRevision, err := d.sessionState.LoadCreatedIDs(ctx, sessionID)
 		if err != nil {
 			slog.Error("JMAP: failed to load session created ids", "err", err)
 			return nil, fmt.Errorf("load created ids: %w", err)
 		}
+		revision = storedRevision
 		for creationID, id := range stored {
 			createdIDs[creationID] = id
 		}
@@ -337,13 +345,9 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 		appendMethodResponses(&responses, responsesByID, createdIDs, resps)
 	}
 
-	// Persist only when the map actually changed, so read-only JMAP requests
-	// do not write to the session store.
-	if sessionID != "" && d.sessionState != nil && !sameStringMap(createdIDs, initial) {
-		if err := d.sessionState.SaveCreatedIDs(ctx, sessionID, createdIDs); err != nil {
-			slog.Error("JMAP: failed to save session created ids", "err", err)
-			return nil, fmt.Errorf("save created ids: %w", err)
-		}
+	if err := d.persistCreatedIDs(ctx, sessionID, createdIDs, initial, revision); err != nil {
+		slog.Error("JMAP: failed to save session created ids", "err", err)
+		return nil, fmt.Errorf("save created ids: %w", err)
 	}
 
 	response := &Response{
@@ -358,6 +362,47 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 		response.includeCreatedIDs = true
 	}
 	return response, nil
+}
+
+// persistCreatedIDs writes the creation-id map changed by this batch using the
+// revision read at its start. On a conflict another invocation has written a
+// newer map, so it is reloaded and merged before retrying. Ids produced by this
+// batch win for keys they define; all other ids from the newer map are kept.
+// Read-only batches do not write at all.
+func (d *Dispatcher) persistCreatedIDs(ctx context.Context, sessionID string, ids, initial map[string]string, revision string) error {
+	if sessionID == "" || d.sessionState == nil || sameStringMap(ids, initial) {
+		return nil
+	}
+	var lastErr error
+	for attempt := 0; attempt < createdIDSaveRetries; attempt++ {
+		if attempt > 0 {
+			stored, currentRevision, err := d.sessionState.LoadCreatedIDs(ctx, sessionID)
+			if err != nil {
+				return fmt.Errorf("reload created ids: %w", err)
+			}
+			revision = currentRevision
+			merged := make(map[string]string, len(stored)+len(ids))
+			for creationID, id := range stored {
+				merged[creationID] = id
+			}
+			for creationID, id := range ids {
+				merged[creationID] = id
+			}
+			if sameStringMap(merged, stored) {
+				return nil // The concurrent invocation already stored our ids.
+			}
+			ids = merged
+		}
+		_, err := d.sessionState.SaveCreatedIDs(ctx, sessionID, ids, revision)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, storage.ErrSessionStateConflict) {
+			return err
+		}
+		lastErr = err
+	}
+	return fmt.Errorf("persist created ids for session %q after %d retries: %w", sessionID, createdIDSaveRetries, lastErr)
 }
 
 func sameStringMap(a, b map[string]string) bool {
@@ -477,7 +522,7 @@ func (d *Dispatcher) dispatchCall(ctx context.Context, accountID string, call In
 		result, err = d.handler.BlobCopy(ctx, accountID, argsJSON)
 
 	default:
-		err = fmt.Errorf("unknown method: %s", methodName)
+		err = fmt.Errorf("unknownMethod: %s", methodName)
 	}
 
 	if err != nil {
@@ -505,21 +550,32 @@ func (d *Dispatcher) errorResponse(call Invocation, err error) Invocation {
 	return d.errorResponseFromError(call.Name, call.ClientID, err)
 }
 
+// jmapErrorTypes is the set of method-level error types the dispatcher emits.
+// RFC 8620 section 3.6.2 requires clients to treat unknown error types as
+// serverFail; we use the same fallback here so an untyped internal error is
+// never mislabelled as unknownMethod.
 var jmapErrorTypes = map[string]bool{
 	"accountNotFound":             true,
 	"accountNotSupportedByMethod": true,
 	"accountReadOnly":             true,
+	"anchorNotFound":              true,
 	"cannotCalculateChanges":      true,
 	"forbidden":                   true,
 	"fromAccountNotFound":         true,
 	"invalidArguments":            true,
+	"invalidProperties":           true,
 	"invalidResultReference":      true,
+	"notCreated":                  true,
 	"notFound":                    true,
+	"rateLimit":                   true,
 	"requestTooLarge":             true,
 	"serverFail":                  true,
+	"serverPartialFail":           true,
 	"serverUnavailable":           true,
 	"stateMismatch":               true,
 	"tooLarge":                    true,
+	"unsupportedFilter":           true,
+	"unsupportedSort":             true,
 	"unknownMethod":               true,
 }
 
@@ -528,7 +584,7 @@ func jmapErrorType(err error) string {
 	if found && jmapErrorTypes[prefix] {
 		return prefix
 	}
-	return "unknownMethod"
+	return "serverFail"
 }
 
 func (d *Dispatcher) errorResponseFromError(methodName, clientID string, err error) Invocation {
