@@ -4,23 +4,45 @@ All endpoints are served by `cmd/frontend` on the same origin and port
 as the webmail client. The API lives under the `/api` prefix; unknown
 `/api` paths return `404`, and every other path serves the SPA.
 
-## Generated interface stubs
+## JMAP conformance claim
 
-The wire contract is defined by the OpenAPI specifications and is the
-single source of truth. Both the backend and the frontend consume
-generated interface stubs, ensuring zero drift between server
-implementation and client consumption.
+> Emissary implements **RFC 8620 (JMAP Core) and RFC 8621 (JMAP Mail)** for the capabilities
+> `urn:ietf:params:jmap:core`, `urn:ietf:params:jmap:mail`, `urn:ietf:params:jmap:submission`, and
+> `urn:ietf:params:jmap:vacationresponse`, within the advertised per-account limits, on AWS Lambda.
+> Push supports both webhook subscriptions and EventSource in `closeafter=state` and `closeafter=no`
+> modes (the latter through a dedicated streaming Function URL).
 
-- **Backend (Go)**: `ogen` generates server interfaces, request/response
-  types, decoders, encoders, validators, and router middleware under
-  `api/*/generated/`. The handler implements the generated server
-  interfaces; the generated client interfaces are available for
-  service-to-service calls.
-- **Frontend (TypeScript)**: An OpenAPI-to-TypeScript generator
-  produces typed interfaces and a fetch client under
-  `frontend/src/api/generated/`. The frontend code imports this client
-  instead of hand-written fetch wrappers, so every request/response
-  shape is guaranteed to match the spec.
+For this workstream, "100% compliant" means every applicable MUST in RFC 8620 §§1–8 and RFC 8621
+§§1–10 is implemented and tested; every SHOULD is implemented or documented as a permitted profile
+choice; every method, argument, property and SetError of an advertised capability is reachable;
+`api/jmap.yaml`, Session capabilities, runtime capabilities and generated schemas are proven
+identical by tests; the external conformance suite's required tests pass; and the end-to-end client
+use cases pass.
+
+## Generated API artifacts
+
+The OpenAPI specifications are the single source of truth for HTTP paths, media types and schemas.
+`./run.sh generate:api` regenerates the checked-in Go and TypeScript artifacts, and
+`./run.sh check:generated` fails when those artifacts are stale.
+
+- **Backend (Go)**: `ogen` generates types, decoders, validators and router middleware under
+  `api/*/generated/`. The handler implements the generated server interfaces for the auth, users
+  and support APIs. JMAP method dispatch is implemented in `mailer/jmap/`: its wire shapes are
+  generated from `api/jmap.yaml`, but there is no generated JMAP server stub to implement.
+- **Frontend (TypeScript)**: `orval` generates typed fetch helpers under
+  `frontend/src/api/generated/`. Login and refresh use the generated auth helpers. The JMAP client
+  uses the generated schema types with a small hand-written wrapper because JMAP operations are
+  method calls batched at one endpoint rather than one endpoint per operation.
+- **Drift checks**: `api/spec_test.go` checks spec path ownership and spec↔runtime capability/method
+  agreement. Generated code alone does not prove that a method behaves correctly.
+
+## Deployment constraints
+
+The SPA and REST API are served from the same origin and port; CORS is not enabled. Session URLs
+are absolute HTTPS URLs built from `JMAP_PUBLIC_URL`. Long-lived EventSource streams use the
+separate absolute `eventSourceUrl` advertised in the Session object
+(`JMAP_EVENTSOURCE_URL`, normally the dedicated streaming Function URL); clients must use the
+advertised URL rather than constructing their own.
 
 ## Specs and path ownership
 
@@ -100,6 +122,8 @@ not generated from `users.yaml`: it is served directly by the configured
 | `PUT` | `/api/support/receiver/rules` | Bearer‡ | Add or replace receiver rules entries. |
 | `DELETE` | `/api/support/receiver/rules/{identity}` | Bearer‡ | Remove a configured receiving identity (never the `_` fallback). |
 | `GET` | `/.well-known/jmap` | Bearer | Get the JMAP Session object (capabilities, accounts). |
+| `GET` | `/eventsource` | Bearer or `token` query parameter | REST-compatible EventSource stream; `closeafter=state` only. |
+| `GET` | `/eventsource/stream` | Bearer or `token` query parameter | Dedicated streaming endpoint; `closeafter=no` stays open. |
 | `POST` | `/api/jmap/` | Bearer | JMAP batch API endpoint for all mail operations. |
 | `POST` | `/upload/{accountId}` | Bearer | Upload binary data (attachments). |
 | `GET` | `/download/{accountId}/{blobId}/{name}` | Bearer | Download binary data. |
@@ -123,18 +147,22 @@ backend cannot store a password verifier.
 
 All email operations are performed via the JMAP batch endpoint (`POST /api/jmap/`).
 Mail is modeled with JMAP's **account → mailbox → email** hierarchy: the
-`accountId` selects the user's account and `filter.inMailbox` selects a
-JMAP mailbox such as `inbox`, `sent`, `drafts`, `trash`, `archive` or
-`junk`. The storage layer lists only that account's object-key prefix
-(`users/<accountId>/<mailboxId>/`), so other users' mail is never read.
+public `accountId` is an opaque RFC 8620 `Id`, and `filter.inMailbox` selects a
+JMAP mailbox such as `inbox`, `sent`, `drafts`, `trash`, `archive` or `junk`.
+The dispatcher resolves the public id to the internal user id used by storage;
+listing is scoped to that internal account's object-key prefix
+(`users/<internal-user-id>/<mailboxId>/`), so other users' mail is never read.
 
 ### Account selection and masquerade
 
-The default `accountId` is the authenticated JWT `sub`. A call without
-User Manager permission that supplies a different `accountId` is rejected.
-A user with `EmissaryUserManagement` may supply any `accountId` to read or act
-in that account's mailbox (masquerade); this applies to `Email/query`,
-`Email/get`, `Email/set` and `EmailSubmission/set`.
+The default `accountId` is `acct_` + base64url(SHA-256(lowercased JWT `sub`));
+the JWT `sub` itself remains the email address and is never advertised as an
+account id. A caller without User Manager permission may not select another
+account. A user with `EmissaryUserManagement` may supply any known account's
+opaque id to read or act in that account's mailbox (masquerade); this applies
+to `Email/query`, `Email/get`, `Email/set` and `EmailSubmission/set`. For
+compatibility with older clients, a caller may also send their own email
+address as an alias, but it is never returned by the server.
 
 ### List Emails
 - `Email/query` with filter `inMailbox: "inbox"`, sort by `receivedAt` descending
@@ -227,7 +255,7 @@ resolve messages in their own account, while `EmissaryUserManagement` callers
 may masquerade. Missing emails or blobs return `404`, unauthorized accounts
 return `403`.
 
-The web UI uses this endpoint for both the "View MIME" modal and the
+The web UI uses these two steps for both the "View MIME" modal and the
 "Download" button.
 
 ### Send Email
@@ -237,19 +265,22 @@ The web UI uses this endpoint for both the "View MIME" modal and the
 - `EmailSubmission/set` create to submit the email for delivery. The submitted
   `emailId` may be the session-relative draft id returned by `Email/set`.
 
-**Locked From address.** The sender is always the authenticated user: a
-create or submission acts on the caller's own account (`JWT sub`) and sends
-as that address. A caller with `EmissaryUserManagement` may act on a
-different `accountId` (masquerade) and then sends as that account's address.
-The From address supplied by the client — the draft's `from` header in
-`Email/set` or the envelope `mailFrom` in `EmailSubmission/set` — is ignored;
-there is no way to send as any other address. An account address that is not
-a valid email address (no `@`) is rejected with `invalidProperties`.
+**Locked From address.** The RFC 5322 `From` header comes from the selected
+Identity (the submission's `identityId`), not from the client-supplied draft
+header. By default that is the caller's own account; a caller with
+`EmissaryUserManagement` acting on another account (masquerade) is limited to
+an Identity owned by that account. An Identity address that is not a valid
+email address (no `@`) is rejected with `invalidProperties`.
+
+**Envelope MAIL FROM.** RFC 8621 §7 requires an `envelope.mailFrom`; senders
+must supply it. An empty address (`{"email": ""}`) is accepted as the null
+reverse path. A non-empty `mailFrom` must match the selected Identity's email
+address; a mismatch is rejected with the `forbiddenMailFrom` SetError.
 
 **Recipients.** `to`, `cc` and `bcc` each accept any number of addresses.
-If an envelope `rcptTo` is supplied, it must cover every To, Cc and Bcc
-address (otherwise a `forbidden` submission error); Bcc addresses appear only
-in the delivery envelope, never in the message headers.
+`envelope.rcptTo` is required and must cover every To, Cc and Bcc address
+(otherwise a `forbidden` submission error); Bcc addresses appear only in the
+delivery envelope, never in the message headers.
 
 **Thread headers.** The draft's `inReplyTo` and `references` are carried into
 the delivered message as `In-Reply-To` and `References` headers. The message
@@ -461,7 +492,7 @@ and absolute API endpoints. Account identifiers are opaque RFC 8620 `Id`s
   "apiUrl": "https://jmap.example.com/api/jmap/",
   "downloadUrl": "https://jmap.example.com/download/{accountId}/{blobId}/{name}?type={type}",
   "uploadUrl": "https://jmap.example.com/upload/{accountId}",
-  "eventSourceUrl": "https://jmap.example.com/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
+  "eventSourceUrl": "https://stream.example.com/eventsource/stream?types={types}&closeafter={closeafter}&ping={ping}",
   "state": "s-8Kf3pQ1vZx7LmT2nR9wYb4"
 }
 ```
@@ -476,9 +507,11 @@ and requests are accepted, mailboxes are persisted but only top-level
 mailboxes are supported (`maxMailboxDepth: 1`), each email is in a single
 mailbox (`maxMailboxesPerEmail: 1`), only `receivedAt` sorting is supported,
 delayed send is not supported, and `i;ascii-casemap` is the advertised RFC
-4790 collation algorithm. The `eventSourceUrl` may use a separate streaming
-origin via `JMAP_EVENTSOURCE_URL`; all other templates use `JMAP_PUBLIC_URL`.
-The VacationResponse capability is advertised and its singleton settings are
+4790 collation algorithm. `eventSourceUrl` points at the dedicated streaming
+`/eventsource/stream` operation (`JMAP_EVENTSOURCE_URL`); all other templates
+use `JMAP_PUBLIC_URL`. Basic auth is not advertised or accepted: all endpoints
+use bearer tokens (the browser EventSource API may pass the token in a query
+parameter). The VacationResponse capability is advertised and its singleton settings are
 persisted in the account's `user.json` record; automatic replies follow RFC
 3834 loop-prevention rules.
 
@@ -518,13 +551,13 @@ Example request to list emails:
   "using": ["urn:ietf:params:jmap:mail"],
   "methodCalls": [
     ["Email/query", {
-      "accountId": "user@example.com",
+      "accountId": "acct_tMmiiTI7IaAcPpQPFQ65uMVCWH8av9jw4cwf_F5HVRQ",
       "filter": { "inMailbox": "inbox" },
       "sort": [{ "property": "receivedAt", "isAscending": false }],
       "collapseThreads": false
     }, "query1"],
     ["Email/get", {
-      "accountId": "user@example.com",
+      "accountId": "acct_tMmiiTI7IaAcPpQPFQ65uMVCWH8av9jw4cwf_F5HVRQ",
       "#ids": { "resultOf": "query1", "name": "Email/query", "path": "/ids/*" },
       "properties": ["id", "from", "to", "subject", "preview", "receivedAt", "keywords", "mailboxIds"]
     }, "get1"]
@@ -538,7 +571,7 @@ Example response:
 {
   "methodResponses": [
     ["Email/query", {
-      "accountId": "user@example.com",
+      "accountId": "acct_tMmiiTI7IaAcPpQPFQ65uMVCWH8av9jw4cwf_F5HVRQ",
       "queryState": "state123",
       "ids": [
         "MjAyNDAzMDhUMTQzMDAwXzAxMDAwMTkyYTNiNGM1ZDYuZW1s",
@@ -547,7 +580,7 @@ Example response:
       "total": 2
     }, "query1"],
     ["Email/get", {
-      "accountId": "user@example.com",
+      "accountId": "acct_tMmiiTI7IaAcPpQPFQ65uMVCWH8av9jw4cwf_F5HVRQ",
       "state": "state123",
       "list": [...],
       "notFound": []
@@ -717,17 +750,25 @@ Clients detect changes by polling:
 ### EventSource
 
 The Session object advertises an `eventSourceUrl` URI template with the
-variables `types`, `closeafter` and `ping`. `GET /eventsource` accepts the same
+variables `types`, `closeafter` and `ping`. That template points at
+`GET /eventsource/stream`, served by a dedicated response-streaming Lambda
+Function URL with a 15-minute timeout. Both stream endpoints accept the same
 bearer token as the JMAP API or, for the browser `EventSource` API (which
 cannot set request headers), the token in a `token` query parameter. Query
-tokens are secrets and should not be logged or shared.
+tokens are secrets and should not be logged or shared. WebSocket push is not
+implemented; webhooks and EventSource are the chosen push options.
 
+- `GET /eventsource` is the REST-compatible endpoint behind API Gateway. It
+  accepts/defaults `closeafter=state` and rejects `closeafter=no` with `400`:
+  the REST integration has a 29-second hard timeout. Use the Session's
+  `eventSourceUrl` for long-lived streams; the REST deployment returns `404`
+  for `/eventsource/stream`, while local and test servers expose both paths.
+- `GET /eventsource/stream` accepts `closeafter=state` or `closeafter=no`.
+  The default is `no`; a stream with pings stays open beyond the REST Lambda's
+  30-second timeout and is terminated by the dedicated function's 15-minute
+  limit or by the client.
 - `types` is a comma-separated list of JMAP type names or `*` for every type
   Emissary tracks. Only the listed types are included in each event.
-- `closeafter=state` closes the response after the first `state` event;
-  `closeafter=no` keeps the stream open. The default is `no`. Buffered or
-  buffering proxies and API Gateway deployments should use `state` so each
-  event is delivered in its own response.
 - `ping` is a positive number of seconds; `0` disables pings. Requests below
   10 seconds are raised to 10 and requests above 300 seconds are lowered to
   300. The default is 30 seconds.
@@ -739,7 +780,7 @@ event. A `state` event's data is an RFC 8620 `StateChange` object:
 {
   "@type": "StateChange",
   "changed": {
-    "alice@example.com": {
+    "acct_tMmiiTI7IaAcPpQPFQ65uMVCWH8av9jw4cwf_F5HVRQ": {
       "Email": "email-4",
       "EmailDelivery": "email-delivery-2"
     }

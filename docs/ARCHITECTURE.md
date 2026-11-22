@@ -80,9 +80,9 @@ fallback.
 | `config` | Loads and validates environment configuration. |
 | `envutil` | Cached environment lookups; resolves `arn:aws:` values via Secrets Manager. |
 | `awsutil` | Lambda detection and Secrets Manager access. |
-| `auth` | JWT issue/validate (`Claims`: `sub`, `sid`, `systemManager`, `EmissaryUserManagement`, `iat`, `exp`, optional `aud`/`iss`). |
+| `auth` | JWT issue/validate (`Claims`: `sub`, `sid`, opaque `accountId`, `systemManager`, `EmissaryUserManagement`, `iat`, `exp`, optional `aud`/`iss`). |
 | `components/usermanager` | Pluggable login backends; every backend also knows the built-in admin. |
-| `components/storage` | Mail source: `ListEmails` (scoped by JMAP `accountId`/`mailboxId`), plus `GetEmail`, `AddEmail`, `DeleteEmail`. `RootObject`/`ListRoot` are the one deliberately admin-facing capability, used only by the system-manager support API. |
+| `components/storage` | Mail source: `ListEmails` (scoped by resolved internal user id and `mailboxId`), plus `GetEmail`, `AddEmail`, `DeleteEmail`. `RootObject`/`ListRoot` are the one deliberately admin-facing capability, used only by the system-manager support API. |
 | `components/sender` | Write side of mail: `Send`. |
 | `components/metadata` | Per-message JMAP keywords (`$seen`, `$flagged`, `$draft`, and the other supported system keywords) plus the server-owned `receivedAt` timestamp, keyed by email id and discarded when a message is deleted. Every backend normalizes read results from lookup keys and returns `List` sorted by mail id. |
 | `components/session` | Refresh-token store for JWT sessions (`memory` or `ddb`). |
@@ -142,11 +142,11 @@ for the per-backend rules. Local/no-op implementations (`memory`, `log`,
      is not client-assignable or editable.
    - The staging object is deleted after successful delivery to all recipients.
      Staging read/delete still use S3 directly and will be decoupled separately.
-5. When a JMAP call lists or opens mail, `storage.S3Storage` paginates
-   `ListObjectsV2` over the prefix for the call's `accountId`:
-   `users/<accountId>/<mailboxId>/`. The account comes from the JWT
-   `sub`, or from the target account supplied by a user with
-   `EmissaryUserManagement` (masquerade). An `inMailbox` filter narrows the read to one JMAP
+5. When a JMAP call lists or opens mail, the dispatcher first resolves the
+   public opaque JMAP `accountId` to the internal user id (the JWT `sub`, or
+   a target user selected by a caller with `EmissaryUserManagement`).
+   `storage.S3Storage` then paginates `ListObjectsV2` over
+   `users/<internal-user-id>/<mailboxId>/`. An `inMailbox` filter narrows the read to one JMAP
    mailbox; without it every mailbox in the account is searched.
    `GetObject`s each message, and parses it with `email.Parse`.
    Unparseable objects are logged and skipped, not fatal.
@@ -161,13 +161,14 @@ for the per-backend rules. Local/no-op implementations (`memory`, `log`,
    message `Date` header. Listing is always scoped to one account; there is no
    cross-account email listing API.
 
-The email ID used throughout the JMAP API is the stable delivered token
-(e.g., `20240308T143000_9f1c...eml`) returned by `AddEmail`, including the
-timestamp and `.eml` suffix. `S3Storage` stores it as
-`users/<accountId>/<mailboxId>/<token>` (under the configured bucket prefix
-when present); the account and mailbox come from the JMAP context, so a move
-does not change the id. Older deliveries that used the SES message id as the
-suffix remain valid ids.
+The email ID used throughout the JMAP API is a URL-safe token derived from the
+stable delivered token (e.g., `20240308T143000_9f1c...eml`) returned by
+`AddEmail`. The underlying object is stored as
+`users/<internal-user-id>/<mailboxId>/<token>` (under the configured bucket
+prefix when present); the account and mailbox come from the JMAP context, so
+a move does not change the id. Older deliveries that used the SES message id
+as the suffix remain valid ids, and legacy full-object-key inputs are still
+accepted.
 
 Durable per-session scratch state lives separately at `_storage/<sid>/`. JMAP
 drafts are JSON objects under `_storage/<sid>/drafts/`, and the creation-id map
@@ -293,9 +294,10 @@ recipient by the configured rules for its domain.
   `Authorization: Bearer <token>`.
 - `requireAuth` middleware validates the signature, expiry, audience
   and issuer, then stashes the claims in the request context.
-- The JMAP dispatcher uses the JWT `sub` as the default `accountId` and
-  rejects a different one for users without `EmissaryUserManagement`. A
-  user with that claim may supply any `accountId` to masquerade.
+- The JMAP dispatcher uses the opaque `accountId` derived from the JWT `sub`
+  as the default and rejects a different one for users without
+  `EmissaryUserManagement`. A user with that claim may supply any known
+  opaque `accountId` to masquerade.
 - `Email/query`, `Email/get`, `Email/set` and `EmailSubmission/set` are
   scoped to that account. Storage uses a mailbox-key prefix rather than a
   header-based `canAccessEmail` filter; messages outside the account are
@@ -336,34 +338,33 @@ recipient by the configured rules for its domain.
 - React 19 + Vite + TypeScript SPA (React Router): `/login`,
   `/` (inbox of the current JMAP account), `/email/:id`, `/compose`,
   `/compose/:id` (reply).
-- The API client (`frontend/src/api.ts`) keeps the JWT in
-  `localStorage` under `emissary_token`, attaches the Bearer header,
-  and redirects to `/login` on a `401`. JMAP calls use the masquerade
-  target from `localStorage['masquerade_as']` as their `accountId` when
-  a user with `EmissaryUserManagement` has selected one.
+- The API client keeps the JWT in `localStorage` under `emissary_token`,
+  attaches the Bearer header, and redirects to `/login` on a `401`. JMAP
+  calls use the Session's account id by default; when a user with
+  `EmissaryUserManagement` selects a masquerade target, the client converts
+  the stored email address to the opaque `acct_` id before using it as
+  `accountId`.
 - Vite builds into `mailer/gui/frontend/dist`, which `mailer/gui`
   embeds; the Go binary serves the SPA from the same origin and port
-  as the API, so there are no CORS concerns.
-- Delivered email ids are full object keys and contain `/`, so the SPA
-  URL-encodes them when building `/email/:id` links.
+  as the API. CORS is not enabled; long-lived JMAP streams use the
+  dedicated `eventSourceUrl` advertised by the Session.
 
-## Generated interface stubs
+## Generated API artifacts
 
-Both the backend and the frontend use interface stubs generated from
-the OpenAPI specifications (`api/auth.yaml`, `api/users.yaml`,
-`api/jmap.yaml`). This ensures the wire contract is the single source
-of truth and eliminates drift between server and client types.
+The OpenAPI specifications are the single source of truth for HTTP paths and
+schemas. `./run.sh generate:api` regenerates the checked-in Go and TypeScript
+artifacts; `./run.sh check:generated` fails when they are stale.
 
-- **Backend (Go)**: `run.sh generate_api` invokes `go tool ogen` to
-  produce Go types, request/response decoders, validators, router
-  middleware, and server/client interface stubs under `api/*/generated/`.
-  The handler implements the generated server interfaces.
-- **Frontend (TypeScript)**: The OpenAPI specs are used to generate
-  TypeScript types and a typed API client (via `openapi-typescript` /
-  `openapi-fetch` or equivalent). The generated client replaces
-  hand-written fetch wrappers and the manual `types.ts` definitions,
-  so the frontend consumes the exact same request/response shapes the
-  backend produces.
+- **Backend (Go)**: `ogen` produces Go types, decoders, validators and router
+  middleware under `api/*/generated/`. The handler implements the generated
+  server interfaces for auth, users and support. JMAP is dispatched by
+  `mailer/jmap/` from generated wire types; there is no generated JMAP server
+  stub.
+- **Frontend (TypeScript)**: `orval` produces typed fetch helpers under
+  `frontend/src/api/generated/`. Login/refresh use the generated auth helpers;
+  the JMAP client uses generated schema types plus a small wrapper for the
+  batched method-call endpoint. `api/spec_test.go`, not code generation alone,
+  checks spec↔runtime agreement.
 
 ## Deployment shape
 

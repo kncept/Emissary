@@ -184,7 +184,7 @@ Add a unit test alongside the implementation; the existing
 `*_test.go` files show the patterns (e.g. `storage` tests exercise
 both implementations through the interface).
 
-Currently open implementation work (see also `TODO.md`):
+Currently open implementation work:
 
 - `usermanager` `ldap` backend (registered, panics when reached).
 - Bounce handling, e.g. reacting to SES receipt verdicts.

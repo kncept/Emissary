@@ -43,8 +43,7 @@ does the web application.
 - The `ldap` user manager is registered but not implemented (it exists
   so deployments can select it later); it currently panics for ordinary
   users. The `ddb` user manager is implemented against DynamoDB.
-- Bounce handling and multi-instance deployments are open ideas; see
-  `TODO.md`.
+- Bounce handling and multi-instance deployments are open ideas.
 
 ## Core concepts
 
@@ -52,8 +51,8 @@ does the web application.
 | --- | --- |
 | Domain | The receiving domain (`DOMAIN`). SES is configured to accept mail for it (and, optionally, its subdomains). |
 | MAIL FROM subdomain | `mail.<DOMAIN>`. Used both for SES bounce handling and as the hostname the deployed application is served on. |
-| Email id | The full S3 object key of a delivered message: `users/<accountId>/<mailboxId>/<timestamp>_<message-id>.eml`. The id encodes the account, JMAP mailbox, received time and a storage-generated message id (older deliveries used the SES message id); the timestamp is part of the id and uses ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`). |
-| Account | A JMAP account, identified by the user's email address. Storage reads are scoped to this account's prefix; `accountId` on a JMAP call selects it. |
+| Email id | An RFC 8620 `Id` containing the base64url-encoded delivered object key. The underlying key is `users/<internal-user-id>/<mailboxId>/<timestamp>_<message-id>.eml`; the timestamp uses ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`). Older deliveries used the SES message id as the suffix. |
+| Account | A JMAP account identified publicly by the opaque `acct_` id derived from the user's email address. The dispatcher resolves it to the internal user id used by the storage prefix; `accountId` on a JMAP call selects it. |
 | Mailbox | A JMAP mailbox inside an account (`inbox`, `sent`, `drafts`, ...). `Email/query` can restrict the read with `filter.inMailbox`. |
 | Administrator | The single built-in user defined by `USERNAME`/`PASSWORD`. With `EmissaryUserManagement` it can read another account's mailbox by passing that account's `accountId` (masquerade) and send with that account's From address. Other users can only send from their own address. |
 | Ordinary user | Any user accepted by the configured user manager. Reads only their own account/mailboxes and always sends as themselves. |
@@ -68,9 +67,9 @@ tools), and `EmissaryUserManagement: true` for users who may manage accounts
 and masquerade. Authorization is enforced at both the JMAP dispatcher and the
 storage boundary:
 
-- The default `accountId` for a JMAP call is the authenticated `sub`.
-  Users without `EmissaryUserManagement` may not supply a different
-  `accountId`; the dispatcher rejects the call.
+- The default `accountId` for a JMAP call is the opaque id derived from the
+  authenticated `sub`. Users without `EmissaryUserManagement` may not select
+  another account; the dispatcher rejects the call.
 - Users with `EmissaryUserManagement` may masquerade by supplying any
   `accountId`. Listing, getting, deleting and submitting are all scoped to
   that account.

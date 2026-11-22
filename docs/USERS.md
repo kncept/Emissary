@@ -266,14 +266,15 @@ The endpoint follows shared API conventions from [API.md](API.md) (error body `{
 ### Activation & Session
 
 After selecting a user from autocomplete, the SPA stores the address in
-`window.localStorage['masquerade_as']`. JMAP calls include it as the
-method call's `accountId`, which is the effective mailbox context for
-listing, getting, deleting and submitting mail. The JWT is unchanged and
-still identifies the caller; the JMAP dispatcher authorizes the
-masquerade by checking the `EmissaryUserManagement` claim.
+`window.localStorage['masquerade_as']`. The JMAP client converts that address
+to the opaque `acct_` id and uses it as the method call's `accountId`, which is
+the effective mailbox context for listing, getting, deleting and submitting
+mail. The JWT is unchanged and still identifies the caller; the JMAP
+dispatcher authorizes the masquerade by checking the
+`EmissaryUserManagement` claim.
 
 - **Exit masquerade:** Clear `masquerade_as` from localStorage; JMAP calls
-  revert to the JWT `sub` as `accountId`.
+  revert to the opaque id derived from the JWT `sub`.
 - **Active indicator:** The header shows the masquerade target while it is set.
 - **Search semantics:** Prefix vs. substring match, case sensitivity,
   exclusion of current user or disabled accounts.
