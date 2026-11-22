@@ -12,6 +12,7 @@ import (
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/components/storage"
 	"github.com/kncept/Emissary/mailer/components/usermanager"
+	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 )
 
 // createdIDSaveRetries bounds optimistic-concurrency retries when persisting
@@ -132,6 +133,22 @@ type Request struct {
 	Using       []string          `json:"using"`
 	MethodCalls []Invocation      `json:"methodCalls"`
 	CreatedIDs  map[string]string `json:"createdIds,omitempty"`
+}
+
+// HasWriteMethod reports whether the batch contains a /set method, the only
+// JMAP method form that changes server state. Read-only batches do not need a
+// storage-backed push-state refresh: EventSource streams and webhook timers
+// already refresh states for changes made by other processes.
+func (r *Request) HasWriteMethod() bool {
+	if r == nil {
+		return false
+	}
+	for _, call := range r.MethodCalls {
+		if strings.HasSuffix(call.Name, "/set") {
+			return true
+		}
+	}
+	return false
 }
 
 // Response represents a JMAP API response (batch of method responses).
@@ -297,6 +314,10 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 	// operations such as EmailSubmission/set, where the From address must
 	// belong to the caller (or the caller must be allowed to masquerade).
 	ctx = auth.ContextWithClaims(ctx, claims)
+	// Method calls in one batch commonly read the same storage-backed data
+	// (for example Mailbox/query followed by Mailbox/get). Memoise those reads
+	// for this request only; the next request gets a fresh cache.
+	ctx = base.WithRequestCache(ctx)
 	slog.Debug("JMAP request", "calls", len(req.MethodCalls), "account", defaultAccountID)
 
 	// RFC 8620 section 3.3: a method may only be used when its capability was

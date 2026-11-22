@@ -445,7 +445,9 @@ func (s *S3Storage) ListEmails(ctx context.Context, accountID, mailboxID string)
 		}
 		prefix = p
 	}
-	_ = s.ensureDefaultMailboxes(ctx, accountID)
+	// Listing is a read: callers that need default mailboxes to exist (such as
+	// ListMailboxes) ensure them explicitly. Doing it here turned every mailbox
+	// count into six PutObject and six HeadObject calls before the listing.
 	slog.Debug("S3: listing mail", "bucket", s.bucket, "prefix", prefix)
 
 	var emails []*email.ListedEmail

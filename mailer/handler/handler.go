@@ -373,7 +373,7 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 	})))
 	mux.Handle(jmapUploadRoute, requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPUpload(w, r, blobLifecycle, userManager, maxFileSize, uploadSlots)
-		flushPushState(r, pushHub)
+		flushPushState(r, pushHub, true)
 	})))
 	mux.Handle(jmapDownloadRoute, requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPDownload(w, r, emailStore, userManager)
@@ -854,16 +854,21 @@ func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jm
 
 	// Publish before the response is written so a client that immediately opens
 	// an EventSource sees the new state in its snapshot as well.
-	flushPushState(r, pushHub)
+	flushPushState(r, pushHub, req.HasWriteMethod())
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(resp)
 }
 
-// flushPushState records the credential/account pair for webhook delivery and
-// refreshes the type states after a write. It is deliberately non-fatal: JMAP
-// writes are already durable, and push is best effort.
-func flushPushState(r *http.Request, hub *push.Hub) {
+// flushPushState records the credential/account pair for webhook delivery and,
+// for writes, refreshes the type states. A storage-backed refresh on every
+// read-only JMAP request made a simple Mailbox/query + Mailbox/get batch rescan
+// all email and mailbox data again; EventSource streams and webhook timers
+// already refresh states for changes made by other processes.
+//
+// It is deliberately non-fatal: JMAP writes are already durable, and push is
+// best effort.
+func flushPushState(r *http.Request, hub *push.Hub, refresh bool) {
 	if hub == nil {
 		return
 	}
@@ -872,6 +877,9 @@ func flushPushState(r *http.Request, hub *push.Hub) {
 		return
 	}
 	hub.Remember(r.Context(), claims.Subject)
+	if !refresh {
+		return
+	}
 	if err := hub.Refresh(r.Context(), claims.Subject); err != nil {
 		logRequestWarn(r, "refresh JMAP push state", err)
 	}

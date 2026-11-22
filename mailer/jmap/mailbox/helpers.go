@@ -32,23 +32,53 @@ func (h *Handler) checkMailboxNameAvailable(ctx context.Context, accountID, name
 	return nil
 }
 
+type mailboxListCacheKey struct{ accountID string }
+
+// getMailboxes returns the hydrated mailbox set for one JMAP request. All
+// method calls in the same batch share this snapshot, so Mailbox/query and
+// Mailbox/get do not each reload every mailbox from storage.
 func (h *Handler) getMailboxes(ctx context.Context, accountID string) []Mailbox {
+	mailboxes, _ := base.Cached(ctx, mailboxListCacheKey{accountID: accountID}, func() ([]Mailbox, error) {
+		return h.loadMailboxes(ctx, accountID), nil
+	})
+	return mailboxes
+}
+
+func (h *Handler) loadMailboxes(ctx context.Context, accountID string) []Mailbox {
 	stored, err := h.deps.Storage.ListMailboxes(ctx, accountID)
 	if err != nil {
 		// Fall back to defaults so /get remains usable on transient errors.
 		stored = storage.DefaultMailboxes()
 	}
+
+	// One account-wide listing supplies every mailbox count. Listing each
+	// folder four times (total/unread emails, total/unread threads) made a
+	// single Mailbox/query + Mailbox/get batch issue dozens of S3 listings.
+	emails, err := h.deps.Storage.ListEmails(ctx, accountID, "")
+	if err != nil {
+		emails = nil
+	}
+	byMailbox := make(map[string][]*mailemail.ListedEmail)
+	for _, e := range emails {
+		if e == nil || e.Ref == nil {
+			continue
+		}
+		mailboxID := storage.NormalizeMailboxID(e.Ref.MailboxID)
+		if mailboxID == "" {
+			continue
+		}
+		byMailbox[mailboxID] = append(byMailbox[mailboxID], e)
+	}
+
 	out := make([]Mailbox, 0, len(stored))
 	for _, mb := range stored {
-		out = append(out, h.toJMAPMailbox(ctx, accountID, mb))
+		listed := byMailbox[storage.NormalizeMailboxID(mb.ID)]
+		out = append(out, h.toJMAPMailbox(ctx, accountID, mb, listed))
 	}
 	return out
 }
 
-func (h *Handler) toJMAPMailbox(ctx context.Context, accountID string, mb storage.Mailbox) Mailbox {
-	count := h.countEmailsInMailbox(ctx, accountID, mb.ID)
-	unread := h.CountUnreadInMailbox(ctx, accountID, mb.ID)
-	threads := h.countThreadsInMailbox(ctx, accountID, mb.ID)
+func (h *Handler) toJMAPMailbox(ctx context.Context, accountID string, mb storage.Mailbox, emails []*mailemail.ListedEmail) Mailbox {
 	role := ""
 	if mb.Role != nil {
 		role = strings.ToLower(strings.TrimSpace(*mb.Role))
@@ -59,21 +89,13 @@ func (h *Handler) toJMAPMailbox(ctx context.Context, accountID string, mb storag
 		ParentID:      mb.ParentID,
 		Role:          mb.Role,
 		SortOrder:     mb.SortOrder,
-		TotalEmails:   count,
-		UnreadEmails:  unread,
-		TotalThreads:  threads,
-		UnreadThreads: h.countUnreadThreadsInMailbox(ctx, accountID, mb.ID),
+		TotalEmails:   len(emails),
+		UnreadEmails:  h.countUnreadEmails(ctx, accountID, emails),
+		TotalThreads:  h.countThreads(ctx, accountID, emails),
+		UnreadThreads: h.countUnreadThreads(ctx, accountID, emails),
 		MyRights:      base.RightsForRole(role),
 		IsSubscribed:  mb.IsSubscribed,
 	}
-}
-
-func (h *Handler) countEmailsInMailbox(ctx context.Context, accountID, mailboxID string) int {
-	emails, err := h.deps.Storage.ListEmails(ctx, accountID, mailboxID)
-	if err != nil {
-		return 0
-	}
-	return len(emails)
 }
 
 // CountUnreadInMailbox counts messages without $seen, excluding drafts.
@@ -82,6 +104,10 @@ func (h *Handler) CountUnreadInMailbox(ctx context.Context, accountID, mailboxID
 	if err != nil {
 		return 0
 	}
+	return h.countUnreadEmails(ctx, accountID, emails)
+}
+
+func (h *Handler) countUnreadEmails(ctx context.Context, accountID string, emails []*mailemail.ListedEmail) int {
 	count := 0
 	for _, e := range emails {
 		if e == nil || e.Ref == nil {
@@ -96,11 +122,7 @@ func (h *Handler) CountUnreadInMailbox(ctx context.Context, accountID, mailboxID
 	return count
 }
 
-func (h *Handler) countThreadsInMailbox(ctx context.Context, accountID, mailboxID string) int {
-	emails, err := h.deps.Storage.ListEmails(ctx, accountID, mailboxID)
-	if err != nil {
-		return 0
-	}
+func (h *Handler) countThreads(ctx context.Context, accountID string, emails []*mailemail.ListedEmail) int {
 	_, threadIDs, err := base.GroupThreads(ctx, h.deps, accountID, emails)
 	if err != nil {
 		return 0
@@ -108,13 +130,9 @@ func (h *Handler) countThreadsInMailbox(ctx context.Context, accountID, mailboxI
 	return len(threadIDs)
 }
 
-// countUnreadThreadsInMailbox counts distinct threads with at least one
-// unread, non-draft message, matching the Mailbox/unreadThreads definition.
-func (h *Handler) countUnreadThreadsInMailbox(ctx context.Context, accountID, mailboxID string) int {
-	emails, err := h.deps.Storage.ListEmails(ctx, accountID, mailboxID)
-	if err != nil {
-		return 0
-	}
+// countUnreadThreads counts distinct threads with at least one unread,
+// non-draft message, matching the Mailbox/unreadThreads definition.
+func (h *Handler) countUnreadThreads(ctx context.Context, accountID string, emails []*mailemail.ListedEmail) int {
 	unread := make([]*mailemail.ListedEmail, 0, len(emails))
 	for _, e := range emails {
 		if e == nil || e.Ref == nil || e.Email == nil {

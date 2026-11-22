@@ -180,7 +180,8 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 			}
 			createdServerIDs[cid] = mb.ID
 			createdNames[nameKey] = true
-			j := h.toJMAPMailbox(ctx, accountID, mb)
+			// A newly created mailbox cannot contain messages yet.
+			j := h.toJMAPMailbox(ctx, accountID, mb, nil)
 			result, err := json.Marshal(map[string]any{
 				"id":            j.ID,
 				"sortOrder":     j.SortOrder,

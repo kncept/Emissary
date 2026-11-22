@@ -591,3 +591,46 @@ func TestS3StorageBlobLivesUnderReservedDirectory(t *testing.T) {
 		t.Errorf("ListMailboxes() = %d, want only default mailboxes", len(mailboxes))
 	}
 }
+
+// writeCountingS3 counts mutating S3 calls so tests can prove that a listing
+// stays a read. It embeds fakeS3 to satisfy the rest of S3API.
+type writeCountingS3 struct {
+	*fakeS3
+	puts  int
+	heads int
+}
+
+func (f *writeCountingS3) PutObject(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	f.puts++
+	return f.fakeS3.PutObject(ctx, input, opts...)
+}
+
+func (f *writeCountingS3) HeadObject(ctx context.Context, input *s3.HeadObjectInput, opts ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+	f.heads++
+	return f.fakeS3.HeadObject(ctx, input, opts...)
+}
+
+func TestS3StorageListEmailsDoesNotWrite(t *testing.T) {
+	const key = "users/alice@example.com/inbox/20261117_x.eml"
+	fake := &writeCountingS3{fakeS3: newFakeS3(map[string]string{key: testMessage})}
+	store := &S3Storage{client: fake, bucket: "mail-bucket"}
+
+	listed, err := store.ListEmails(context.Background(), "alice@example.com", "inbox")
+	if err != nil {
+		t.Fatalf("ListEmails() error = %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("ListEmails() = %d messages, want 1", len(listed))
+	}
+	if fake.puts != 0 || fake.heads != 0 {
+		t.Errorf("ListEmails made %d PutObject and %d HeadObject calls, want 0 of each", fake.puts, fake.heads)
+	}
+
+	// Mailbox discovery is still responsible for creating default folders.
+	if _, err := store.ListMailboxes(context.Background(), "alice@example.com"); err != nil {
+		t.Fatalf("ListMailboxes() error = %v", err)
+	}
+	if fake.puts == 0 {
+		t.Error("ListMailboxes() made no PutObject calls, want default mailboxes ensured")
+	}
+}
