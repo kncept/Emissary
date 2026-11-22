@@ -104,6 +104,9 @@ func TestEmailParsePhase4(t *testing.T) {
 	if obj["subject"] != "Parsed subject" || obj["blobId"] != blobID {
 		t.Errorf("parsed email = %v, want subject and blobId", obj)
 	}
+	if id, ok := obj["id"]; !ok || id != nil {
+		t.Errorf("parsed id = %v, want null", id)
+	}
 	if len(obj) != 3 {
 		t.Errorf("parsed properties = %v, want only id/subject/blobId", obj)
 	}

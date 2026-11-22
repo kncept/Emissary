@@ -29,6 +29,9 @@ func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawM
 	if err := base.RejectUnknownArguments(args, allowed); err != nil {
 		return nil, err
 	}
+	if err := validateHeaderPropertyForms(args, "properties", "bodyProperties"); err != nil {
+		return nil, err
+	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
@@ -163,7 +166,10 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 			}
 			var createMap map[string]interface{}
 			if err := json.Unmarshal(raw, &createMap); err != nil {
-				return fail(base.NewSetError("invalidProperties", "Invalid create object"))
+				return fail(base.InvalidProperties("Invalid create object", "invalidProperties"))
+			}
+			if properties := validateEmailCreate(raw); len(properties) > 0 {
+				return fail(base.InvalidProperties("Conflicting or unsupported create properties", properties...))
 			}
 			subject, _ := createMap["subject"].(string)
 			replyTo, err := jmapAddressList(createMap, "replyTo")
@@ -249,6 +255,18 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 			if strings.TrimSpace(inReplyTo) != "" {
 				inReplyToList = []string{strings.TrimSpace(inReplyTo)}
 			}
+			// A client may supply a Message-ID (RFC 8621 section 4.6); the
+			// server generates one only when it is absent.
+			messageID := ""
+			if ids, ok := createMap["messageId"].([]interface{}); ok && len(ids) > 0 {
+				if supplied, ok := ids[0].(string); ok {
+					messageID = strings.TrimSpace(supplied)
+				}
+			}
+			if normalizeMessageID(messageID) == "" {
+				messageID = mailemail.GenerateMessageID(messageIDDomain(lockedFrom))
+			}
+
 			newEmail := &mailemail.UserEmail{
 				From:       mailemail.Address{Address: lockedFrom},
 				ReplyTo:    replyTo,
@@ -260,7 +278,7 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 				Text:       text,
 				HTML:       html,
 				Size:       int64(len(text) + len(html)),
-				MessageID:  mailemail.GenerateMessageID(messageIDDomain(lockedFrom)),
+				MessageID:  messageID,
 				InReplyTo:  inReplyToList,
 				References: references,
 			}
@@ -269,12 +287,25 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 			rawBytes := mailemail.RawFromUserEmail(newEmail)
 			blobID := storage.BlobID(rawBytes)
 
+			// This server forbids two emails with the same explicit Message-ID
+			// in one account (RFC 8621 section 4.8). Generated IDs are unique,
+			// so only client-supplied ids can trigger the rule.
+			if existingID := h.duplicateEmailID(ctx, accountID, newEmail.MessageID, nil); existingID != "" {
+				return fail(base.AlreadyExists("An email with this Message-ID already exists", existingID))
+			}
+
 			// A session draft is stored separately (durable across lambda
 			// invocations) and is only valid in drafts mailbox context.
 			if claims := auth.ClaimsFromContext(ctx); claims != nil && claims.SID != "" {
 				newID, err := h.deps.Storage.PutDraft(ctx, claims.SID, createID, newEmail)
 				if err != nil {
-					return fail(base.NewSetError("serverFail", "Failed to create email"))
+					return fail(storeSetError(err, "Failed to create email"))
+				}
+				if _, err := storage.RegisterEmailBlobs(ctx, h.deps.Storage, accountID, rawBytes); err != nil {
+					if cleanupErr := h.deps.Storage.DeleteDraft(ctx, claims.SID, newID); cleanupErr != nil {
+						slog.Error("JMAP: failed to roll back draft after blob registration error", "id", newID, "err", cleanupErr)
+					}
+					return fail(storeSetError(err, "Failed to register draft blob"))
 				}
 				threadID := base.ThreadID(newID, newEmail)
 				meta := metadata.NewEmailMetadata(accountID, newID)
@@ -287,7 +318,10 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 					}
 				}
 				if err := h.deps.Metadata.Save(ctx, meta); err != nil {
-					slog.Warn("JMAP: failed to save draft metadata", "account", accountID, "id", newID, "err", err)
+					if cleanupErr := h.deps.Storage.DeleteDraft(ctx, claims.SID, newID); cleanupErr != nil {
+						slog.Error("JMAP: failed to roll back draft after metadata error", "id", newID, "err", cleanupErr)
+					}
+					return fail(storeSetError(err, "Failed to save draft metadata"))
 				}
 				if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, newID, base.ChangeCreate); err != nil {
 					return nil, nil, err
@@ -304,14 +338,17 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 
 			newID, err := h.deps.Storage.AddEmail(ctx, accountID, targetMailbox, newEmail, rawBytes)
 			if err != nil {
-				return fail(base.NewSetError("serverFail", "Failed to create email"))
+				return fail(storeSetError(err, "Failed to create email"))
 			}
 			threadID := base.ThreadID(newID, newEmail)
-			// Registration is best effort: the message is already durable and
-			// the blob id is content-derived, so a blob-store outage cannot
-			// create a second copy of the email.
+			// A created Email must expose its bytes through blobId. If blob
+			// registration fails, roll the email back and report the storage
+			// failure rather than leaving a message whose blob cannot resolve.
 			if _, err := storage.RegisterEmailBlobs(ctx, h.deps.Storage, accountID, rawBytes); err != nil {
-				slog.Warn("JMAP: failed to register created email blob", "account", accountID, "id", newID, "err", err)
+				if cleanupErr := h.deps.Storage.DeleteEmail(ctx, accountID, newID); cleanupErr != nil {
+					slog.Error("JMAP: failed to roll back email after blob registration error", "id", newID, "err", cleanupErr)
+				}
+				return fail(storeSetError(err, "Failed to register created email blob"))
 			}
 			meta := metadata.NewEmailMetadata(accountID, newID)
 			meta.ReceivedAt = now.UTC().Format(time.RFC3339)
@@ -322,7 +359,10 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 				}
 			}
 			if err := h.deps.Metadata.Save(ctx, meta); err != nil {
-				slog.Warn("JMAP: failed to save created email metadata", "account", accountID, "id", newID, "err", err)
+				if cleanupErr := h.deps.Storage.DeleteEmail(ctx, accountID, newID); cleanupErr != nil {
+					slog.Error("JMAP: failed to roll back created email after metadata error", "id", newID, "err", cleanupErr)
+				}
+				return fail(storeSetError(err, "Failed to save created email metadata"))
 			}
 			if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, newID, base.ChangeCreate); err != nil {
 				return nil, nil, err
@@ -362,7 +402,7 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 						if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, id, base.ChangeUpdate); err != nil {
 							return nil, nil, err
 						}
-						return json.RawMessage("null"), nil, nil
+						return json.RawMessage("{}"), nil, nil
 					}
 				}
 				return fail(base.NewSetError("notFound", "Email not found"))
@@ -447,19 +487,21 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 				}
 			}
 			if err := h.deps.Metadata.Save(ctx, patched); err != nil {
+				if mailboxChanged {
+					if _, rollbackErr := h.deps.Storage.MoveEmail(ctx, accountID, id, currentMailbox); rollbackErr != nil {
+						slog.Error("JMAP: failed to roll back email move after metadata error", "id", id, "err", rollbackErr)
+					}
+				}
 				if errors.Is(err, metadata.ErrVersionConflict) {
-					return fail(base.NewSetError("serverFail", "Concurrent modification: email metadata was modified by another request"))
+					return fail(base.NewSetError("stateMismatch", "Email metadata changed concurrently"))
 				}
 				slog.Error("JMAP: failed to save email metadata", "account", accountID, "id", id, "err", err)
-				if mailboxChanged {
-					_, _ = h.deps.Storage.MoveEmail(ctx, accountID, id, currentMailbox)
-				}
-				return fail(base.NewSetError("serverFail", "Failed to save email metadata"))
+				return fail(storeSetError(err, "Failed to save email metadata"))
 			}
 			if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, id, base.ChangeUpdate); err != nil {
 				return nil, nil, err
 			}
-			return json.RawMessage("null"), nil, nil
+			return json.RawMessage("{}"), nil, nil
 		},
 	}
 }

@@ -503,8 +503,8 @@ func TestEmailSetStoresHTMLBodyAndEmailGetReturnsIt(t *testing.T) {
 		"from":[{"email":"alice@example.com"}],
 		"to":[{"email":"bob@example.com"}],
 		"subject":"HTML mail",
-		"textBody":[{"partId":"text1","type":"text/plain","size":5}],
-		"htmlBody":[{"partId":"html1","type":"text/html","size":16}],
+		"textBody":[{"partId":"text1","type":"text/plain"}],
+		"htmlBody":[{"partId":"html1","type":"text/html"}],
 		"bodyValues":{
 			"text1":{"value":"hello"},
 			"html1":{"value":"<p>hello</p>"}
@@ -648,7 +648,7 @@ func TestEmailSetCreateLocksFromAndGeneratesMessageID(t *testing.T) {
 			sender.NewInMemoryRecording())
 		ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{Subject: caller})
 		args := json.RawMessage(fmt.Sprintf(
-			`{"accountId":%q,"create":{"c1":{"from":[{"name":"","email":"carol@example.com"}],"to":[{"name":"","email":"dave@example.com"}],"subject":"s","bodyValues":{"text1":{"value":"hi"}},"textBody":[{"partId":"text1","size":2}]}}}`,
+			`{"accountId":%q,"create":{"c1":{"from":[{"name":"","email":"carol@example.com"}],"to":[{"name":"","email":"dave@example.com"}],"subject":"s","bodyValues":{"text1":{"value":"hi"}},"textBody":[{"partId":"text1","type":"text/plain"}]}}}`,
 			caller))
 		result, err := handler.EmailSet(ctx, caller, args)
 		if err != nil {
@@ -685,7 +685,7 @@ func TestEmailSetCreateLocksFromAndGeneratesMessageID(t *testing.T) {
 			sender.NewInMemoryRecording())
 		ctx := auth.ContextWithClaims(context.Background(), &auth.Claims{Subject: caller, EmissaryUserManagement: true})
 		args := json.RawMessage(fmt.Sprintf(
-			`{"accountId":%q,"create":{"c1":{"from":[{"name":"","email":%q}],"to":[{"name":"","email":"dave@example.com"}],"subject":"s","bodyValues":{"text1":{"value":"hi"}},"textBody":[{"partId":"text1","size":2}]}}}`,
+			`{"accountId":%q,"create":{"c1":{"from":[{"name":"","email":%q}],"to":[{"name":"","email":"dave@example.com"}],"subject":"s","bodyValues":{"text1":{"value":"hi"}},"textBody":[{"partId":"text1","type":"text/plain"}]}}}`,
 			target, caller))
 		result, err := handler.EmailSet(ctx, target, args)
 		if err != nil {

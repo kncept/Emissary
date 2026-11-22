@@ -77,7 +77,7 @@ func TestJMAPCoreUseCase_LambdaContinuity(t *testing.T) {
 					"from":       []map[string]string{{"email": account}},
 					"to":         []map[string]string{{"email": "dave@example.com"}},
 					"subject":    "lambda continuity",
-					"textBody":   []map[string]interface{}{{"partId": "text1", "type": "text/plain", "size": 4}},
+					"textBody":   []map[string]interface{}{{"partId": "text1", "type": "text/plain"}},
 					"bodyValues": map[string]interface{}{"text1": map[string]interface{}{"value": "body"}},
 				},
 			},

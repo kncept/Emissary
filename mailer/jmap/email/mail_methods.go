@@ -89,6 +89,60 @@ func receivedAtFor(value *string) (string, error) {
 	return parsed.UTC().Format(time.RFC3339), nil
 }
 
+// storeSetError translates a storage failure into the RFC SetError that
+// describes it. Blob quota and message size are distinguishable from generic
+// storage failures, even where a backend reports size as an untyped error.
+func storeSetError(err error, fallback string) base.SetError {
+	if err == nil {
+		return base.NewSetError("serverFail", fallback)
+	}
+	if errors.Is(err, storage.ErrBlobQuota) {
+		return base.NewSetError("overQuota", "Blob storage quota exceeded")
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "exceeds maximum size") || strings.Contains(message, "too large") ||
+		strings.Contains(message, "size limit") {
+		return base.TooLarge("Message exceeds the server size limit", uint64(mailemail.MaxPartSize()))
+	}
+	return base.NewSetError("serverFail", fallback)
+}
+
+// duplicateEmailID implements the server's documented duplicate rule: one
+// account may not hold two emails with the same explicit Message-ID. The
+// Message-ID is compared case-insensitively with RFC 5322 angle brackets and
+// folding whitespace removed. An empty Message-ID is never a duplicate key.
+func (h *Handler) duplicateEmailID(ctx context.Context, accountID, messageID string, _ []byte) string {
+	target := normalizeMessageID(messageID)
+	if target == "" {
+		return ""
+	}
+	listed, err := h.deps.Storage.ListEmails(ctx, accountID, "")
+	if err != nil {
+		return ""
+	}
+	for _, email := range listed {
+		if email == nil || email.Ref == nil || email.Email == nil {
+			continue
+		}
+		if normalizeMessageID(email.Email.MessageID) == target {
+			return email.Ref.ID
+		}
+	}
+	return ""
+}
+
+func normalizeMessageID(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "\r", "")
+	value = strings.ReplaceAll(value, "\n", "")
+	value = strings.ReplaceAll(value, " ", "")
+	value = strings.Trim(value, "<>")
+	if at := strings.IndexByte(value, '@'); at <= 0 || at == len(value)-1 {
+		return ""
+	}
+	return value
+}
+
 // storeRawEmail persists parsed bytes under a new id and returns the JMAP
 // Email object describing the stored copy. Both import and copy use it so
 // state tracking, blob registration and metadata are identical.
@@ -98,7 +152,10 @@ func (h *Handler) storeRawEmail(ctx context.Context, accountID, mailboxID string
 		return nil, err
 	}
 	if _, err := storage.RegisterEmailBlobs(ctx, h.deps.Storage, accountID, raw); err != nil {
-		slog.Warn("JMAP: failed to register imported email blob", "account", accountID, "id", newID, "err", err)
+		if cleanupErr := h.deps.Storage.DeleteEmail(ctx, accountID, newID); cleanupErr != nil {
+			slog.Error("JMAP: failed to roll back email after blob registration error", "id", newID, "err", cleanupErr)
+		}
+		return nil, err
 	}
 	meta := metadata.NewEmailMetadata(accountID, newID)
 	meta.ReceivedAt = receivedAt
@@ -108,6 +165,9 @@ func (h *Handler) storeRawEmail(ctx context.Context, accountID, mailboxID string
 		}
 	}
 	if err := h.deps.Metadata.Save(ctx, meta); err != nil {
+		if cleanupErr := h.deps.Storage.DeleteEmail(ctx, accountID, newID); cleanupErr != nil {
+			slog.Error("JMAP: failed to roll back imported email after metadata error", "id", newID, "err", cleanupErr)
+		}
 		return nil, err
 	}
 	if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, newID, base.ChangeCreate); err != nil {
@@ -139,6 +199,16 @@ func (h *Handler) EmailParse(ctx context.Context, accountID string, args json.Ra
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
+	var argNames map[string]json.RawMessage
+	if err := json.Unmarshal(args, &argNames); err != nil {
+		return nil, err
+	}
+	if raw, ok := argNames["blobIds"]; !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, base.Errorf("invalidArguments", "blobIds is required")
+	}
+	if err := validateHeaderPropertyForms(args, "properties", "bodyProperties"); err != nil {
+		return nil, err
+	}
 	if req.MaxBodyValueBytes < 0 {
 		return nil, base.Errorf("invalidArguments", "maxBodyValueBytes must not be negative")
 	}
@@ -157,7 +227,9 @@ func (h *Handler) EmailParse(ctx context.Context, accountID string, args json.Ra
 	fetchText := req.FetchTextBodyValues || req.FetchAllBodyValues
 	fetchHTML := req.FetchHTMLBodyValues || req.FetchAllBodyValues
 
-	parsed := make(map[string]json.RawMessage)
+	// RFC 8621 section 4.9 uses null (not an empty object/array) for every
+	// empty result map and list.
+	var parsed map[string]json.RawMessage
 	var notParsable, notFound []string
 	for _, blobID := range req.BlobIDs {
 		_, raw, err := h.deps.Storage.GetBlob(ctx, accountID, blobID)
@@ -186,6 +258,29 @@ func (h *Handler) EmailParse(ctx context.Context, accountID string, args json.Ra
 		item, err := jmapEmail.filtered(properties, bodyProperties)
 		if err != nil {
 			return nil, err
+		}
+		// id, mailboxIds, keywords and receivedAt describe stored emails and
+		// MUST be null when requested from Email/parse (RFC 8621 section 4.9).
+		// blobId is derived from the parsed bytes and remains available. The
+		// shared property filter force-includes id, so replace or remove these
+		// properties after selection.
+		var selected map[string]json.RawMessage
+		if err := json.Unmarshal(item, &selected); err != nil {
+			return nil, err
+		}
+		for _, property := range []string{"id", "mailboxIds", "keywords", "receivedAt"} {
+			if properties.Has(property) {
+				selected[property] = json.RawMessage("null")
+			} else {
+				delete(selected, property)
+			}
+		}
+		item, err = json.Marshal(selected)
+		if err != nil {
+			return nil, err
+		}
+		if parsed == nil {
+			parsed = make(map[string]json.RawMessage)
 		}
 		parsed[blobID] = item
 	}
@@ -248,7 +343,7 @@ func (h *Handler) EmailImport(ctx context.Context, accountID string, args json.R
 			if errors.Is(err, storage.ErrNotFound) {
 				notCreated[createID] = base.NewSetError("notFound", "Blob not found")
 			} else {
-				notCreated[createID] = base.NewSetError("serverFail", "Failed to read blob")
+				notCreated[createID] = storeSetError(err, "Failed to read blob")
 			}
 			continue
 		}
@@ -257,9 +352,13 @@ func (h *Handler) EmailImport(ctx context.Context, accountID string, args json.R
 			notCreated[createID] = base.NewSetError("invalidProperties", "Blob is not a valid email")
 			continue
 		}
+		if existingID := h.duplicateEmailID(ctx, accountID, message.MessageID, raw); existingID != "" {
+			notCreated[createID] = base.AlreadyExists("An email with this Message-ID already exists", existingID)
+			continue
+		}
 		jmapEmail, err := h.storeRawEmail(ctx, accountID, mailboxID, raw, message, keywords, receivedAt)
 		if err != nil {
-			notCreated[createID] = base.NewSetError("serverFail", "Failed to import email")
+			notCreated[createID] = storeSetError(err, "Failed to import email")
 			continue
 		}
 		created[createID] = jmapEmail
@@ -366,7 +465,7 @@ func (h *Handler) EmailCopy(ctx context.Context, accountID string, args json.Raw
 		}
 		raw, err := h.deps.Storage.GetEmailRaw(ctx, sourceAccount, copyReq.ID)
 		if err != nil {
-			notCreated[createID] = base.NewSetError("serverFail", "Failed to read original email")
+			notCreated[createID] = storeSetError(err, "Failed to read original email")
 			continue
 		}
 		message := listed.Email
@@ -377,9 +476,13 @@ func (h *Handler) EmailCopy(ctx context.Context, accountID string, args json.Raw
 				continue
 			}
 		}
+		if existingID := h.duplicateEmailID(ctx, accountID, message.MessageID, raw); existingID != "" {
+			notCreated[createID] = base.AlreadyExists("An email with this Message-ID already exists", existingID)
+			continue
+		}
 		jmapEmail, err := h.storeRawEmail(ctx, accountID, mailboxID, raw, message, keywords, receivedAt)
 		if err != nil {
-			notCreated[createID] = base.NewSetError("serverFail", "Failed to copy email")
+			notCreated[createID] = storeSetError(err, "Failed to copy email")
 			continue
 		}
 		created[createID] = jmapEmail
