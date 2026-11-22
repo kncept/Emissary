@@ -361,6 +361,38 @@ describe('auth api', () => {
     });
   });
 
+  describe('masquerade account id', () => {
+    it('converts a stored masquerade email into the opaque JMAP account id', async () => {
+      const { getEmails } = await importApi();
+      window.localStorage.setItem(TOKEN_KEY, 'abc123');
+      window.localStorage.setItem(MASQUERADE_KEY, 'Victim@Example.com');
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/.well-known/jmap') {
+          return createMockResponse({
+            username: 'admin@example.com',
+            apiUrl: '/api/jmap/',
+            primaryAccounts: { 'urn:ietf:params:jmap:mail': 'acct_admin' },
+          });
+        }
+        if (url === '/api/jmap/') {
+          return createMockResponse({
+            methodResponses: [['Email/get', { list: [] }, 'get1']],
+            sessionState: 's1',
+          });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await getEmails();
+
+      const apiCall = fetchMock.mock.calls.find((call) => call[0] === '/api/jmap/');
+      const body = JSON.parse(String(apiCall?.[1]?.body));
+      expect(body.methodCalls[0][1].accountId).toBe('acct__76M_0-fjYsQlGD5dcND6ULNTD7RkTI-uDN0ri6k3l8');
+    });
+  });
+
   describe('sendEmail body formats', () => {
     function stubJmapFetch() {
       const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {

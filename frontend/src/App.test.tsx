@@ -73,14 +73,14 @@ describe('App routing', () => {
         return createMockResponse({
           username: 'test@example.com',
           apiUrl: '/api/',
-          primaryAccounts: { 'urn:ietf:params:jmap:mail': 'test@example.com' },
+          primaryAccounts: { 'urn:ietf:params:jmap:mail': 'acct_lz3-Rj7IV4X1-Vr1ujkG7tstkxwk5pgkqJ6mXbpOgTs' },
         });
       }
       if (url === '/api/') {
         return createMockResponse({
           methodResponses: [
-            ['Email/query', { accountId: 'test@example.com', queryState: '1', ids: ['e1'], total: 1 }, 'query1'],
-            ['Email/get', { accountId: 'test@example.com', state: '1', list: [jmapEmail], notFound: [] }, 'get1'],
+            ['Email/query', { accountId: 'acct_lz3-Rj7IV4X1-Vr1ujkG7tstkxwk5pgkqJ6mXbpOgTs', queryState: '1', ids: ['e1'], total: 1 }, 'query1'],
+            ['Email/get', { accountId: 'acct_lz3-Rj7IV4X1-Vr1ujkG7tstkxwk5pgkqJ6mXbpOgTs', state: '1', list: [jmapEmail], notFound: [] }, 'get1'],
           ],
           sessionState: '1',
         });

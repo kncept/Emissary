@@ -16,6 +16,10 @@ import (
 	"github.com/kncept/Emissary/mailer/receiver"
 )
 
+// testJMAPPublicURL is the absolute origin used by handler tests so the JMAP
+// Session advertisement is RFC 8620 compliant by default.
+const testJMAPPublicURL = "https://jmap.example.com"
+
 // handlerTestConfig is the test-only adapter for the old flat construction
 // shape. It translates the handful of settings tests care about into the
 // config.Config and configvendor.Bundle that the production New consumes.
@@ -45,6 +49,9 @@ type handlerTestConfig struct {
 	Session     session.SessionStore
 	JWTAudience string
 	JWTIssuer   string
+
+	JMAPPublicURL      string
+	JMAPEventSourceURL string
 
 	UserManager      usermanager.UserManager
 	UserManagerType  string
@@ -81,15 +88,21 @@ func (tc handlerTestConfig) build(t *testing.T) (*config.Config, *configvendor.B
 	t.Helper()
 	ctx := context.Background()
 
+	publicURL := tc.JMAPPublicURL
+	if publicURL == "" {
+		publicURL = testJMAPPublicURL
+	}
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			ListenAddr:  tc.ListenAddr,
-			Username:    tc.AuthUser,
-			Password:    tc.AuthPass,
-			JWTSecret:   tc.JWTSecret,
-			JWTExpiry:   tc.JWTSecretTTL,
-			JWTAudience: tc.JWTAudience,
-			JWTIssuer:   tc.JWTIssuer,
+			ListenAddr:         tc.ListenAddr,
+			Username:           tc.AuthUser,
+			Password:           tc.AuthPass,
+			JWTSecret:          tc.JWTSecret,
+			JWTExpiry:          tc.JWTSecretTTL,
+			JWTAudience:        tc.JWTAudience,
+			JWTIssuer:          tc.JWTIssuer,
+			JMAPPublicURL:      publicURL,
+			JMAPEventSourceURL: tc.JMAPEventSourceURL,
 		},
 		Storage: config.StorageConfig{
 			Type:          tc.StorageType,

@@ -57,10 +57,14 @@ info:
     url: https://trustee.ietf.org/license-info
 servers:
 - url: https://{host}
-  description: JMAP server host
+  description: |-
+    Public HTTPS origin of the deployment. Per RFC 8620 section 2, the Session
+    object's apiUrl, downloadUrl, uploadUrl and eventSourceUrl are absolute
+    URLs resolved against this origin. The EventSource URL may use a dedicated
+    streaming origin when one is configured.
   variables:
     host:
-      default: example.com
+      default: jmap.example.com
 security:
 - bearerAuth: []
 tags:

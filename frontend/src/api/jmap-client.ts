@@ -85,11 +85,28 @@ async function getAccountId(session: Session): Promise<string> {
   return session.username;
 }
 
+// Mirrors auth.AccountIDForEmail on the server: lowercase/trim the email,
+// SHA-256 it, and encode it as an RFC 8620-safe id with an acct_ prefix.
+async function accountIDForEmail(email: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(email.trim().toLowerCase())
+  );
+  const bytes = Array.from(new Uint8Array(digest));
+  const base64 = btoa(bytes.map((byte) => String.fromCharCode(byte)).join(''))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+  return `acct_${base64}`;
+}
+
 // An administrator masquerading as another user targets that account for every
-// method call, regardless of the Session's personal primary account.
+// method call, regardless of the Session's personal primary account. The UI
+// stores the masquerade target's email, so convert it to the opaque JMAP id.
 async function resolveAccountId(session: Session): Promise<string> {
   const masqueradeAs = window.localStorage.getItem(MASQUERADE_AS_KEY);
-  return masqueradeAs || await getAccountId(session);
+  if (masqueradeAs) return accountIDForEmail(masqueradeAs);
+  return getAccountId(session);
 }
 
 // RFC 6570 level-1 substitution; all variables are simple string values.

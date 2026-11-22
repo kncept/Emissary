@@ -45,7 +45,10 @@ type jwtHeader struct {
 // tools). EmissaryUserManagement indicates the user can manage other users and
 // masquerade as them (requires an Emissary-mastered backend).
 type Claims struct {
-	Subject                string `json:"sub"`
+	Subject string `json:"sub"`
+	// AccountID is the opaque, RFC 8620-valid JMAP account identifier.
+	// Subject remains the user's email for authentication and storage.
+	AccountID              string `json:"accountId,omitempty"`
 	SID                    string `json:"sid,omitempty"`
 	SystemManager          bool   `json:"systemManager,omitempty"`
 	EmissaryUserManagement bool   `json:"EmissaryUserManagement,omitempty"`
@@ -315,6 +318,7 @@ func (a *Authenticator) issueTokenPair(ctx context.Context, user *usermanager.Us
 	accessExpiresAt := now.Add(accessTokenTTL)
 	accessToken, err := a.signToken(Claims{
 		Subject:                user.Email,
+		AccountID:              AccountIDForEmail(user.Email),
 		SID:                    sess.ID,
 		SystemManager:          systemManager,
 		EmissaryUserManagement: emissaryUserMgmt,
@@ -330,6 +334,7 @@ func (a *Authenticator) issueTokenPair(ctx context.Context, user *usermanager.Us
 
 	refreshToken, err := a.signToken(Claims{
 		Subject:   user.Email,
+		AccountID: AccountIDForEmail(user.Email),
 		SID:       sess.ID,
 		Issue:     sess.Issue,
 		IssuedAt:  now.Unix(),

@@ -522,6 +522,9 @@ async function emailClientStack(
       JWT_SECRET: jwtSecret.secretArn,
       JWT_AUDIENCE: mailFromDomain,
       JWT_ISSUER: `emissary-${emissaryDomain}`,
+      // RFC 8620 section 2 requires the Session to advertise absolute URLs.
+      // All JMAP resource templates are resolved against this public origin.
+      JMAP_PUBLIC_URL: `https://${mailFromDomain}`,
     },
   })
 

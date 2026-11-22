@@ -41,10 +41,6 @@ const (
 	// specify a token lifetime.
 	defaultJWTSecretTTL = 24 * time.Hour
 
-	// jmapSessionState is stable because the session object itself is static:
-	// every mutable value is reported per account by Foo/get's state token.
-	jmapSessionState = "session-0"
-
 	// RFC 8620 section 2 requires every core limit to be advertised. These
 	// are the limits actually enforced by the upload and API endpoints; the
 	// values match the RFC's suggested minimums.
@@ -315,11 +311,18 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 	})
 
 	mux.Handle(jmapSessionRoute, requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleJMAPSession(w, r, maxFileSize)
+		handleJMAPSession(w, r, maxFileSize, cfg.Server.JMAPPublicURL, cfg.Server.JMAPEventSourceURL)
 	})))
-	mux.Handle(jmapEventSourceRoute, requireEventSourceAuth(authenticator, http.HandlerFunc(pushHub.ServeHTTP)))
+	mux.Handle(jmapEventSourceRoute, requireEventSourceAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if status, detail := normalizeEventSourceAccount(r, userManager); status != 0 {
+			http.Error(w, detail, status)
+			return
+		}
+		pushHub.ServeHTTP(w, r)
+	})))
 	mux.Handle(jmapAPIRoute, requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleJMAPAPIRequest(w, r, dispatcher, maxFileSize, pushHub, requestSlots)
+		handleJMAPAPIRequest(w, r, dispatcher, maxFileSize, pushHub, requestSlots,
+			cfg.Server.JMAPPublicURL, cfg.Server.JMAPEventSourceURL)
 	})))
 	mux.Handle(jmapUploadRoute, requireAuth(authenticator, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleJMAPUpload(w, r, blobLifecycle, userManager, maxFileSize, uploadSlots)
@@ -428,8 +431,7 @@ func requireAuth(authenticator *auth.Authenticator, next http.Handler) http.Hand
 		claims, err := auth.ClaimsFromBearerHeader(authenticator, r.Header.Get("Authorization"))
 		if err != nil {
 			logRequestWarn(r, "validate bearer token", err)
-			w.Header().Set("WWW-Authenticate", `Bearer realm="emissary"`)
-			writeError(w, http.StatusUnauthorized, "authentication required")
+			writeJMAPUnauthorized(w)
 			return
 		}
 		ctx := auth.ContextWithClaims(r.Context(), claims)
@@ -454,8 +456,7 @@ func requireEventSourceAuth(authenticator *auth.Authenticator, next http.Handler
 		}
 		if err != nil {
 			logRequestWarn(r, "validate event source token", err)
-			w.Header().Set("WWW-Authenticate", `Bearer realm="emissary"`)
-			writeError(w, http.StatusUnauthorized, "authentication required")
+			writeJMAPUnauthorized(w)
 			return
 		}
 		ctx := auth.ContextWithClaims(r.Context(), claims)
@@ -586,9 +587,44 @@ func frontendFileExists(name string) bool {
 	return err == nil && !stat.IsDir()
 }
 
-func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64) {
-	claims := auth.ClaimsFromContext(r.Context())
+// resolveJMAPBaseURLs returns the absolute origins used to expand the JMAP
+// Session's resource templates (RFC 8620 section 2). A configured origin is
+// authoritative; the request-derived fallback keeps local development usable
+// without a public hostname. A deployment with a dedicated streaming endpoint
+// sets configuredEventSource separately (RESOLVED-1).
+func resolveJMAPBaseURLs(r *http.Request, configuredPublic, configuredEventSource string) (public, eventSource string) {
+	public = strings.TrimRight(configuredPublic, "/")
+	if public == "" {
+		scheme := "http"
+		if r != nil {
+			if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+				scheme = strings.TrimSpace(strings.Split(proto, ",")[0])
+			} else if r.TLS != nil {
+				scheme = "https"
+			}
+		}
+		host := "localhost"
+		if r != nil && r.Host != "" {
+			host = r.Host
+		}
+		public = scheme + "://" + host
+	}
+	eventSource = strings.TrimRight(configuredEventSource, "/")
+	if eventSource == "" {
+		eventSource = public
+	}
+	return public, eventSource
+}
+
+// buildJMAPSessionMap constructs the complete RFC 8620 Session object except
+// for its "state" token, which is derived from this map. Keeping construction
+// in one place ensures the envelope's sessionState and the Session resource's
+// state always agree.
+func buildJMAPSessionMap(claims *auth.Claims, maxFileSize int64, publicURL, eventSourceURL string) map[string]any {
 	username := claims.Subject
+	// RFC 8620 section 1.2 requires Ids to use a narrow URL-safe alphabet;
+	// the email stays only in username/name, never as an account identifier.
+	accountID := claims.EffectiveAccountID()
 
 	// RFC 8620 section 2 requires servers to advertise the limits they
 	// enforce. Advertising the configured value keeps clients from sending
@@ -622,7 +658,7 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 	// Session "capabilities" and the account's "accountCapabilities" (RFC 8621
 	// section 1.3.3). Its methods are now implemented, so it is advertised.
 	vacationCapabilities := map[string]any{}
-	session := map[string]any{
+	return map[string]any{
 		"capabilities": map[string]any{
 			jmap.CapabilityCore:             coreCapabilities,
 			jmap.CapabilityMail:             map[string]any{},
@@ -630,7 +666,7 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 			jmap.CapabilityVacationResponse: vacationCapabilities,
 		},
 		"accounts": map[string]any{
-			username: map[string]any{
+			accountID: map[string]any{
 				"name":       username,
 				"isPersonal": true,
 				"isReadOnly": false,
@@ -645,17 +681,35 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 		// RFC 8620: core is a server-wide capability and SHOULD NOT appear
 		// in primaryAccounts.
 		"primaryAccounts": map[string]any{
-			jmap.CapabilityMail:             username,
-			jmap.CapabilitySubmission:       username,
-			jmap.CapabilityVacationResponse: username,
+			jmap.CapabilityMail:             accountID,
+			jmap.CapabilitySubmission:       accountID,
+			jmap.CapabilityVacationResponse: accountID,
 		},
 		"username":       username,
-		"apiUrl":         jmapAPIPath,
-		"downloadUrl":    jmapDownloadURLTemplate,
-		"uploadUrl":      jmapUploadURLTemplate,
-		"eventSourceUrl": jmapEventSourceURLTemplate,
-		"state":          jmapSessionState,
+		"apiUrl":         publicURL + jmapAPIPath,
+		"downloadUrl":    publicURL + jmapDownloadURLTemplate,
+		"uploadUrl":      publicURL + jmapUploadURLTemplate,
+		"eventSourceUrl": eventSourceURL + jmapEventSourceURLTemplate,
 	}
+}
+
+// jmapSessionStateFor returns the RFC 8620 section 2 Session state token for a
+// caller. The token is a deterministic fingerprint of the advertised Session,
+// so all Lambda invocations agree without any shared in-process state.
+func jmapSessionStateFor(claims *auth.Claims, maxFileSize int64, publicURL, eventSourceURL string) string {
+	state, err := jmap.SessionState(buildJMAPSessionMap(claims, maxFileSize, publicURL, eventSourceURL))
+	if err != nil {
+		slog.Error("Compute JMAP Session state", "err", err)
+		return "session-0"
+	}
+	return state
+}
+
+func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64, configuredPublic, configuredEventSource string) {
+	claims := auth.ClaimsFromContext(r.Context())
+	publicURL, eventSourceURL := resolveJMAPBaseURLs(r, configuredPublic, configuredEventSource)
+	session := buildJMAPSessionMap(claims, maxFileSize, publicURL, eventSourceURL)
+	session["state"] = jmapSessionStateFor(claims, maxFileSize, publicURL, eventSourceURL)
 
 	// The Session object reflects per-account state and capabilities; browsers
 	// and proxies must never serve a cached copy in place of a fresh one.
@@ -664,7 +718,7 @@ func handleJMAPSession(w http.ResponseWriter, r *http.Request, maxFileSize int64
 	json.NewEncoder(w).Encode(session)
 }
 
-func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jmap.Dispatcher, maxFileSize int64, pushHub *push.Hub, slots chan struct{}) {
+func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jmap.Dispatcher, maxFileSize int64, pushHub *push.Hub, slots chan struct{}, configuredPublic, configuredEventSource string) {
 	// Enforce the advertised maxConcurrentRequests limit before reading the
 	// body, mirroring the upload semaphore. Rejecting immediately also keeps a
 	// saturated Lambda from buffering more request bodies.
@@ -711,14 +765,14 @@ func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jm
 
 	claims := auth.ClaimsFromContext(r.Context())
 	if claims == nil {
-		writeJMAPProblem(w, http.StatusUnauthorized, "about:blank", "Unauthorized",
-			"Authentication required", "")
+		writeJMAPUnauthorized(w)
 		return
 	}
 
-	// Use the authenticated user's accountId as the default for dispatch
-	// The dispatcher will validate accountId per method call using the claims
-	accountID := claims.Subject
+	// Use the opaque JMAP account id as the default for dispatch. The
+	// dispatcher resolves it to the internal storage account and validates
+	// per-method overrides using the claims.
+	accountID := claims.EffectiveAccountID()
 
 	resp, err := dispatcher.DispatchRequest(r.Context(), accountID, claims, req)
 	if err != nil {
@@ -728,7 +782,8 @@ func handleJMAPAPIRequest(w http.ResponseWriter, r *http.Request, dispatcher *jm
 		return
 	}
 
-	resp.SessionState = jmapSessionState
+	publicURL, eventSourceURL := resolveJMAPBaseURLs(r, configuredPublic, configuredEventSource)
+	resp.SessionState = jmapSessionStateFor(claims, maxFileSize, publicURL, eventSourceURL)
 
 	// Publish before the response is written so a client that immediately opens
 	// an EventSource sees the new state in its snapshot as well.
@@ -759,6 +814,15 @@ func flushPushState(r *http.Request, hub *push.Hub) {
 // using RFC 7807 problem details.
 func writeJMAPRequestError(w http.ResponseWriter, requestErr *jmap.RequestError) {
 	writeJMAPProblem(w, requestErr.Status, requestErr.Type, requestErr.Title, requestErr.Detail, requestErr.Limit)
+}
+
+// writeJMAPUnauthorized renders the RFC 7807 problem details used for every
+// unauthenticated JMAP request (RFC 8620 section 3.6.1). WWW-Authenticate is
+// retained so ordinary HTTP clients still discover bearer authentication.
+func writeJMAPUnauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="emissary"`)
+	writeJMAPProblem(w, http.StatusUnauthorized, "about:blank", "Unauthorized",
+		"Authentication required", "")
 }
 
 // writeJMAPProblem writes an RFC 7807 problem details body with the required
@@ -793,8 +857,9 @@ func writeJMAPLimitError(w http.ResponseWriter, limit string, maxBytes int64) {
 // caller has user-management privileges.
 func handleJMAPUpload(w http.ResponseWriter, r *http.Request, lifecycle *storage.BlobLifecycle, userManager usermanager.UserManager, maxFileSize int64, slots chan struct{}) {
 	claims := auth.ClaimsFromContext(r.Context())
-	accountID := strings.TrimSpace(r.PathValue("accountId"))
-	if status, detail := jmapBinaryAccountError(r.Context(), accountID, claims, userManager); status != 0 {
+	publicAccountID := strings.TrimSpace(r.PathValue("accountId"))
+	accountID, status, detail := resolveJMAPBinaryAccount(r.Context(), publicAccountID, claims, userManager)
+	if status != 0 {
 		writeJMAPProblem(w, status, "about:blank", http.StatusText(status), detail, "")
 		return
 	}
@@ -840,7 +905,7 @@ func handleJMAPUpload(w http.ResponseWriter, r *http.Request, lifecycle *storage
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"accountId": meta.AccountID,
+		"accountId": publicAccountID,
 		"blobId":    meta.ID,
 		"type":      meta.Type,
 		"size":      meta.Size,
@@ -852,8 +917,9 @@ func handleJMAPUpload(w http.ResponseWriter, r *http.Request, lifecycle *storage
 // omitted); name is returned as the Content-Disposition filename.
 func handleJMAPDownload(w http.ResponseWriter, r *http.Request, store storage.BlobStore, userManager usermanager.UserManager) {
 	claims := auth.ClaimsFromContext(r.Context())
-	accountID := strings.TrimSpace(r.PathValue("accountId"))
-	if status, detail := jmapBinaryAccountError(r.Context(), accountID, claims, userManager); status != 0 {
+	publicAccountID := strings.TrimSpace(r.PathValue("accountId"))
+	accountID, status, detail := resolveJMAPBinaryAccount(r.Context(), publicAccountID, claims, userManager)
+	if status != 0 {
 		writeJMAPProblem(w, status, "about:blank", http.StatusText(status), detail, "")
 		return
 	}
@@ -905,24 +971,55 @@ func handleJMAPDownload(w http.ResponseWriter, r *http.Request, store storage.Bl
 
 // jmapBinaryAccountError validates the path-scoped account for both binary
 // endpoints. It returns an HTTP status and detail, or (0, "") when allowed.
-func jmapBinaryAccountError(ctx context.Context, accountID string, claims *auth.Claims, userManager usermanager.UserManager) (int, string) {
-	if claims == nil {
-		return http.StatusUnauthorized, "authentication required"
+// normalizeEventSourceAccount translates the public opaque accountId query
+// parameter into the internal storage account before the push hub sees it.
+func normalizeEventSourceAccount(r *http.Request, userManager usermanager.UserManager) (int, string) {
+	requested := strings.TrimSpace(r.URL.Query().Get("accountId"))
+	if requested == "" {
+		return 0, ""
 	}
-	if accountID == "" {
-		return http.StatusBadRequest, "accountId is required"
-	}
-	if !claims.EmissaryUserManagement && !strings.EqualFold(accountID, claims.Subject) {
-		return http.StatusForbidden, "insufficient permissions"
-	}
-	// A privileged caller may masquerade, but only for an existing account.
-	if !strings.EqualFold(accountID, claims.Subject) && userManager != nil {
-		user, err := userManager.Lookup(ctx, accountID)
-		if err != nil || user == nil {
-			return http.StatusNotFound, "account not found"
+	claims := auth.ClaimsFromContext(r.Context())
+	internal, err := auth.ResolveAccountID(r.Context(), claims, requested, userManager)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrAccountAuthenticationRequired):
+			return http.StatusUnauthorized, err.Error()
+		case errors.Is(err, auth.ErrAccountForbidden):
+			return http.StatusForbidden, err.Error()
+		case errors.Is(err, auth.ErrAccountNotFound):
+			return http.StatusNotFound, err.Error()
+		default:
+			return http.StatusInternalServerError, "could not resolve account"
 		}
 	}
+	query := r.URL.Query()
+	query.Set("accountId", internal)
+	r.URL.RawQuery = query.Encode()
 	return 0, ""
+}
+
+// resolveJMAPBinaryAccount validates the opaque account id on upload/download
+// URLs and returns the internal storage account. Error statuses mirror the JMAP
+// method errors: forbidden for a foreign account and notFound for a masquerade
+// target that does not exist.
+func resolveJMAPBinaryAccount(ctx context.Context, accountID string, claims *auth.Claims, userManager usermanager.UserManager) (string, int, string) {
+	if accountID == "" {
+		return "", http.StatusBadRequest, "accountId is required"
+	}
+	internal, err := auth.ResolveAccountID(ctx, claims, accountID, userManager)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrAccountAuthenticationRequired):
+			return "", http.StatusUnauthorized, err.Error()
+		case errors.Is(err, auth.ErrAccountForbidden):
+			return "", http.StatusForbidden, err.Error()
+		case errors.Is(err, auth.ErrAccountNotFound):
+			return "", http.StatusNotFound, err.Error()
+		default:
+			return "", http.StatusInternalServerError, "could not resolve account"
+		}
+	}
+	return internal, 0, ""
 }
 
 func writeJMAPUploadError(w http.ResponseWriter, r *http.Request, err error, maxFileSize int64) {

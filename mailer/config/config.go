@@ -32,6 +32,17 @@ type ServerConfig struct {
 	JWTExpiry    time.Duration
 	JWTAudience  string
 	JWTIssuer    string
+
+	// JMAPPublicURL is the absolute HTTPS base URL advertised in the JMAP
+	// Session object (RFC 8620 section 2). The apiUrl, downloadUrl, uploadUrl
+	// and eventSourceUrl templates are resolved against it. It must not have
+	// a trailing slash. When empty (local development only), URLs fall back
+	// to the incoming request's origin, so they may use http://.
+	JMAPPublicURL string
+	// JMAPEventSourceURL is the absolute base for the EventSource endpoint.
+	// When empty it defaults to JMAPPublicURL. Deployments with a dedicated
+	// streaming Function URL set this to that endpoint (RESOLVED-1).
+	JMAPEventSourceURL string
 }
 
 // Validate checks that the server configuration is complete and consistent.
@@ -514,12 +525,14 @@ func Load(ctx context.Context) (*Config, error) {
 
 	cfg := &Config{
 		Server: ServerConfig{
-			ListenAddr:  listen,
-			Username:    get("USERNAME"),
-			Password:    get("PASSWORD"),
-			JWTSecret:   get("JWT_SECRET"),
-			JWTAudience: get("JWT_AUDIENCE"),
-			JWTIssuer:   get("JWT_ISSUER"),
+			ListenAddr:         listen,
+			Username:           get("USERNAME"),
+			Password:           get("PASSWORD"),
+			JWTSecret:          get("JWT_SECRET"),
+			JWTAudience:        get("JWT_AUDIENCE"),
+			JWTIssuer:          get("JWT_ISSUER"),
+			JMAPPublicURL:      strings.TrimRight(get("JMAP_PUBLIC_URL"), "/"),
+			JMAPEventSourceURL: strings.TrimRight(get("JMAP_EVENTSOURCE_URL"), "/"),
 		},
 		Storage: StorageConfig{
 			Type:          storageType,

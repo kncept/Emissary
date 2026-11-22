@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/components/sender"
 	"github.com/kncept/Emissary/mailer/components/storage"
 )
@@ -130,6 +132,7 @@ func TestJMAPSessionAdvertisesConfiguredLimits(t *testing.T) {
 	h := newJMAPLimitHandler(t, limit)
 	token := jmapToken(t, h)
 	session := fetchJMAPSession(t, h, token)
+	accountID := auth.AccountIDForEmail("admin")
 
 	// No stubbed or unsupported capability may be advertised to clients.
 	w := request(t, h, http.MethodGet, "/.well-known/jmap", "", token)
@@ -156,7 +159,7 @@ func TestJMAPSessionAdvertisesConfiguredLimits(t *testing.T) {
 
 	for name, core := range map[string]map[string]any{
 		"capabilities":        session.Capabilities.Core,
-		"accountCapabilities": session.Accounts["admin"].AccountCapabilities.Core,
+		"accountCapabilities": session.Accounts[accountID].AccountCapabilities.Core,
 	} {
 		assertCoreCapabilities(t, name, core, limit)
 	}
@@ -170,7 +173,7 @@ func TestJMAPSessionAdvertisesConfiguredLimits(t *testing.T) {
 		t.Errorf("capabilities.submission = %v, want empty object", session.Capabilities.Submission)
 	}
 
-	mail := session.Accounts["admin"].AccountCapabilities.Mail
+	mail := session.Accounts[accountID].AccountCapabilities.Mail
 	wantMail := map[string]any{
 		"maxMailboxesPerEmail":       float64(1),
 		"maxMailboxDepth":            float64(1),
@@ -191,7 +194,7 @@ func TestJMAPSessionAdvertisesConfiguredLimits(t *testing.T) {
 		t.Errorf("accountCapabilities.mail has unexpected keys: %v", mail)
 	}
 
-	submission := session.Accounts["admin"].AccountCapabilities.Submission
+	submission := session.Accounts[accountID].AccountCapabilities.Submission
 	if submission["maxDelayedSend"] != float64(0) {
 		t.Errorf("maxDelayedSend = %v, want 0", submission["maxDelayedSend"])
 	}
@@ -210,7 +213,7 @@ func TestJMAPSessionAdvertisesConfiguredLimits(t *testing.T) {
 	} else if len(session.Capabilities.Vacation) != 0 {
 		t.Errorf("capabilities.vacationresponse = %v, want empty object", session.Capabilities.Vacation)
 	}
-	accountVacation := session.Accounts["admin"].AccountCapabilities.Vacation
+	accountVacation := session.Accounts[accountID].AccountCapabilities.Vacation
 	if accountVacation == nil {
 		t.Error("accountCapabilities is missing vacationresponse")
 	} else if len(accountVacation) != 0 {
@@ -222,8 +225,8 @@ func TestJMAPSessionAdvertisesConfiguredLimits(t *testing.T) {
 		t.Errorf("primaryAccounts must not include core: %v", session.PrimaryAccounts)
 	}
 	for _, capability := range []string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission", "urn:ietf:params:jmap:vacationresponse"} {
-		if session.PrimaryAccounts[capability] != "admin" {
-			t.Errorf("primaryAccounts[%q] = %q, want admin", capability, session.PrimaryAccounts[capability])
+		if session.PrimaryAccounts[capability] != accountID {
+			t.Errorf("primaryAccounts[%q] = %q, want %q", capability, session.PrimaryAccounts[capability], accountID)
 		}
 	}
 
@@ -266,6 +269,52 @@ func assertCoreCapabilities(t *testing.T, name string, core map[string]any, limi
 	}
 }
 
+// TestJMAPSessionURLsAreAbsolute protects RFC 8620 section 2: every Session
+// URL must be an absolute HTTPS URL, and the EventSource URL may use a
+// dedicated streaming origin without changing the API origin.
+func TestJMAPSessionURLsAreAbsolute(t *testing.T) {
+	h, err := newTestHandler(t, handlerTestConfig{
+		AuthUser:           "admin",
+		AuthPass:           "secret",
+		JWTSecret:          "secret",
+		JWTSecretTTL:       time.Hour,
+		UserDomain:         "example.com",
+		JMAPPublicURL:      "https://jmap.example.net/",
+		JMAPEventSourceURL: "https://stream.example.net/",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	token := jmapToken(t, h)
+	session := fetchJMAPSession(t, h, token)
+
+	for name, raw := range map[string]string{
+		"apiUrl":         session.APIURL,
+		"downloadUrl":    session.DownloadURL,
+		"uploadUrl":      session.UploadURL,
+		"eventSourceUrl": session.EventSourceURL,
+	} {
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			t.Errorf("%s = %q is not a valid URL: %v", name, raw, err)
+			continue
+		}
+		if parsed.Scheme != "https" || parsed.Host == "" {
+			t.Errorf("%s = %q, want an absolute https URL", name, raw)
+		}
+	}
+
+	if !strings.HasPrefix(session.APIURL, "https://jmap.example.net/api/jmap/") {
+		t.Errorf("apiUrl = %q, want the configured public origin", session.APIURL)
+	}
+	if !strings.HasPrefix(session.EventSourceURL, "https://stream.example.net/eventsource") {
+		t.Errorf("eventSourceUrl = %q, want the dedicated streaming origin", session.EventSourceURL)
+	}
+	if strings.Contains(session.EventSourceURL, "jmap.example.net") {
+		t.Errorf("eventSourceUrl = %q must not use the REST API origin", session.EventSourceURL)
+	}
+}
+
 func TestJMAPSessionURLTemplatesMatchRoutes(t *testing.T) {
 	const limit = 4096
 	h := newJMAPLimitHandler(t, limit)
@@ -273,10 +322,10 @@ func TestJMAPSessionURLTemplatesMatchRoutes(t *testing.T) {
 	session := fetchJMAPSession(t, h, token)
 
 	wantTemplates := map[string]string{
-		"apiUrl":         "/api/jmap/",
-		"downloadUrl":    "/download/{accountId}/{blobId}/{name}?type={type}",
-		"uploadUrl":      "/upload/{accountId}",
-		"eventSourceUrl": "/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
+		"apiUrl":         testJMAPPublicURL + "/api/jmap/",
+		"downloadUrl":    testJMAPPublicURL + "/download/{accountId}/{blobId}/{name}?type={type}",
+		"uploadUrl":      testJMAPPublicURL + "/upload/{accountId}",
+		"eventSourceUrl": testJMAPPublicURL + "/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
 	}
 	for name, want := range wantTemplates {
 		var got string

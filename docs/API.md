@@ -399,14 +399,16 @@ The administrative support endpoints under `/api/support/` are documented in
 ## `GET /.well-known/jmap`
 
 Returns the JMAP Session object with capabilities, account information,
-and API endpoints:
+and absolute API endpoints. Account identifiers are opaque RFC 8620 `Id`s
+(`acct_` + base64url(SHA-256(email))); the email address appears only in
+`username` and the account's `name`.
 
 ```json
 {
   "capabilities": {
     "urn:ietf:params:jmap:core": {
       "maxSizeUpload": 10485760,
-      "maxConcurrentUpload": 0,
+      "maxConcurrentUpload": 4,
       "maxSizeRequest": 10485760,
       "maxConcurrentRequests": 4,
       "maxCallsInRequest": 16,
@@ -419,14 +421,14 @@ and API endpoints:
     "urn:ietf:params:jmap:vacationresponse": {}
   },
   "accounts": {
-    "user@example.com": {
+    "acct_tMmiiTI7IaAcPpQPFQ65uMVCWH8av9jw4cwf_F5HVRQ": {
       "name": "user@example.com",
       "isPersonal": true,
       "isReadOnly": false,
       "accountCapabilities": {
         "urn:ietf:params:jmap:core": {
           "maxSizeUpload": 10485760,
-          "maxConcurrentUpload": 0,
+          "maxConcurrentUpload": 4,
           "maxSizeRequest": 10485760,
           "maxConcurrentRequests": 4,
           "maxCallsInRequest": 16,
@@ -451,27 +453,34 @@ and API endpoints:
     }
   },
   "primaryAccounts": {
-    "urn:ietf:params:jmap:mail": "user@example.com",
-    "urn:ietf:params:jmap:submission": "user@example.com",
-    "urn:ietf:params:jmap:vacationresponse": "user@example.com"
+    "urn:ietf:params:jmap:mail": "acct_tMmiiTI7IaAcPpQPFQ65uMVCWH8av9jw4cwf_F5HVRQ",
+    "urn:ietf:params:jmap:submission": "acct_tMmiiTI7IaAcPpQPFQ65uMVCWH8av9jw4cwf_F5HVRQ",
+    "urn:ietf:params:jmap:vacationresponse": "acct_tMmiiTI7IaAcPpQPFQ65uMVCWH8av9jw4cwf_F5HVRQ"
   },
   "username": "user@example.com",
-  "apiUrl": "/api/jmap/",
-  "downloadUrl": "/download/{accountId}/{blobId}/{name}?type={type}",
-  "uploadUrl": "/upload/{accountId}",
-  "state": "session-0"
+  "apiUrl": "https://jmap.example.com/api/jmap/",
+  "downloadUrl": "https://jmap.example.com/download/{accountId}/{blobId}/{name}?type={type}",
+  "uploadUrl": "https://jmap.example.com/upload/{accountId}",
+  "eventSourceUrl": "https://jmap.example.com/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
+  "state": "s-8Kf3pQ1vZx7LmT2nR9wYb4"
 }
 ```
 
+The `state` value is an opaque fingerprint of the Session properties. It is
+stable for a given configuration (including across Lambda cold starts) and
+changes whenever a capability, limit, URL, account or username changes.
+
 The size limits above come from `MAX_FILESIZE` (10 MiB by default). The
-remaining limits describe the current server: binary upload is not
-implemented (`maxConcurrentUpload: 0`), mailboxes are persisted but only
-top-level mailboxes are supported (`maxMailboxDepth: 1`), each email is in a
-single mailbox (`maxMailboxesPerEmail: 1`), only `receivedAt` sorting is
-supported, delayed send is not supported, and `i;ascii-casemap` is the
-advertised RFC 4790 collation algorithm. The VacationResponse capability is advertised and
-its singleton settings are persisted in the account's `user.json` record;
-automatic replies follow RFC 3834 loop-prevention rules.
+remaining limits describe the current server: up to four concurrent uploads
+and requests are accepted, mailboxes are persisted but only top-level
+mailboxes are supported (`maxMailboxDepth: 1`), each email is in a single
+mailbox (`maxMailboxesPerEmail: 1`), only `receivedAt` sorting is supported,
+delayed send is not supported, and `i;ascii-casemap` is the advertised RFC
+4790 collation algorithm. The `eventSourceUrl` may use a separate streaming
+origin via `JMAP_EVENTSOURCE_URL`; all other templates use `JMAP_PUBLIC_URL`.
+The VacationResponse capability is advertised and its singleton settings are
+persisted in the account's `user.json` record; automatic replies follow RFC
+3834 loop-prevention rules.
 
 ## `POST /api/jmap/` (JMAP Batch Request)
 

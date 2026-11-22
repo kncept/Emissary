@@ -114,7 +114,7 @@ func (h *Handler) BlobCopy(ctx context.Context, accountID string, args json.RawM
 	// RFC 8620 section 5.4 requires the destination of a copy to differ from
 	// its source. Without this check, onSuccessDestroyOriginal would delete
 	// the only copy while still reporting success.
-	if strings.EqualFold(req.FromAccountID, req.AccountID) {
+	if req.FromAccountID == req.AccountID {
 		return nil, base.Errorf("invalidArguments", "fromAccountId and accountId must be different")
 	}
 

@@ -345,10 +345,11 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 			continue
 		}
 
-		// Extract accountId from method arguments, falling back to the
-		// authenticated default. An explicitly malformed id is an error rather
-		// than a silently ignored argument.
-		accountID := defaultAccountID
+		// Extract the public, opaque accountId from method arguments, falling
+		// back to the authenticated default. Convert it to the internal
+		// storage account only after authorisation; method handlers continue
+		// to see the email-shaped storage key.
+		publicAccountID := defaultAccountID
 		if call.Arguments != nil {
 			if accountIDRaw, ok := call.Arguments["accountId"]; ok {
 				var extracted string
@@ -357,25 +358,35 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 					appendMethodResponse(&responses, responsesByID, createdIDs, resp)
 					continue
 				}
-				accountID = extracted
+				publicAccountID = extracted
 			}
 		}
-
-		// Keep the masquerade policy intact: ordinary callers may only reach
-		// their own account. A manager may reach another account, but only when
-		// that account actually exists.
-		if claims != nil && !claims.EmissaryUserManagement && !strings.EqualFold(accountID, claims.Subject) {
-			slog.Warn("JMAP: forbidden account access", "method", call.Name, "account", accountID)
-			resp := d.errorResponse(call, fmt.Errorf("forbidden: insufficient permissions to access account %s", accountID))
+		accountID, err := auth.ResolveAccountID(ctx, claims, publicAccountID, d.userMgr)
+		if err != nil {
+			slog.Warn("JMAP: account resolution failed", "method", call.Name, "account", publicAccountID, "err", err)
+			resp := d.errorResponse(call, fmt.Errorf("%s", jmapAccountError(err)))
 			appendMethodResponse(&responses, responsesByID, createdIDs, resp)
 			continue
 		}
-		if claims != nil && claims.EmissaryUserManagement && !strings.EqualFold(accountID, claims.Subject) && d.userMgr != nil {
-			user, err := d.userMgr.Lookup(ctx, accountID)
-			if err != nil || user == nil {
-				resp := d.errorResponse(call, fmt.Errorf("accountNotFound: account %s does not exist", accountID))
-				appendMethodResponse(&responses, responsesByID, createdIDs, resp)
-				continue
+		setStringArgument(call.Arguments, "accountId", accountID)
+
+		// Blob/copy's fromAccountId is method-specific, so the dispatcher must
+		// authorise and translate it as well.
+		if call.Arguments != nil {
+			if raw, ok := call.Arguments["fromAccountId"]; ok {
+				var fromAccountID string
+				if err := json.Unmarshal(raw, &fromAccountID); err != nil || fromAccountID == "" {
+					resp := d.errorResponse(call, fmt.Errorf("invalidArguments: fromAccountId must be a non-empty string"))
+					appendMethodResponse(&responses, responsesByID, createdIDs, resp)
+					continue
+				}
+				internalFrom, err := auth.ResolveAccountID(ctx, claims, fromAccountID, d.userMgr)
+				if err != nil {
+					resp := d.errorResponse(call, fmt.Errorf("%s", jmapAccountError(err)))
+					appendMethodResponse(&responses, responsesByID, createdIDs, resp)
+					continue
+				}
+				setStringArgument(call.Arguments, "fromAccountId", internalFrom)
 			}
 		}
 		if knownMethod {
@@ -412,6 +423,7 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 		response.CreatedIDs = createdIDs
 		response.includeCreatedIDs = true
 	}
+	externalizeAccountIDs(response)
 	return response, nil
 }
 
@@ -599,6 +611,55 @@ func (d *Dispatcher) resultInvocation(methodName, clientID string, result json.R
 
 func (d *Dispatcher) errorResponse(call Invocation, err error) Invocation {
 	return d.errorResponseFromError(call.Name, call.ClientID, err)
+}
+
+// jmapAccountError converts a resolved-account failure into the RFC 8620
+// method error type clients expect.
+func jmapAccountError(err error) string {
+	switch {
+	case errors.Is(err, auth.ErrAccountForbidden), errors.Is(err, auth.ErrAccountAuthenticationRequired):
+		return "forbidden: " + err.Error()
+	case errors.Is(err, auth.ErrAccountNotFound):
+		return "accountNotFound: " + err.Error()
+	default:
+		return "serverFail: " + err.Error()
+	}
+}
+
+// setStringArgument replaces a JSON string argument in place. It is used to
+// swap public opaque account ids for the internal storage account before a
+// method handler runs.
+func setStringArgument(args map[string]json.RawMessage, key, value string) {
+	if args == nil {
+		return
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	args[key] = encoded
+}
+
+// externalizeAccountIDs rewrites internal (email-shaped) account ids in method
+// responses back to the opaque identifiers advertised by the Session.
+func externalizeAccountIDs(resp *Response) {
+	if resp == nil {
+		return
+	}
+	for i := range resp.MethodResponses {
+		args := resp.MethodResponses[i].Arguments
+		for _, key := range []string{"accountId", "fromAccountId"} {
+			raw, ok := args[key]
+			if !ok {
+				continue
+			}
+			var value string
+			if err := json.Unmarshal(raw, &value); err != nil || !strings.Contains(value, "@") {
+				continue
+			}
+			setStringArgument(args, key, auth.AccountIDForEmail(value))
+		}
+	}
 }
 
 // jmapErrorTypes is the set of method-level error types the dispatcher emits.
