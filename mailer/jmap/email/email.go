@@ -52,6 +52,11 @@ func New(deps *base.Deps) *Handler { return &Handler{deps: deps} }
 // shared filter parser in helpers.go; unknown conditions are rejected rather
 // than silently matching everything.
 type EmailFilter struct {
+	// Operator and Conditions form an RFC 8620 section 5.5 FilterOperator.
+	// A leaf FilterCondition leaves both empty.
+	Operator   string         `json:"operator,omitempty"`
+	Conditions []*EmailFilter `json:"conditions,omitempty"`
+
 	InMailbox          *string  `json:"inMailbox,omitempty"`
 	InMailboxOtherThan []string `json:"inMailboxOtherThan,omitempty"`
 	Before             *string  `json:"before,omitempty"`
@@ -65,6 +70,7 @@ type EmailFilter struct {
 	AllInThreadHaveKeyword  *string `json:"allInThreadHaveKeyword,omitempty"`
 	SomeInThreadHaveKeyword *string `json:"someInThreadHaveKeyword,omitempty"`
 	NoneInThreadHaveKeyword *string `json:"noneInThreadHaveKeyword,omitempty"`
+	ThreadID                *string `json:"threadId,omitempty"`
 	HasAttachment           *bool   `json:"hasAttachment,omitempty"`
 	Text                    *string `json:"text,omitempty"`
 	From                    *string `json:"from,omitempty"`
@@ -73,6 +79,8 @@ type EmailFilter struct {
 	Bcc                     *string `json:"bcc,omitempty"`
 	Subject                 *string `json:"subject,omitempty"`
 	Body                    *string `json:"body,omitempty"`
+	// Header is the RFC 8621 header condition: [name] or [name, value].
+	Header []string `json:"header,omitempty"`
 
 	// before/after are parsed once by parseEmailFilter so a malformed date is
 	// an invalidArguments error rather than a silently skipped condition.
@@ -81,19 +89,23 @@ type EmailFilter struct {
 }
 
 // supportedEmailFilterFields is the allow-list used to reject filter
-// conditions that are declared by RFC 8621 but not implemented here.
+// conditions that are not declared by RFC 8621 section 4.4.1. operator and
+// conditions are valid only in a FilterOperator, enforced by the parser.
 var supportedEmailFilterFields = map[string]bool{
+	"operator":                true,
+	"conditions":              true,
 	"inMailbox":               true,
 	"inMailboxOtherThan":      true,
 	"before":                  true,
 	"after":                   true,
 	"minSize":                 true,
 	"maxSize":                 true,
-	"hasKeyword":              true,
-	"notKeyword":              true,
 	"allInThreadHaveKeyword":  true,
 	"someInThreadHaveKeyword": true,
 	"noneInThreadHaveKeyword": true,
+	"hasKeyword":              true,
+	"notKeyword":              true,
+	"threadId":                true,
 	"hasAttachment":           true,
 	"text":                    true,
 	"from":                    true,
@@ -102,6 +114,7 @@ var supportedEmailFilterFields = map[string]bool{
 	"bcc":                     true,
 	"subject":                 true,
 	"body":                    true,
+	"header":                  true,
 }
 
 // JMAPEmail represents a JMAP Email object. RFC 8621 section 1.1 requires a

@@ -57,20 +57,20 @@ func TestJMAPArgumentsRejected(t *testing.T) {
 			want: "unsupportedSort",
 		},
 		{
-			name: "email compound filter",
+			name: "email lowercase operator",
 			call: func() error {
 				_, err := h.EmailQuery(ctx, accountID, json.RawMessage(`{"filter":{"operator":"or","conditions":[{},{}]}}`))
 				return err
 			},
-			want: "unsupportedFilter",
+			want: "invalidArguments",
 		},
 		{
-			name: "email unsupported filter condition",
+			name: "email header must be a string array",
 			call: func() error {
 				_, err := h.EmailQuery(ctx, accountID, json.RawMessage(`{"filter":{"header":[{"name":"X","value":"y"}]}}`))
 				return err
 			},
-			want: "unsupportedFilter",
+			want: "invalidArguments",
 		},
 		{
 			name: "email invalid before date",
@@ -81,28 +81,12 @@ func TestJMAPArgumentsRejected(t *testing.T) {
 			want: "invalidArguments",
 		},
 		{
-			name: "email collapseThreads",
-			call: func() error {
-				_, err := h.EmailQuery(ctx, accountID, json.RawMessage(`{"collapseThreads":true}`))
-				return err
-			},
-			want: "unsupportedFilter",
-		},
-		{
 			name: "email anchor not found",
 			call: func() error {
 				_, err := h.EmailQuery(ctx, accountID, json.RawMessage(`{"anchor":"missing-id"}`))
 				return err
 			},
 			want: "anchorNotFound",
-		},
-		{
-			name: "email queryChanges collapseThreads",
-			call: func() error {
-				_, err := h.EmailQueryChanges(ctx, accountID, json.RawMessage(`{"sinceQueryState":"s","collapseThreads":true}`))
-				return err
-			},
-			want: "unsupportedFilter",
 		},
 		{
 			name: "mailbox sort on unsupported property",

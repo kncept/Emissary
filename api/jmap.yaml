@@ -1581,6 +1581,8 @@ components:
           type: string
         notKeyword:
           type: string
+        threadId:
+          $ref: '#/components/schemas/Id'
         hasAttachment:
           type: boolean
         text:

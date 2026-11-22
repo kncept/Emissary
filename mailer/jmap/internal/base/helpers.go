@@ -312,7 +312,7 @@ func ReceivedAtFromMetadata(meta metadata.EmailMetadata, fallback time.Time) tim
 // QueryKey derives a short, stable signature from a query's filter and sort
 // arguments. Query state tokens are scoped to this key so two queries with
 // different result sets can maintain independent counters.
-func QueryKey(filter, sort any) (string, error) {
+func QueryKey(filter, sort any, extra ...any) (string, error) {
 	if filter == nil {
 		filter = map[string]any{}
 	}
@@ -320,9 +320,10 @@ func QueryKey(filter, sort any) (string, error) {
 		sort = []any{}
 	}
 	data, err := json.Marshal(struct {
-		Filter any `json:"filter"`
-		Sort   any `json:"sort"`
-	}{Filter: filter, Sort: sort})
+		Filter any   `json:"filter"`
+		Sort   any   `json:"sort"`
+		Extra  []any `json:"extra,omitempty"`
+	}{Filter: filter, Sort: sort, Extra: extra})
 	if err != nil {
 		return "", fmt.Errorf("encode query key: %w", err)
 	}

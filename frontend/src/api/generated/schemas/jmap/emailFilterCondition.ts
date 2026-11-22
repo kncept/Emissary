@@ -65,6 +65,7 @@ export interface EmailFilterCondition {
   noneInThreadHaveKeyword?: string;
   hasKeyword?: string;
   notKeyword?: string;
+  threadId?: Id;
   hasAttachment?: boolean;
   text?: string;
   from?: string;

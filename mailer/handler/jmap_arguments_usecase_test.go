@@ -55,7 +55,7 @@ func TestJMAPArgumentsUseCase_UnsupportedRejected(t *testing.T) {
 			method: "Email/query",
 			args: map[string]interface{}{
 				"accountId": accountID,
-				"filter":    map[string]interface{}{"operator": "or", "conditions": []interface{}{}},
+				"filter":    map[string]interface{}{"unsupportedCondition": "x"},
 			},
 			wantErr: "unsupportedFilter",
 		},

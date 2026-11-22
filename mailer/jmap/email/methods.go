@@ -494,37 +494,41 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 // queryEmailIDs returns the full ordered result set for a query, before
 // pagination. Both Email/query and Email/queryChanges use it so a queryState
 // token always describes the same result set.
-func (h *Handler) queryEmailIDs(ctx context.Context, accountID string, filter *EmailFilter, ascending bool) ([]string, error) {
+func (h *Handler) queryEmailIDs(ctx context.Context, accountID string, filter *EmailFilter, ascending,
+	collapseThreads bool) ([]string, error) {
 	mailboxID := ""
-	if filter != nil && filter.InMailbox != nil && !usesThreadKeywords(filter) {
+	if filter != nil && filter.InMailbox != nil && !FilterNeedsThreadContext(filter) {
 		mailboxID = *filter.InMailbox
 	}
 	emails, err := h.deps.Storage.ListEmails(ctx, accountID, mailboxID)
 	if err != nil {
 		return nil, err
 	}
-
-	// Thread-scoped conditions need the account-wide grouping even when the
-	// query is restricted to one mailbox, so build it from every stored email
-	// and let matchesFilter apply inMailbox as usual.
-	var threads *threadKeywordContext
-	if usesThreadKeywords(filter) {
-		threads, err = newThreadKeywordContext(ctx, h.deps, accountID, emails)
+	contextEmails := emails
+	if FilterNeedsThreadContext(filter) || collapseThreads {
+		// Thread membership and collapseThreads are account-wide, so a mailbox
+		// prefix would produce incomplete groups.
+		contextEmails, err = h.deps.Storage.ListEmails(ctx, accountID, "")
 		if err != nil {
 			return nil, err
 		}
 	}
+	filterContext, err := NewFilterContext(ctx, h.deps, accountID, contextEmails)
+	if err != nil {
+		return nil, err
+	}
 
 	filtered := make([]*mailemail.ListedEmail, 0, len(emails))
 	for _, e := range emails {
-		if h.matchesFilter(ctx, e, filter, threads) {
+		if filterContext.Matches(ctx, e, filter) {
 			filtered = append(filtered, e)
 		}
 	}
 
 	received := make(map[string]time.Time, len(filtered))
 	for _, e := range filtered {
-		received[e.Ref.ID] = base.ReceivedAtFromMetadata(base.EmailMetadata(ctx, h.deps, accountID, e.Ref.ID), e.Email.Date)
+		received[e.Ref.ID] = base.ReceivedAtFromMetadata(
+			base.EmailMetadata(ctx, h.deps, accountID, e.Ref.ID), e.Email.Date)
 	}
 	sort.SliceStable(filtered, func(i, j int) bool {
 		left, right := received[filtered[i].Ref.ID], received[filtered[j].Ref.ID]
@@ -536,6 +540,20 @@ func (h *Handler) queryEmailIDs(ctx context.Context, accountID string, filter *E
 		}
 		return left.After(right)
 	})
+
+	if collapseThreads {
+		seen := make(map[string]bool, len(filtered))
+		collapsed := filtered[:0]
+		for _, e := range filtered {
+			threadID := filterContext.threadIDs[e.Ref.ID]
+			if seen[threadID] {
+				continue
+			}
+			seen[threadID] = true
+			collapsed = append(collapsed, e)
+		}
+		filtered = collapsed
+	}
 
 	ids := make([]string, len(filtered))
 	for i, e := range filtered {
@@ -565,16 +583,30 @@ func (h *Handler) querySpec() base.QuerySpec {
 			if err := json.Unmarshal(args, &req); err != nil {
 				return base.Errorf("invalidArguments", "query arguments must be an object")
 			}
-			// Threads are not collapsed by the underlying store; rejecting is
-			// preferable to returning a result set with duplicate threads.
-			if req.CollapseThreads != nil && *req.CollapseThreads {
-				return base.Errorf("unsupportedFilter", "collapseThreads is not supported")
-			}
 			return nil
 		},
-		AllIDs: func(ctx context.Context, accountID string, _ json.RawMessage, filter any, ascending bool) ([]string, error) {
+		ImmutableQuery: func(filter any, sort []interface{}) bool {
 			typed, _ := filter.(*EmailFilter)
-			return h.queryEmailIDs(ctx, accountID, typed, ascending)
+			if len(sort) > 1 {
+				return false
+			}
+			if len(sort) == 1 {
+				comparator, _ := sort[0].(map[string]interface{})
+				if comparator["property"] != "receivedAt" {
+					return false
+				}
+			}
+			return ImmutableEmailFilter(typed)
+		},
+		AllIDs: func(ctx context.Context, accountID string, args json.RawMessage, filter any, ascending bool) ([]string, error) {
+			var req struct {
+				CollapseThreads *bool `json:"collapseThreads"`
+			}
+			if err := json.Unmarshal(args, &req); err != nil {
+				return nil, base.Errorf("invalidArguments", "query arguments must be an object")
+			}
+			typed, _ := filter.(*EmailFilter)
+			return h.queryEmailIDs(ctx, accountID, typed, ascending, req.CollapseThreads != nil && *req.CollapseThreads)
 		},
 		Tracker: h.deps.Changes,
 		Kind:    base.StateEmailQuery,

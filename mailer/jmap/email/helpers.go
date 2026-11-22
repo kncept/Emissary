@@ -414,14 +414,17 @@ func (m *JMAPEmail) hydrateWithRaw(raw []byte, fallback *mailemail.UserEmail) {
 	}
 }
 
+// ParseEmailFilter decodes an Email/query (or SearchSnippet/get) filter
+// argument. It is exported so SearchSnippet uses exactly the same grammar and
+// error types as Email/query.
+func ParseEmailFilter(args json.RawMessage) (*EmailFilter, error) {
+	return parseEmailFilter(args)
+}
+
 // parseEmailFilter validates the raw filter argument before it is decoded.
-// Compound conditions and unsupported conditions would otherwise decode into
-// an empty filter that matches every email, and malformed UTCDates would be
-// silently skipped.
+// Unknown conditions and malformed operator objects would otherwise decode
+// into an empty filter that matches every email.
 func parseEmailFilter(args json.RawMessage) (*EmailFilter, error) {
-	if err := base.ValidateConditionObject(args, "filter", supportedEmailFilterFields); err != nil {
-		return nil, err
-	}
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(args, &envelope); err != nil {
 		return nil, base.Errorf("invalidArguments", "arguments must be an object")
@@ -430,8 +433,58 @@ func parseEmailFilter(args json.RawMessage) (*EmailFilter, error) {
 	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return nil, nil
 	}
-	var filter EmailFilter
-	if err := json.Unmarshal(raw, &filter); err != nil {
+	return parseEmailCondition(raw)
+}
+
+func parseEmailCondition(raw json.RawMessage) (*EmailFilter, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, base.Errorf("invalidArguments", "filter must be an object")
+	}
+	for name := range fields {
+		if !supportedEmailFilterFields[name] {
+			return nil, base.Errorf("unsupportedFilter", "unsupported filter condition %q", name)
+		}
+	}
+
+	filter := &EmailFilter{}
+	if rawOperator, isOperator := fields["operator"]; isOperator {
+		var operator string
+		if err := json.Unmarshal(rawOperator, &operator); err != nil {
+			return nil, base.Errorf("invalidArguments", "operator must be a string")
+		}
+		switch operator {
+		case "AND", "OR", "NOT":
+		default:
+			return nil, base.Errorf("invalidArguments", "operator must be AND, OR or NOT")
+		}
+		rawConditions, present := fields["conditions"]
+		if !present {
+			return nil, base.Errorf("invalidArguments", "operator requires conditions")
+		}
+		var conditions []json.RawMessage
+		if err := json.Unmarshal(rawConditions, &conditions); err != nil || len(conditions) == 0 {
+			return nil, base.Errorf("invalidArguments", "conditions must be a non-empty array")
+		}
+		for name := range fields {
+			if name != "operator" && name != "conditions" {
+				return nil, base.Errorf("invalidArguments", "FilterOperator cannot include leaf condition %q", name)
+			}
+		}
+		filter.Operator = operator
+		for _, condition := range conditions {
+			child, err := parseEmailCondition(condition)
+			if err != nil {
+				return nil, err
+			}
+			filter.Conditions = append(filter.Conditions, child)
+		}
+		return filter, nil
+	}
+	if _, present := fields["conditions"]; present {
+		return nil, base.Errorf("invalidArguments", "conditions requires an operator")
+	}
+	if err := json.Unmarshal(raw, filter); err != nil {
 		return nil, base.Errorf("invalidArguments", "filter must be a condition object")
 	}
 	if filter.Before != nil {
@@ -454,7 +507,13 @@ func parseEmailFilter(args json.RawMessage) (*EmailFilter, error) {
 	if filter.MaxSize != nil && *filter.MaxSize < 0 {
 		return nil, base.RejectArgument("maxSize", "must not be negative")
 	}
-	return &filter, nil
+	if filter.Header != nil && len(filter.Header) < 1 || filter.Header != nil && len(filter.Header) > 2 {
+		return nil, base.RejectArgument("header", "must contain one or two strings")
+	}
+	if len(filter.Header) == 1 && strings.TrimSpace(filter.Header[0]) == "" {
+		return nil, base.RejectArgument("header", "header name must not be empty")
+	}
+	return filter, nil
 }
 
 func addressesMatch(addresses []mailemail.Address, text string) bool {
@@ -466,50 +525,105 @@ func addressesMatch(addresses []mailemail.Address, text string) bool {
 	return false
 }
 
-// threadKeywordContext caches account-wide thread membership and per-email
-// metadata for the duration of one query.
-type threadKeywordContext struct {
+// FilterContext precomputes the account-wide data needed by RFC 8621 filter
+// conditions: thread membership, per-email metadata and one MIME parse per
+// email. It is shared by Email/query and SearchSnippet/get.
+type FilterContext struct {
+	deps      *base.Deps
+	accountID string
 	threadIDs map[string]string
 	members   map[string][]string
 	metadata  map[string]metadata.EmailMetadata
+	listed    map[string]*mailemail.ListedEmail
+	wire      map[string]*wireView
+	sizes     map[string]int64
 }
 
-func usesThreadKeywords(filter *EmailFilter) bool {
-	return filter != nil && (filter.AllInThreadHaveKeyword != nil ||
-		filter.SomeInThreadHaveKeyword != nil || filter.NoneInThreadHaveKeyword != nil)
-}
-
-func newThreadKeywordContext(ctx context.Context, deps *base.Deps, accountID string,
-	emails []*mailemail.ListedEmail) (*threadKeywordContext, error) {
+// NewFilterContext builds the caches for one filter evaluation request.
+func NewFilterContext(ctx context.Context, deps *base.Deps, accountID string,
+	emails []*mailemail.ListedEmail) (*FilterContext, error) {
 	groups, threadIDs, err := base.GroupThreads(ctx, deps, accountID, emails)
 	if err != nil {
 		return nil, err
 	}
-	context := &threadKeywordContext{
+	context := &FilterContext{
+		deps:      deps,
+		accountID: accountID,
 		threadIDs: threadIDs,
 		members:   make(map[string][]string, len(groups)),
 		metadata:  make(map[string]metadata.EmailMetadata, len(emails)),
+		listed:    make(map[string]*mailemail.ListedEmail, len(emails)),
+		wire:      make(map[string]*wireView, len(emails)),
+		sizes:     make(map[string]int64, len(emails)),
 	}
 	for _, group := range groups {
 		context.members[group.ID] = group.EmailIDs
-		for _, id := range group.EmailIDs {
-			context.metadata[id] = base.EmailMetadata(ctx, deps, accountID, id)
+	}
+	for _, email := range emails {
+		if email == nil || email.Ref == nil || email.Email == nil {
+			continue
 		}
+		context.listed[email.Ref.ID] = email
+		context.metadata[email.Ref.ID] = base.EmailMetadata(ctx, deps, accountID, email.Ref.ID)
 	}
 	return context, nil
 }
 
-func (c *threadKeywordContext) hasKeyword(emailID, keyword string) bool {
-	if c == nil {
-		return false
+func (c *FilterContext) wireFor(ctx context.Context, listed *mailemail.ListedEmail) *wireView {
+	id := listed.Ref.ID
+	if view, ok := c.wire[id]; ok {
+		return view
 	}
+	var raw []byte
+	if c.deps != nil && c.deps.Storage != nil {
+		stored, err := c.deps.Storage.GetEmailRaw(ctx, listed.Ref.AccountID, id)
+		if err == nil {
+			raw = stored
+		}
+	}
+	if len(raw) == 0 {
+		raw = mailemail.RawFromUserEmail(listed.Email)
+	}
+	c.sizes[id] = int64(len(raw))
+	view := newWireView(id, raw)
+	c.wire[id] = view
+	return view
+}
+
+func (c *FilterContext) hasKeyword(emailID, keyword string) bool {
 	return c.metadata[emailID].HasKeyword(keyword)
 }
 
-func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEmail, filter *EmailFilter,
-	threads *threadKeywordContext) bool {
+// Matches evaluates a FilterCondition or FilterOperator against one email.
+func (c *FilterContext) Matches(ctx context.Context, listed *mailemail.ListedEmail, filter *EmailFilter) bool {
 	if filter == nil {
 		return true
+	}
+	switch filter.Operator {
+	case "AND":
+		for _, child := range filter.Conditions {
+			if !c.Matches(ctx, listed, child) {
+				return false
+			}
+		}
+		return true
+	case "OR":
+		for _, child := range filter.Conditions {
+			if c.Matches(ctx, listed, child) {
+				return true
+			}
+		}
+		return false
+	case "NOT":
+		for _, child := range filter.Conditions {
+			if c.Matches(ctx, listed, child) {
+				return false
+			}
+		}
+		return true
+	}
+	if listed == nil || listed.Ref == nil || listed.Email == nil {
+		return false
 	}
 	e := listed.Email
 	mailboxID := listed.Ref.MailboxID
@@ -526,8 +640,7 @@ func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEma
 	}
 
 	if filter.beforeTime != nil || filter.afterTime != nil {
-		receivedAt := base.ReceivedAtFromMetadata(
-			base.EmailMetadata(ctx, h.deps, listed.Ref.AccountID, listed.Ref.ID), e.Date)
+		receivedAt := base.ReceivedAtFromMetadata(c.metadata[listed.Ref.ID], e.Date)
 		if filter.beforeTime != nil && !receivedAt.Before(*filter.beforeTime) {
 			return false
 		}
@@ -539,12 +652,14 @@ func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEma
 
 	// JMAP size is the length of the stored RFC 5322 message, not the
 	// convenience length on the parsed UserEmail.
-	emailSize := e.Size
+	emailSize := int64(e.Size)
 	has := false
-	if filter.MinSize != nil || filter.MaxSize != nil || filter.HasAttachment != nil {
-		if raw, err := h.deps.Storage.GetEmailRaw(ctx, listed.Ref.AccountID, listed.Ref.ID); err == nil {
-			emailSize = int64(len(raw))
-			has = len(newWireView(listed.Ref.ID, raw).attached) > 0
+	if filter.MinSize != nil || filter.MaxSize != nil || filter.HasAttachment != nil || len(filter.Header) > 0 {
+		view := c.wireFor(ctx, listed)
+		emailSize = c.sizes[listed.Ref.ID]
+		has = len(view.attached) > 0
+		if len(filter.Header) > 0 && !headersMatch(view.headers, filter.Header) {
+			return false
 		}
 	}
 	if filter.MinSize != nil && emailSize < int64(*filter.MinSize) {
@@ -558,27 +673,24 @@ func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEma
 		return false
 	}
 
-	if filter.HasKeyword != nil || filter.NotKeyword != nil {
-		keywords := base.EmailMetadata(ctx, h.deps, listed.Ref.AccountID, listed.Ref.ID).Keywords
-		if filter.HasKeyword != nil && !keywords[*filter.HasKeyword] {
-			return false
-		}
-		if filter.NotKeyword != nil && keywords[*filter.NotKeyword] {
-			return false
-		}
+	if filter.HasKeyword != nil && !c.hasKeyword(listed.Ref.ID, *filter.HasKeyword) {
+		return false
 	}
-	if usesThreadKeywords(filter) {
-		if threads == nil {
-			return false
-		}
-		threadID := threads.threadIDs[listed.Ref.ID]
-		members := threads.members[threadID]
+	if filter.NotKeyword != nil && c.hasKeyword(listed.Ref.ID, *filter.NotKeyword) {
+		return false
+	}
+	if filter.ThreadID != nil && c.threadIDs[listed.Ref.ID] != *filter.ThreadID {
+		return false
+	}
+	if filter.AllInThreadHaveKeyword != nil || filter.SomeInThreadHaveKeyword != nil ||
+		filter.NoneInThreadHaveKeyword != nil {
+		members := c.members[c.threadIDs[listed.Ref.ID]]
 		if len(members) == 0 {
 			return false
 		}
 		if filter.AllInThreadHaveKeyword != nil {
 			for _, id := range members {
-				if !threads.hasKeyword(id, *filter.AllInThreadHaveKeyword) {
+				if !c.hasKeyword(id, *filter.AllInThreadHaveKeyword) {
 					return false
 				}
 			}
@@ -586,7 +698,7 @@ func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEma
 		if filter.SomeInThreadHaveKeyword != nil {
 			found := false
 			for _, id := range members {
-				if threads.hasKeyword(id, *filter.SomeInThreadHaveKeyword) {
+				if c.hasKeyword(id, *filter.SomeInThreadHaveKeyword) {
 					found = true
 					break
 				}
@@ -597,7 +709,7 @@ func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEma
 		}
 		if filter.NoneInThreadHaveKeyword != nil {
 			for _, id := range members {
-				if threads.hasKeyword(id, *filter.NoneInThreadHaveKeyword) {
+				if c.hasKeyword(id, *filter.NoneInThreadHaveKeyword) {
 					return false
 				}
 			}
@@ -641,6 +753,73 @@ func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEma
 		}
 	}
 	return true
+}
+
+// headersMatch implements RFC 8621 section 4.4.1's header condition: one
+// element checks header presence, two check a case-insensitive value substring.
+func headersMatch(headers []EmailHeader, condition []string) bool {
+	name := strings.ToLower(strings.TrimSpace(condition[0]))
+	value := ""
+	if len(condition) == 2 {
+		value = strings.ToLower(condition[1])
+	}
+	for _, header := range headers {
+		if !strings.EqualFold(strings.TrimSpace(header.Name), name) {
+			continue
+		}
+		if len(condition) == 1 {
+			return true
+		}
+		if strings.Contains(strings.ToLower(mailemail.DecodeHeader(header.Value)), value) {
+			return true
+		}
+	}
+	return false
+}
+
+// ImmutableEmailFilter reports whether a filter depends only on properties
+// that never change after creation. It gates the upToId optimisation allowed
+// by RFC 8620 section 5.6.
+func ImmutableEmailFilter(filter *EmailFilter) bool {
+	if filter == nil {
+		return true
+	}
+	if filter.Operator != "" {
+		if filter.Operator != "AND" && filter.Operator != "OR" && filter.Operator != "NOT" {
+			return false
+		}
+		for _, child := range filter.Conditions {
+			if !ImmutableEmailFilter(child) {
+				return false
+			}
+		}
+		return true
+	}
+	// Mailbox ids, keywords and thread ids can change during an account's
+	// lifetime; date, size, attachment, address, subject, body and header
+	// conditions are derived from immutable message content.
+	return filter.InMailbox == nil && len(filter.InMailboxOtherThan) == 0 &&
+		filter.HasKeyword == nil && filter.NotKeyword == nil &&
+		filter.AllInThreadHaveKeyword == nil && filter.SomeInThreadHaveKeyword == nil &&
+		filter.NoneInThreadHaveKeyword == nil && filter.ThreadID == nil
+}
+
+// FilterNeedsThreadContext reports whether filter evaluation requires
+// account-wide thread membership rather than only the queried mailbox.
+func FilterNeedsThreadContext(filter *EmailFilter) bool {
+	if filter == nil {
+		return false
+	}
+	if filter.Operator != "" {
+		for _, child := range filter.Conditions {
+			if FilterNeedsThreadContext(child) {
+				return true
+			}
+		}
+		return false
+	}
+	return filter.AllInThreadHaveKeyword != nil || filter.SomeInThreadHaveKeyword != nil ||
+		filter.NoneInThreadHaveKeyword != nil || filter.ThreadID != nil
 }
 
 // emailInAccount verifies that id belongs to accountID. Drafts use ids that

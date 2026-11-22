@@ -193,47 +193,52 @@ type QuerySpec struct {
 	AllIDs func(ctx context.Context, accountID string, args json.RawMessage, filter any, ascending bool) ([]string, error)
 	// Extra validates type-specific arguments such as collapseThreads.
 	Extra func(args json.RawMessage) error
+	// ImmutableQuery reports whether filter and sort depend only on immutable
+	// properties. When true, upToId may omit later additions from a diff as
+	// RFC 8620 section 5.6 permits. A nil hook never uses upToId.
+	ImmutableQuery func(filter any, sort []interface{}) bool
 	// Tracker and Kind identify the query state namespace.
 	Tracker *Tracker
 	Kind    StateKind
 }
 
 type queryArgs struct {
-	Sort           []interface{} `json:"sort"`
-	Position       *int          `json:"position"`
-	Anchor         *string       `json:"anchor"`
-	AnchorOffset   *int          `json:"anchorOffset"`
-	Limit          *int          `json:"limit"`
-	CalculateTotal *bool         `json:"calculateTotal"`
+	Sort            []interface{} `json:"sort"`
+	Position        *int          `json:"position"`
+	Anchor          *string       `json:"anchor"`
+	AnchorOffset    *int          `json:"anchorOffset"`
+	Limit           *int          `json:"limit"`
+	CalculateTotal  *bool         `json:"calculateTotal"`
+	CollapseThreads *bool         `json:"collapseThreads"`
 }
 
-func (s QuerySpec) resolve(ctx context.Context, accountID string, args json.RawMessage) ([]string, queryArgs, string, error) {
+func (s QuerySpec) resolve(ctx context.Context, accountID string, args json.RawMessage) ([]string, queryArgs, string, any, error) {
 	var req queryArgs
 	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, req, "", Errorf("invalidArguments", "query arguments must be an object")
+		return nil, req, "", nil, Errorf("invalidArguments", "query arguments must be an object")
 	}
 	ascending, err := SortAscending(req.Sort, s.SortProperties)
 	if err != nil {
-		return nil, req, "", err
+		return nil, req, "", nil, err
 	}
 	filter, err := s.ParseFilter(args)
 	if err != nil {
-		return nil, req, "", err
+		return nil, req, "", nil, err
 	}
 	if s.Extra != nil {
 		if err := s.Extra(args); err != nil {
-			return nil, req, "", err
+			return nil, req, "", nil, err
 		}
 	}
-	queryKey, err := QueryKey(filter, req.Sort)
+	queryKey, err := QueryKey(filter, req.Sort, req.CollapseThreads)
 	if err != nil {
-		return nil, req, "", err
+		return nil, req, "", nil, err
 	}
 	ids, err := s.AllIDs(ctx, accountID, args, filter, ascending)
 	if err != nil {
-		return nil, req, "", err
+		return nil, req, "", nil, err
 	}
-	return ids, req, queryKey, nil
+	return ids, req, queryKey, filter, nil
 }
 
 // HandleQuery implements RFC 8620 section 5.5 for any JMAP data type.
@@ -241,7 +246,7 @@ func HandleQuery(ctx context.Context, accountID string, args json.RawMessage, sp
 	if err := RejectUnknownArguments(args, spec.Allowed); err != nil {
 		return nil, err
 	}
-	allIDs, req, queryKey, err := spec.resolve(ctx, accountID, args)
+	allIDs, req, queryKey, _, err := spec.resolve(ctx, accountID, args)
 	if err != nil {
 		return nil, err
 	}
@@ -280,19 +285,38 @@ func HandleQueryChanges(ctx context.Context, accountID string, args json.RawMess
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, Errorf("invalidArguments", "sinceQueryState must be a string")
 	}
-	// RFC 8620 section 5.6 makes upToId an optimisation: the server SHOULD
-	// omit later changes only when both filter and sort use immutable
-	// properties, and MUST otherwise ignore the argument. This server's
-	// queries can sort/filter on mutable properties, so accepting upToId and
-	// returning the complete diff is the compliant behaviour.
-	_ = req.UpToID
-	allIDs, queryReq, queryKey, err := spec.resolve(ctx, accountID, args)
+	allIDs, queryReq, queryKey, filter, err := spec.resolve(ctx, accountID, args)
 	if err != nil {
 		return nil, err
+	}
+	// RFC 8620 section 5.6 makes upToId an optimisation: the server MAY omit
+	// later additions only when filter and sort use immutable properties, and
+	// MUST otherwise ignore the argument. The snapshot still records the full
+	// result set so future diffs remain exact; only this response is trimmed.
+	upToIndex := -1
+	if req.UpToID != nil && spec.ImmutableQuery != nil && spec.ImmutableQuery(filter, queryReq.Sort) {
+		for index, id := range allIDs {
+			if id == *req.UpToID {
+				upToIndex = index
+				break
+			}
+		}
 	}
 	result, err := spec.Tracker.QueryChangesFrom(ctx, accountID, spec.Kind, queryKey, req.SinceQueryState, req.MaxChanges, allIDs)
 	if err != nil {
 		return nil, err
+	}
+	if upToIndex >= 0 {
+		if added, ok := result["added"].([]map[string]any); ok {
+			trimmed := make([]map[string]any, 0, len(added))
+			for _, entry := range added {
+				index, _ := entry["index"].(int)
+				if index <= upToIndex {
+					trimmed = append(trimmed, entry)
+				}
+			}
+			result["added"] = trimmed
+		}
 	}
 	if queryReq.CalculateTotal != nil && *queryReq.CalculateTotal {
 		result["total"] = len(allIDs)
