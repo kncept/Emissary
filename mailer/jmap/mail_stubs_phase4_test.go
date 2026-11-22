@@ -44,19 +44,34 @@ func rawTestEmail(subject string) []byte {
 	return mailemail.RawFromUserEmail(message)
 }
 
-func TestSearchSnippetGetPhase4(t *testing.T) {
-	const accountID = "alice@example.com"
-	h, store := newMailMethodsTestHandler(t)
-	ctx := context.Background()
-	created, err := store.AddEmail(ctx, accountID, "inbox", &mailemail.UserEmail{
-		From: mailemail.Address{Address: "sender@example.net"}, Subject: "Known",
-	}, rawTestEmail("Known"))
+func addSnippetEmail(t *testing.T, store storage.Storage, accountID, subject, text string) string {
+	t.Helper()
+	message := &mailemail.UserEmail{
+		From:    mailemail.Address{Address: "sender@example.net"},
+		To:      []mailemail.Address{{Address: accountID}},
+		Subject: subject,
+		Date:    time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		Text:    text,
+	}
+	id, err := store.AddEmail(context.Background(), accountID, "inbox", message, mailemail.RawFromUserEmail(message))
 	if err != nil {
 		t.Fatalf("AddEmail() error = %v", err)
 	}
+	return id
+}
 
+func TestSearchSnippetGetRFC8621_5(t *testing.T) {
+	const accountID = "alice@example.com"
+	h, store := newMailMethodsTestHandler(t)
+	ctx := context.Background()
+	matching := addSnippetEmail(t, store, accountID, "The Foosball competition",
+		"Last year the foosball event will be held in the Stadium with a very long tail of irrelevant words that must not overflow the RFC preview budget at all.")
+	other := addSnippetEmail(t, store, accountID, "Quarterly report", "Revenue is up.")
+
+	// No filter means there is no filter text to highlight; both properties
+	// are null. Unknown ids still appear in notFound, and a snippet has no id.
 	raw, err := h.SearchSnippetGet(ctx, accountID, json.RawMessage(fmt.Sprintf(
-		`{"accountId":%q,"emailIds":[%q,"missing"]}`, accountID, created)))
+		`{"accountId":%q,"emailIds":[%q,"missing"]}`, accountID, matching)))
 	if err != nil {
 		t.Fatalf("SearchSnippet/get error = %v", err)
 	}
@@ -66,8 +81,8 @@ func TestSearchSnippetGetPhase4(t *testing.T) {
 		t.Fatalf("list = %v, want one snippet", list)
 	}
 	snippet := list[0].(map[string]any)
-	if snippet["emailId"] != created || snippet["subject"] != nil || snippet["preview"] != nil {
-		t.Errorf("snippet = %v, want null subject/preview", snippet)
+	if snippet["emailId"] != matching || snippet["subject"] != nil || snippet["preview"] != nil {
+		t.Errorf("snippet = %v, want null subject/preview without a filter", snippet)
 	}
 	if _, ok := snippet["id"]; ok {
 		t.Errorf("snippet must not have an id property: %v", snippet)
@@ -77,9 +92,110 @@ func TestSearchSnippetGetPhase4(t *testing.T) {
 		t.Errorf("notFound = %v, want [missing]", notFound)
 	}
 
-	// A filter must not be silently ignored.
-	if _, err := h.SearchSnippetGet(ctx, accountID, json.RawMessage(`{"emailIds":[],"filter":{"subject":"x"}}`)); err == nil {
-		t.Error("SearchSnippet/get with filter succeeded, want unsupportedFilter")
+	cases := []struct {
+		name            string
+		emailID         string
+		filter          string
+		wantSubject     any
+		wantNoSubject   bool
+		wantPreviewMark string
+		wantNoPreview   bool
+	}{
+		{
+			name: "text matches subject and body", emailID: matching,
+			filter:          `{"text":"foosball"}`,
+			wantSubject:     "The <mark>Foosball</mark> competition",
+			wantPreviewMark: "<mark>foosball</mark>",
+		},
+		{
+			name: "subject-only match leaves preview null", emailID: matching,
+			filter:        `{"subject":"competition"}`,
+			wantSubject:   "The Foosball <mark>competition</mark>",
+			wantNoPreview: true,
+		},
+		{
+			name: "body-only match leaves subject null", emailID: matching,
+			filter:          `{"body":"stadium"}`,
+			wantNoSubject:   true,
+			wantPreviewMark: "<mark>Stadium</mark>",
+		},
+		{
+			name: "no text match returns nulls", emailID: matching,
+			filter:        `{"text":"not-in-this-mailbox"}`,
+			wantNoSubject: true, wantNoPreview: true,
+		},
+		{
+			name: "compound filter uses shared query helpers", emailID: matching,
+			filter:          `{"operator":"AND","conditions":[{"subject":"foosball"},{"body":"stadium"}]}`,
+			wantSubject:     "The <mark>Foosball</mark> competition",
+			wantPreviewMark: "<mark>Stadium</mark>",
+		},
+		{
+			name: "nonmatching email returns nulls", emailID: other,
+			filter:        `{"text":"foosball"}`,
+			wantNoSubject: true, wantNoPreview: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments := fmt.Sprintf(`{"accountId":%q,"filter":%s,"emailIds":[%q]}`,
+				accountID, tc.filter, tc.emailID)
+			raw, err := h.SearchSnippetGet(ctx, accountID, json.RawMessage(arguments))
+			if err != nil {
+				t.Fatalf("SearchSnippet/get error = %v", err)
+			}
+			resp := decodeMap(t, raw)
+			items := resp["list"].([]any)
+			if len(items) != 1 {
+				t.Fatalf("list = %v, want one snippet", items)
+			}
+			item := items[0].(map[string]any)
+			if tc.wantNoSubject {
+				if item["subject"] != nil {
+					t.Errorf("subject = %v, want null", item["subject"])
+				}
+			} else if item["subject"] != tc.wantSubject {
+				t.Errorf("subject = %v, want %v", item["subject"], tc.wantSubject)
+			}
+			if tc.wantNoPreview {
+				if item["preview"] != nil {
+					t.Errorf("preview = %v, want null", item["preview"])
+				}
+				return
+			}
+			preview, ok := item["preview"].(string)
+			if !ok {
+				t.Fatalf("preview = %v, want a string", item["preview"])
+			}
+			if !strings.Contains(preview, tc.wantPreviewMark) {
+				t.Errorf("preview = %q, want %q", preview, tc.wantPreviewMark)
+			}
+			if len(preview) > 255 {
+				t.Errorf("preview is %d octets, want at most 255: %q", len(preview), preview)
+			}
+		})
+	}
+
+	if _, err := h.SearchSnippetGet(ctx, accountID,
+		json.RawMessage(`{"emailIds":[],"filter":{"nonsense":"x"}}`)); err == nil ||
+		!strings.Contains(err.Error(), "unsupportedFilter") {
+		t.Errorf("SearchSnippet/get with unsupported filter error = %v, want unsupportedFilter", err)
+	}
+}
+
+func TestSearchSnippetEscapesHTMLRFC8621_5(t *testing.T) {
+	const accountID = "alice@example.com"
+	h, store := newMailMethodsTestHandler(t)
+	id := addSnippetEmail(t, store, accountID, "A & B <tag> result", "Body here")
+	raw, err := h.SearchSnippetGet(context.Background(), accountID, json.RawMessage(fmt.Sprintf(
+		`{"accountId":%q,"filter":{"text":"B"},"emailIds":[%q]}`, accountID, id)))
+	if err != nil {
+		t.Fatalf("SearchSnippet/get error = %v", err)
+	}
+	item := decodeMap(t, raw)["list"].([]any)[0].(map[string]any)
+	const want = "A &amp; <mark>B</mark> &lt;tag&gt; result"
+	if item["subject"] != want {
+		t.Errorf("subject = %v, want %q", item["subject"], want)
 	}
 }
 
