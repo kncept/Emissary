@@ -40,7 +40,7 @@ func (h *resultRefHandler) EmailSubmissionSetWithImplicit(context.Context, strin
 }
 
 func resultRefRequest(calls ...Invocation) *Request {
-	return &Request{MethodCalls: calls}
+	return &Request{Using: allUsing, MethodCalls: calls}
 }
 
 func emailGetWithRef(ref string) Invocation {

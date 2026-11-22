@@ -16,6 +16,10 @@ import (
 	"github.com/kncept/Emissary/mailer/components/usermanager"
 )
 
+// allUsing mirrors a Request that opts in to every advertised capability.
+// Direct dispatcher tests bypass DecodeRequest, so they must supply it.
+var allUsing = []string{CapabilityCore, CapabilityMail, CapabilitySubmission, CapabilityVacationResponse}
+
 func TestResolveCreationIDs(t *testing.T) {
 	createdIDs := map[string]string{
 		"create1": "real-id-1",
@@ -100,6 +104,7 @@ func TestDispatchRequestResolvesCreationReferences(t *testing.T) {
 	dispatcher := NewDispatcher(handler, nil)
 
 	req := &Request{
+		Using: allUsing,
 		// A seeded reference (e.g. from a resumed request) must resolve too.
 		CreatedIDs: map[string]string{"prior": "real-prior-id"},
 		MethodCalls: []Invocation{
@@ -180,7 +185,7 @@ func TestDispatchRequestCreatedIDsOnlyWhenRequested(t *testing.T) {
 	}
 
 	resp, err := dispatcher.DispatchRequest(ctx, "alice@example.com", claims,
-		&Request{MethodCalls: []Invocation{call}})
+		&Request{Using: allUsing, MethodCalls: []Invocation{call}})
 	if err != nil {
 		t.Fatalf("DispatchRequest() error = %v", err)
 	}
@@ -197,7 +202,7 @@ func TestDispatchRequestCreatedIDsOnlyWhenRequested(t *testing.T) {
 
 	// An empty createdIds object still opts in to receiving the full map.
 	resp, err = dispatcher.DispatchRequest(ctx, "alice@example.com", claims,
-		&Request{CreatedIDs: map[string]string{}, MethodCalls: []Invocation{call}})
+		&Request{Using: allUsing, CreatedIDs: map[string]string{}, MethodCalls: []Invocation{call}})
 	if err != nil {
 		t.Fatalf("DispatchRequest() error = %v", err)
 	}
@@ -237,7 +242,7 @@ func TestDispatchRequestResolvesCreationReferencesWithoutRequestCreatedIDs(t *te
 	dispatcher := NewDispatcher(handler, nil)
 
 	resp, err := dispatcher.DispatchRequest(context.Background(), "alice@example.com",
-		&auth.Claims{Subject: "alice@example.com"}, &Request{MethodCalls: []Invocation{
+		&auth.Claims{Subject: "alice@example.com"}, &Request{Using: allUsing, MethodCalls: []Invocation{
 			{
 				Name:     "Email/set",
 				ClientID: "c1",
@@ -273,6 +278,7 @@ func TestDispatchRequestPersistsCreatedIDsPerSession(t *testing.T) {
 	ctx := context.Background()
 
 	first := &Request{
+		Using: allUsing,
 		MethodCalls: []Invocation{{
 			Name:     "Email/set",
 			ClientID: "c1",
@@ -299,6 +305,7 @@ func TestDispatchRequestPersistsCreatedIDsPerSession(t *testing.T) {
 	handler = &stubMethodHandler{}
 	dispatcher = NewDispatcher(handler, store)
 	second := &Request{
+		Using: allUsing,
 		MethodCalls: []Invocation{{
 			Name:     "EmailSubmission/set",
 			ClientID: "c2",
@@ -340,6 +347,7 @@ func (h *blockingCreatedIDHandler) EmailSet(_ context.Context, _ string, _ json.
 
 func createdIDRequest(creationID string) *Request {
 	return &Request{
+		Using: allUsing,
 		MethodCalls: []Invocation{{
 			Name:     "Email/set",
 			ClientID: "call-" + creationID,
@@ -403,6 +411,7 @@ func TestDispatchRequestMalformedRecipientReturnsInvalidArguments(t *testing.T) 
 		sender.NewLogSender())
 	dispatcher := NewDispatcher(handler, nil)
 	req := &Request{
+		Using: allUsing,
 		MethodCalls: []Invocation{{
 			Name:     "Email/set",
 			ClientID: "c1",
@@ -482,6 +491,7 @@ func TestJMAPStubReturnsServerFail(t *testing.T) {
 		sender.NewLogSender())
 	dispatcher := NewDispatcher(handler, nil)
 	req := &Request{
+		Using: allUsing,
 		MethodCalls: []Invocation{{
 			Name: "Email/copy", ClientID: "c1", Arguments: map[string]json.RawMessage{},
 		}},
@@ -507,6 +517,7 @@ func TestPushSubscriptionMethodsReceiveFullArguments(t *testing.T) {
 	handler := &pushMethodHandler{}
 	dispatcher := NewDispatcher(handler, nil)
 	req := &Request{
+		Using: allUsing,
 		MethodCalls: []Invocation{
 			{
 				Name:     "PushSubscription/get",
@@ -550,5 +561,158 @@ func TestPushSubscriptionMethodsReceiveFullArguments(t *testing.T) {
 	}
 	if errorType != "unknownMethod" {
 		t.Errorf("error type = %q, want unknownMethod", errorType)
+	}
+}
+
+func TestAllMethodsHaveDeclaredCapabilities(t *testing.T) {
+	advertised := make(map[string]bool, len(AllMethods()))
+	for _, method := range AllMethods() {
+		advertised[method] = true
+		capability, ok := MethodCapability(method)
+		if !ok {
+			t.Errorf("method %q has no declared capability", method)
+			continue
+		}
+		if !IsSupportedCapability(capability) {
+			t.Errorf("method %q requires unadvertised capability %q", method, capability)
+		}
+	}
+	for method := range methodCapabilities {
+		if !advertised[method] {
+			t.Errorf("capability map contains unimplemented method %q", method)
+		}
+	}
+}
+
+// TestDispatchRequestCapabilityNotInUsing covers RFC 8620 section 3.3: a
+// method must not run unless the client opted in to the capability that
+// declares it.
+func TestDispatchRequestCapabilityNotInUsing(t *testing.T) {
+	handler := &stubMethodHandler{}
+	dispatcher := NewDispatcher(handler, nil)
+	claims := &auth.Claims{Subject: "alice@example.com"}
+
+	for _, tc := range []struct {
+		name    string
+		using   []string
+		method  string
+		wantErr string
+	}{
+		{"mail method without mail capability", []string{CapabilityCore}, MethodEmailSet, "unknownMethod"},
+		{"submission method without submission capability", []string{CapabilityMail}, MethodEmailSubmissionSet, "unknownMethod"},
+		{"vacation method without vacation capability", []string{CapabilityCore}, MethodVacationResponseGet, "unknownMethod"},
+		{"core method without core capability", []string{CapabilityMail}, MethodCoreEcho, "unknownMethod"},
+		{"method with its capability is dispatched", allUsing, MethodEmailSet, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &Request{
+				Using: tc.using,
+				MethodCalls: []Invocation{{
+					Name: tc.method, ClientID: "c1",
+					Arguments: map[string]json.RawMessage{},
+				}},
+			}
+			resp, err := dispatcher.DispatchRequest(context.Background(), "alice@example.com", claims, req)
+			if err != nil {
+				t.Fatalf("DispatchRequest() error = %v", err)
+			}
+			if len(resp.MethodResponses) != 1 {
+				t.Fatalf("method responses = %d, want 1", len(resp.MethodResponses))
+			}
+			if tc.wantErr == "" {
+				if resp.MethodResponses[0].Name != tc.method {
+					t.Fatalf("response = %q, want %q", resp.MethodResponses[0].Name, tc.method)
+				}
+				return
+			}
+			if got := errorType(t, resp.MethodResponses[0]); got != tc.wantErr {
+				t.Errorf("error type = %q, want %q", got, tc.wantErr)
+			}
+		})
+	}
+}
+
+// accountLookupManager answers only for the accounts listed in found.
+type accountLookupManager struct {
+	usermanager.UserManager
+	found map[string]bool
+}
+
+func (m *accountLookupManager) Lookup(_ context.Context, username string) (*usermanager.User, error) {
+	if m.found[username] {
+		return &usermanager.User{}, nil
+	}
+	return nil, errors.New("no such user")
+}
+
+func TestDispatchRequestAccountValidation(t *testing.T) {
+	handler := &stubMethodHandler{}
+	manager := &accountLookupManager{found: map[string]bool{"bob@example.com": true}}
+	dispatcher := NewDispatcher(handler, nil, manager)
+	claims := &auth.Claims{Subject: "admin@example.com", EmissaryUserManagement: true}
+
+	for _, tc := range []struct {
+		name      string
+		accountID string
+		wantErr   string
+	}{
+		{"existing masquerade target", `"bob@example.com"`, ""},
+		{"missing masquerade target", `"missing@example.com"`, "accountNotFound"},
+		{"malformed account id", `123`, "invalidArguments"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &Request{
+				Using: allUsing,
+				MethodCalls: []Invocation{{
+					Name: MethodEmailSet, ClientID: "c1",
+					Arguments: map[string]json.RawMessage{"accountId": json.RawMessage(tc.accountID)},
+				}},
+			}
+			resp, err := dispatcher.DispatchRequest(context.Background(), "admin@example.com", claims, req)
+			if err != nil {
+				t.Fatalf("DispatchRequest() error = %v", err)
+			}
+			if tc.wantErr == "" {
+				if resp.MethodResponses[0].Name != MethodEmailSet {
+					t.Fatalf("response = %q, want %q", resp.MethodResponses[0].Name, MethodEmailSet)
+				}
+				return
+			}
+			if got := errorType(t, resp.MethodResponses[0]); got != tc.wantErr {
+				t.Errorf("error type = %q, want %q", got, tc.wantErr)
+			}
+		})
+	}
+}
+
+// noCapabilityHandler reports that no account supports any capability, so the
+// dispatcher's accountNotSupportedByMethod branch can be exercised.
+type noCapabilityHandler struct {
+	MethodHandler
+}
+
+func (h *noCapabilityHandler) EmailSet(context.Context, string, json.RawMessage) (json.RawMessage, error) {
+	return json.RawMessage(`{"created":{},"notCreated":{}}`), nil
+}
+
+func (h *noCapabilityHandler) AccountSupportsCapability(context.Context, string, string) bool {
+	return false
+}
+
+func TestDispatchRequestAccountNotSupportedByMethod(t *testing.T) {
+	dispatcher := NewDispatcher(&noCapabilityHandler{}, nil)
+	req := &Request{
+		Using: allUsing,
+		MethodCalls: []Invocation{{
+			Name: MethodEmailSet, ClientID: "c1", Arguments: map[string]json.RawMessage{},
+		}},
+	}
+	resp, err := dispatcher.DispatchRequest(context.Background(), "alice@example.com",
+		&auth.Claims{Subject: "alice@example.com"}, req)
+	if err != nil {
+		t.Fatalf("DispatchRequest() error = %v", err)
+	}
+	if got := errorType(t, resp.MethodResponses[0]); got != "accountNotSupportedByMethod" {
+		t.Errorf("error type = %q, want accountNotSupportedByMethod", got)
 	}
 }

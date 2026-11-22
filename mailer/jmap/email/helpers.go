@@ -384,6 +384,58 @@ func (m *JMAPEmail) hydrate(ctx context.Context, deps *base.Deps, accountID, id 
 	}
 }
 
+// parseEmailFilter validates the raw filter argument before it is decoded.
+// Compound conditions and unsupported conditions would otherwise decode into
+// an empty filter that matches every email, and malformed UTCDates would be
+// silently skipped.
+func parseEmailFilter(args json.RawMessage) (*EmailFilter, error) {
+	if err := base.ValidateConditionObject(args, "filter", supportedEmailFilterFields); err != nil {
+		return nil, err
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(args, &envelope); err != nil {
+		return nil, base.Errorf("invalidArguments", "arguments must be an object")
+	}
+	raw, ok := envelope["filter"]
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, nil
+	}
+	var filter EmailFilter
+	if err := json.Unmarshal(raw, &filter); err != nil {
+		return nil, base.Errorf("invalidArguments", "filter must be a condition object")
+	}
+	if filter.Before != nil {
+		parsed, err := time.Parse(time.RFC3339, *filter.Before)
+		if err != nil {
+			return nil, base.Errorf("invalidArguments", "invalid before date %q: %v", *filter.Before, err)
+		}
+		filter.beforeTime = &parsed
+	}
+	if filter.After != nil {
+		parsed, err := time.Parse(time.RFC3339, *filter.After)
+		if err != nil {
+			return nil, base.Errorf("invalidArguments", "invalid after date %q: %v", *filter.After, err)
+		}
+		filter.afterTime = &parsed
+	}
+	if filter.MinSize != nil && *filter.MinSize < 0 {
+		return nil, base.RejectArgument("minSize", "must not be negative")
+	}
+	if filter.MaxSize != nil && *filter.MaxSize < 0 {
+		return nil, base.RejectArgument("maxSize", "must not be negative")
+	}
+	return &filter, nil
+}
+
+func addressesMatch(addresses []mailemail.Address, text string) bool {
+	for _, addr := range addresses {
+		if strings.Contains(strings.ToLower(addr.Address), text) || strings.Contains(strings.ToLower(addr.Name), text) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEmail, filter *EmailFilter) bool {
 	if filter == nil {
 		return true
@@ -402,15 +454,14 @@ func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEma
 		}
 	}
 
-	if filter.Before != nil {
-		before, err := time.Parse(time.RFC3339, *filter.Before)
-		if err == nil && !e.Date.Before(before) {
+	if filter.beforeTime != nil || filter.afterTime != nil {
+		receivedAt := base.ReceivedAtFromMetadata(
+			base.EmailMetadata(ctx, h.deps, listed.Ref.AccountID, listed.Ref.ID), e.Date)
+		if filter.beforeTime != nil && !receivedAt.Before(*filter.beforeTime) {
 			return false
 		}
-	}
-	if filter.After != nil {
-		after, err := time.Parse(time.RFC3339, *filter.After)
-		if err == nil && !e.Date.After(after) {
+		// RFC 8621: after matches the same or a later date-time.
+		if filter.afterTime != nil && receivedAt.Before(*filter.afterTime) {
 			return false
 		}
 	}
@@ -428,11 +479,22 @@ func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEma
 	if filter.MinSize != nil && emailSize < int64(*filter.MinSize) {
 		return false
 	}
-	if filter.MaxSize != nil && emailSize > int64(*filter.MaxSize) {
+	// RFC 8621: maxSize matches only when size is strictly less.
+	if filter.MaxSize != nil && emailSize >= int64(*filter.MaxSize) {
 		return false
 	}
 	if filter.HasAttachment != nil && has != *filter.HasAttachment {
 		return false
+	}
+
+	if filter.HasKeyword != nil || filter.NotKeyword != nil {
+		keywords := base.EmailMetadata(ctx, h.deps, listed.Ref.AccountID, listed.Ref.ID).Keywords
+		if filter.HasKeyword != nil && !keywords[*filter.HasKeyword] {
+			return false
+		}
+		if filter.NotKeyword != nil && keywords[*filter.NotKeyword] {
+			return false
+		}
 	}
 
 	if filter.Text != nil {
@@ -440,15 +502,8 @@ func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEma
 		found := strings.Contains(strings.ToLower(e.Subject), text) ||
 			strings.Contains(strings.ToLower(e.From.Address), text) ||
 			strings.Contains(strings.ToLower(e.From.Name), text) ||
-			strings.Contains(strings.ToLower(e.Text), text)
-		if !found {
-			for _, addr := range e.To {
-				if strings.Contains(strings.ToLower(addr.Address), text) || strings.Contains(strings.ToLower(addr.Name), text) {
-					found = true
-					break
-				}
-			}
-		}
+			strings.Contains(strings.ToLower(e.Text), text) ||
+			addressesMatch(e.To, text) || addressesMatch(e.Cc, text) || addressesMatch(e.Bcc, text)
 		if !found {
 			return false
 		}
@@ -459,18 +514,14 @@ func (h *Handler) matchesFilter(ctx context.Context, listed *mailemail.ListedEma
 			return false
 		}
 	}
-	if filter.To != nil {
-		text := strings.ToLower(*filter.To)
-		found := false
-		for _, addr := range e.To {
-			if strings.Contains(strings.ToLower(addr.Address), text) || strings.Contains(strings.ToLower(addr.Name), text) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
+	if filter.To != nil && !addressesMatch(e.To, strings.ToLower(*filter.To)) {
+		return false
+	}
+	if filter.Cc != nil && !addressesMatch(e.Cc, strings.ToLower(*filter.Cc)) {
+		return false
+	}
+	if filter.Bcc != nil && !addressesMatch(e.Bcc, strings.ToLower(*filter.Bcc)) {
+		return false
 	}
 	if filter.Subject != nil {
 		if !strings.Contains(strings.ToLower(e.Subject), strings.ToLower(*filter.Subject)) {

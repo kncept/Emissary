@@ -71,6 +71,53 @@ const (
 	stateEmail = base.StateEmail
 )
 
+// methodCapabilities is the runtime mirror of the x-jmap-methods extension in
+// api/jmap.yaml. A method may only be dispatched when its capability appears
+// in the Request's `using` array (RFC 8620 section 3.3).
+var methodCapabilities = map[string]string{
+	MethodCoreEcho:            CapabilityCore,
+	MethodBlobCopy:            CapabilityCore,
+	MethodPushSubscriptionGet: CapabilityCore,
+	MethodPushSubscriptionSet: CapabilityCore,
+
+	MethodMailboxGet:          CapabilityMail,
+	MethodMailboxSet:          CapabilityMail,
+	MethodMailboxChanges:      CapabilityMail,
+	MethodMailboxQuery:        CapabilityMail,
+	MethodMailboxQueryChanges: CapabilityMail,
+	MethodThreadGet:           CapabilityMail,
+	MethodThreadChanges:       CapabilityMail,
+	MethodEmailGet:            CapabilityMail,
+	MethodEmailSet:            CapabilityMail,
+	MethodEmailChanges:        CapabilityMail,
+	MethodEmailQuery:          CapabilityMail,
+	MethodEmailQueryChanges:   CapabilityMail,
+	MethodEmailCopy:           CapabilityMail,
+	MethodEmailImport:         CapabilityMail,
+	MethodEmailParse:          CapabilityMail,
+	MethodSearchSnippetGet:    CapabilityMail,
+
+	MethodIdentityGet:                 CapabilitySubmission,
+	MethodIdentitySet:                 CapabilitySubmission,
+	MethodIdentityChanges:             CapabilitySubmission,
+	MethodEmailSubmissionGet:          CapabilitySubmission,
+	MethodEmailSubmissionSet:          CapabilitySubmission,
+	MethodEmailSubmissionChanges:      CapabilitySubmission,
+	MethodEmailSubmissionQuery:        CapabilitySubmission,
+	MethodEmailSubmissionQueryChanges: CapabilitySubmission,
+
+	MethodVacationResponseGet: CapabilityVacationResponse,
+	MethodVacationResponseSet: CapabilityVacationResponse,
+}
+
+// MethodCapability returns the capability that must be opted into before the
+// named method may be dispatched. Unknown methods are left to the dispatcher's
+// unknownMethod path.
+func MethodCapability(name string) (string, bool) {
+	capability, ok := methodCapabilities[name]
+	return capability, ok
+}
+
 // AllMethods returns a list of all JMAP method names.
 func AllMethods() []string {
 	groups := [][]string{

@@ -1,14 +1,15 @@
 package mailbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
 
-	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 	"github.com/kncept/Emissary/mailer/components/storage"
+	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 )
 
 func (h *Handler) MailboxGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
@@ -189,14 +190,14 @@ func (h *Handler) MailboxSet(ctx context.Context, accountID string, args json.Ra
 		createdServerIDs[cid] = mb.ID
 		j := h.toJMAPMailbox(ctx, accountID, mb)
 		created[cid] = map[string]interface{}{
-			"id":           j.ID,
-			"sortOrder":    j.SortOrder,
-			"totalEmails":  j.TotalEmails,
-			"unreadEmails": j.UnreadEmails,
-			"totalThreads": j.TotalThreads,
+			"id":            j.ID,
+			"sortOrder":     j.SortOrder,
+			"totalEmails":   j.TotalEmails,
+			"unreadEmails":  j.UnreadEmails,
+			"totalThreads":  j.TotalThreads,
 			"unreadThreads": j.UnreadThreads,
-			"myRights":     j.MyRights,
-			"isSubscribed": j.IsSubscribed,
+			"myRights":      j.MyRights,
+			"isSubscribed":  j.IsSubscribed,
 		}
 	}
 
@@ -367,6 +368,36 @@ type mailboxFilter struct {
 	IsSubscribed *bool   `json:"isSubscribed,omitempty"`
 }
 
+// supportedMailboxFilterFields lists every mailbox condition this server
+// implements. Compound conditions and anything else are rejected before
+// decoding so they cannot silently turn into an empty, match-all filter.
+var supportedMailboxFilterFields = map[string]bool{
+	"parentId":     true,
+	"name":         true,
+	"role":         true,
+	"hasAnyRole":   true,
+	"isSubscribed": true,
+}
+
+func parseMailboxFilter(args json.RawMessage) (*mailboxFilter, error) {
+	if err := base.ValidateConditionObject(args, "filter", supportedMailboxFilterFields); err != nil {
+		return nil, err
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(args, &envelope); err != nil {
+		return nil, base.Errorf("invalidArguments", "arguments must be an object")
+	}
+	raw, ok := envelope["filter"]
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, nil
+	}
+	var filter mailboxFilter
+	if err := json.Unmarshal(raw, &filter); err != nil {
+		return nil, base.Errorf("invalidArguments", "filter must be a condition object")
+	}
+	return &filter, nil
+}
+
 // queryMailboxIDs refreshes the object state and returns the full filtered
 // result set, before pagination.
 func (h *Handler) queryMailboxIDs(ctx context.Context, accountID string, filter *mailboxFilter) ([]string, error) {
@@ -423,26 +454,38 @@ func (h *Handler) queryMailboxIDs(ctx context.Context, accountID string, filter 
 
 func (h *Handler) MailboxQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		Filter       *mailboxFilter `json:"filter,omitempty"`
-		Sort         []interface{}  `json:"sort,omitempty"`
-		Position     *int           `json:"position,omitempty"`
-		Anchor       *string        `json:"anchor,omitempty"`
-		AnchorOffset *int           `json:"anchorOffset,omitempty"`
-		Limit        *int           `json:"limit,omitempty"`
+		Sort           []interface{} `json:"sort,omitempty"`
+		Position       *int          `json:"position,omitempty"`
+		Anchor         *string       `json:"anchor,omitempty"`
+		AnchorOffset   *int          `json:"anchorOffset,omitempty"`
+		Limit          *int          `json:"limit,omitempty"`
+		CalculateTotal *bool         `json:"calculateTotal,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
-	queryKey, err := base.QueryKey(req.Filter, req.Sort)
+	// Mailbox ordering comes from the storage layer; no comparator is applied
+	// here, so any requested sort must be rejected rather than ignored.
+	if _, err := base.SortAscending(req.Sort, nil); err != nil {
+		return nil, err
+	}
+	filter, err := parseMailboxFilter(args)
+	if err != nil {
+		return nil, err
+	}
+	queryKey, err := base.QueryKey(filter, req.Sort)
 	if err != nil {
 		return nil, err
 	}
 
-	allIDs, err := h.queryMailboxIDs(ctx, accountID, req.Filter)
+	allIDs, err := h.queryMailboxIDs(ctx, accountID, filter)
 	if err != nil {
 		return nil, err
 	}
-	start, end := base.PageBounds(len(allIDs), req.Position, req.Limit)
+	start, end, err := base.PageBoundsForIDs(allIDs, req.Position, req.Limit, req.Anchor, req.AnchorOffset)
+	if err != nil {
+		return nil, err
+	}
 	ids := append([]string{}, allIDs[start:end]...)
 	queryState, err := h.deps.Changes.SyncQuery(ctx, accountID, base.StateMailboxQuery, queryKey, allIDs)
 	if err != nil {
@@ -450,37 +493,55 @@ func (h *Handler) MailboxQuery(ctx context.Context, accountID string, args json.
 	}
 
 	resp := map[string]interface{}{
-		"accountId":  accountID,
-		"queryState": queryState,
-		"ids":        ids,
-		"total":      len(allIDs),
+		"accountId":           accountID,
+		"queryState":          queryState,
+		"canCalculateChanges": true,
+		"position":            start,
+		"ids":                 ids,
+	}
+	// RFC 8620 section 5.4: total MUST be omitted unless requested.
+	if req.CalculateTotal != nil && *req.CalculateTotal {
+		resp["total"] = len(allIDs)
 	}
 	return json.Marshal(resp)
 }
 
 func (h *Handler) MailboxQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		SinceQueryState string         `json:"sinceQueryState"`
-		Filter          *mailboxFilter `json:"filter,omitempty"`
-		Sort            []interface{}  `json:"sort,omitempty"`
-		MaxChanges      *int           `json:"maxChanges,omitempty"`
-		UpToID          *string        `json:"upToId,omitempty"`
+		SinceQueryState string        `json:"sinceQueryState"`
+		Sort            []interface{} `json:"sort,omitempty"`
+		MaxChanges      *int          `json:"maxChanges,omitempty"`
+		UpToID          *string       `json:"upToId,omitempty"`
+		CalculateTotal  *bool         `json:"calculateTotal,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
-	queryKey, err := base.QueryKey(req.Filter, req.Sort)
+	if _, err := base.SortAscending(req.Sort, nil); err != nil {
+		return nil, err
+	}
+	filter, err := parseMailboxFilter(args)
+	if err != nil {
+		return nil, err
+	}
+	if req.UpToID != nil {
+		return nil, base.RejectArgument("upToId", "the change tracker cannot limit a query diff to an id")
+	}
+	queryKey, err := base.QueryKey(filter, req.Sort)
 	if err != nil {
 		return nil, err
 	}
 
-	ids, err := h.queryMailboxIDs(ctx, accountID, req.Filter)
+	ids, err := h.queryMailboxIDs(ctx, accountID, filter)
 	if err != nil {
 		return nil, err
 	}
 	result, err := h.deps.Changes.QueryChangesFrom(ctx, accountID, base.StateMailboxQuery, queryKey, req.SinceQueryState, req.MaxChanges, ids)
 	if err != nil {
 		return nil, err
+	}
+	if req.CalculateTotal != nil && *req.CalculateTotal {
+		result["total"] = len(ids)
 	}
 	return json.Marshal(result)
 }

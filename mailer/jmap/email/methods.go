@@ -559,9 +559,11 @@ func (h *Handler) EmailChanges(ctx context.Context, accountID string, args json.
 	return json.Marshal(result)
 }
 
+// supportedEmailSortProperties mirrors the Session's emailQuerySortOptions.
+var supportedEmailSortProperties = map[string]bool{"receivedAt": true}
+
 func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
-		Filter          *EmailFilter  `json:"filter,omitempty"`
 		Sort            []interface{} `json:"sort,omitempty"`
 		Position        *int          `json:"position,omitempty"`
 		Anchor          *string       `json:"anchor,omitempty"`
@@ -573,20 +575,32 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
-	queryKey, err := base.QueryKey(req.Filter, req.Sort)
+	ascending, err := base.SortAscending(req.Sort, supportedEmailSortProperties)
+	if err != nil {
+		return nil, err
+	}
+	filter, err := parseEmailFilter(args)
+	if err != nil {
+		return nil, err
+	}
+	if req.CollapseThreads != nil && *req.CollapseThreads {
+		// Threads are not collapsed by the underlying store; rejecting is
+		// preferable to returning a result set with duplicate threads.
+		return nil, base.Errorf("unsupportedFilter", "collapseThreads is not supported")
+	}
+	queryKey, err := base.QueryKey(filter, req.Sort)
 	if err != nil {
 		return nil, err
 	}
 
-	allIDs, err := h.queryEmailIDs(ctx, accountID, req.Filter, req.Sort)
+	allIDs, err := h.queryEmailIDs(ctx, accountID, filter, ascending)
 	if err != nil {
 		return nil, err
 	}
-	total := 0
-	if req.CalculateTotal == nil || *req.CalculateTotal {
-		total = len(allIDs)
+	start, end, err := base.PageBoundsForIDs(allIDs, req.Position, req.Limit, req.Anchor, req.AnchorOffset)
+	if err != nil {
+		return nil, err
 	}
-	start, end := base.PageBounds(len(allIDs), req.Position, req.Limit)
 	ids := append([]string{}, allIDs[start:end]...)
 
 	queryState, err := h.deps.Changes.SyncQuery(ctx, accountID, base.StateEmailQuery, queryKey, allIDs)
@@ -599,7 +613,10 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 		"canCalculateChanges": true,
 		"position":            start,
 		"ids":                 ids,
-		"total":               total,
+	}
+	// RFC 8620 section 5.4: total MUST be omitted unless requested.
+	if req.CalculateTotal != nil && *req.CalculateTotal {
+		resp["total"] = len(allIDs)
 	}
 	return json.Marshal(resp)
 }
@@ -607,7 +624,7 @@ func (h *Handler) EmailQuery(ctx context.Context, accountID string, args json.Ra
 // queryEmailIDs returns the full ordered result set for a query, before
 // pagination. Both Email/query and Email/queryChanges use it so a queryState
 // token always describes the same result set.
-func (h *Handler) queryEmailIDs(ctx context.Context, accountID string, filter *EmailFilter, sortSpecs []interface{}) ([]string, error) {
+func (h *Handler) queryEmailIDs(ctx context.Context, accountID string, filter *EmailFilter, ascending bool) ([]string, error) {
 	mailboxID := ""
 	if filter != nil && filter.InMailbox != nil {
 		mailboxID = *filter.InMailbox
@@ -624,20 +641,6 @@ func (h *Handler) queryEmailIDs(ctx context.Context, accountID string, filter *E
 		}
 	}
 
-	ascending := false
-	for _, s := range sortSpecs {
-		sortSpec, ok := s.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		property, _ := sortSpec["property"].(string)
-		if property != "receivedAt" && property != "date" {
-			continue
-		}
-		if v, ok := sortSpec["isAscending"].(bool); ok {
-			ascending = v
-		}
-	}
 	received := make(map[string]time.Time, len(filtered))
 	for _, e := range filtered {
 		received[e.Ref.ID] = base.ReceivedAtFromMetadata(base.EmailMetadata(ctx, h.deps, accountID, e.Ref.ID), e.Email.Date)
@@ -663,7 +666,6 @@ func (h *Handler) queryEmailIDs(ctx context.Context, accountID string, filter *E
 func (h *Handler) EmailQueryChanges(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
 		SinceQueryState string        `json:"sinceQueryState"`
-		Filter          *EmailFilter  `json:"filter,omitempty"`
 		Sort            []interface{} `json:"sort,omitempty"`
 		MaxChanges      *int          `json:"maxChanges,omitempty"`
 		UpToID          *string       `json:"upToId,omitempty"`
@@ -673,18 +675,35 @@ func (h *Handler) EmailQueryChanges(ctx context.Context, accountID string, args 
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
-	queryKey, err := base.QueryKey(req.Filter, req.Sort)
+	ascending, err := base.SortAscending(req.Sort, supportedEmailSortProperties)
+	if err != nil {
+		return nil, err
+	}
+	filter, err := parseEmailFilter(args)
+	if err != nil {
+		return nil, err
+	}
+	if req.UpToID != nil {
+		return nil, base.RejectArgument("upToId", "the change tracker cannot limit a query diff to an id")
+	}
+	if req.CollapseThreads != nil && *req.CollapseThreads {
+		return nil, base.Errorf("unsupportedFilter", "collapseThreads is not supported")
+	}
+	queryKey, err := base.QueryKey(filter, req.Sort)
 	if err != nil {
 		return nil, err
 	}
 
-	ids, err := h.queryEmailIDs(ctx, accountID, req.Filter, req.Sort)
+	ids, err := h.queryEmailIDs(ctx, accountID, filter, ascending)
 	if err != nil {
 		return nil, err
 	}
 	result, err := h.deps.Changes.QueryChangesFrom(ctx, accountID, base.StateEmailQuery, queryKey, req.SinceQueryState, req.MaxChanges, ids)
 	if err != nil {
 		return nil, err
+	}
+	if req.CalculateTotal != nil && *req.CalculateTotal {
+		result["total"] = len(ids)
 	}
 	return json.Marshal(result)
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/kncept/Emissary/mailer/auth"
 	"github.com/kncept/Emissary/mailer/components/storage"
+	"github.com/kncept/Emissary/mailer/components/usermanager"
 )
 
 // createdIDSaveRetries bounds optimistic-concurrency retries when persisting
@@ -56,13 +57,27 @@ func (inv Invocation) MarshalJSON() ([]byte, error) {
 type Dispatcher struct {
 	handler      MethodHandler
 	sessionState storage.SessionStateStore
+	userMgr      usermanager.UserManager
+}
+
+// accountCapabilityChecker is implemented by handlers that can report which
+// capabilities an account supports. It lets the dispatcher return
+// accountNotSupportedByMethod instead of dispatching a method the account
+// cannot serve.
+type accountCapabilityChecker interface {
+	AccountSupportsCapability(ctx context.Context, accountID, capability string) bool
 }
 
 // NewDispatcher creates a new method dispatcher. sessionState persists the
 // creation-id map per session so references survive across Lambda invocations;
-// it may be nil when no durable session state is configured.
-func NewDispatcher(handler MethodHandler, sessionState storage.SessionStateStore) *Dispatcher {
-	return &Dispatcher{handler: handler, sessionState: sessionState}
+// it may be nil when no durable session state is configured. userMgr is used
+// only to validate masqueraded account ids and is optional.
+func NewDispatcher(handler MethodHandler, sessionState storage.SessionStateStore, userMgr ...usermanager.UserManager) *Dispatcher {
+	d := &Dispatcher{handler: handler, sessionState: sessionState}
+	if len(userMgr) > 0 {
+		d.userMgr = userMgr[0]
+	}
+	return d
 }
 
 // MethodCall represents a single JMAP method call from the batch request.
@@ -258,6 +273,14 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 	ctx = auth.ContextWithClaims(ctx, claims)
 	slog.Debug("JMAP request", "calls", len(req.MethodCalls), "account", defaultAccountID)
 
+	// RFC 8620 section 3.3: a method may only be used when its capability was
+	// opted into by the Request's `using` array. Treat a missing capability as
+	// an unknown method rather than executing code the client did not opt into.
+	usingSet := make(map[string]bool, len(req.Using))
+	for _, capability := range req.Using {
+		usingSet[capability] = true
+	}
+
 	// Seed the creation-id map from durable per-session state and from the
 	// request. The session copy lets a client continue after a Lambda cold
 	// start; the request copy follows RFC 8620's createdIds argument.
@@ -315,24 +338,52 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 		}
 		call.Arguments = resolvedArgs
 
-		// Extract accountId from method arguments, fallback to default
+		requiredCapability, knownMethod := MethodCapability(call.Name)
+		if knownMethod && !usingSet[requiredCapability] {
+			resp := d.errorResponse(call, fmt.Errorf("unknownMethod: %s", call.Name))
+			appendMethodResponse(&responses, responsesByID, createdIDs, resp)
+			continue
+		}
+
+		// Extract accountId from method arguments, falling back to the
+		// authenticated default. An explicitly malformed id is an error rather
+		// than a silently ignored argument.
 		accountID := defaultAccountID
 		if call.Arguments != nil {
 			if accountIDRaw, ok := call.Arguments["accountId"]; ok {
 				var extracted string
-				if err := json.Unmarshal(accountIDRaw, &extracted); err == nil && extracted != "" {
-					accountID = extracted
+				if err := json.Unmarshal(accountIDRaw, &extracted); err != nil || extracted == "" {
+					resp := d.errorResponse(call, fmt.Errorf("invalidArguments: accountId must be a non-empty string"))
+					appendMethodResponse(&responses, responsesByID, createdIDs, resp)
+					continue
 				}
+				accountID = extracted
 			}
 		}
 
-		// Validate accountId: users without User Manager permission can only
-		// access their own account.
-		if claims != nil && !claims.EmissaryUserManagement && accountID != claims.Subject {
+		// Keep the masquerade policy intact: ordinary callers may only reach
+		// their own account. A manager may reach another account, but only when
+		// that account actually exists.
+		if claims != nil && !claims.EmissaryUserManagement && !strings.EqualFold(accountID, claims.Subject) {
 			slog.Warn("JMAP: forbidden account access", "method", call.Name, "account", accountID)
 			resp := d.errorResponse(call, fmt.Errorf("forbidden: insufficient permissions to access account %s", accountID))
 			appendMethodResponse(&responses, responsesByID, createdIDs, resp)
 			continue
+		}
+		if claims != nil && claims.EmissaryUserManagement && !strings.EqualFold(accountID, claims.Subject) && d.userMgr != nil {
+			user, err := d.userMgr.Lookup(ctx, accountID)
+			if err != nil || user == nil {
+				resp := d.errorResponse(call, fmt.Errorf("accountNotFound: account %s does not exist", accountID))
+				appendMethodResponse(&responses, responsesByID, createdIDs, resp)
+				continue
+			}
+		}
+		if knownMethod {
+			if checker, ok := d.handler.(accountCapabilityChecker); ok && !checker.AccountSupportsCapability(ctx, accountID, requiredCapability) {
+				resp := d.errorResponse(call, fmt.Errorf("accountNotSupportedByMethod: account %s does not support %s", accountID, call.Name))
+				appendMethodResponse(&responses, responsesByID, createdIDs, resp)
+				continue
+			}
 		}
 
 		slog.Debug("JMAP method call", "method", call.Name, "client_id", call.ClientID, "account", accountID)

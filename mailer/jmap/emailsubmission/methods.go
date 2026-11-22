@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/mail"
 	"strings"
@@ -55,6 +56,13 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, nil, err
+	}
+	// The Session advertises maxDelayedSend: 0, so a non-null sendAt cannot
+	// be honoured. Reject before any state read or side effect.
+	for creationID, create := range req.Create {
+		if create.SendAt != nil {
+			return nil, nil, base.RejectArgument("sendAt", fmt.Sprintf("delayed submission is not supported (creation %q)", creationID))
+		}
 	}
 
 	oldState, err := h.deps.Changes.State(ctx, accountID, base.StateSubmission)

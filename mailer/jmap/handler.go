@@ -75,6 +75,14 @@ func NewHandler(store storage.Storage, meta metadata.MetadataStore, userMgr user
 	}
 }
 
+// AccountSupportsCapability reports the capabilities the Session advertises
+// for an account. Every Emissary account supports the same data-type
+// capabilities, so this is the single source shared with the dispatcher's
+// accountNotSupportedByMethod check.
+func (h *Handler) AccountSupportsCapability(_ context.Context, _ string, capability string) bool {
+	return IsSupportedCapability(capability)
+}
+
 // RefreshState synchronises every storage-backed type state before push reads
 // it. Each refresh is best effort: a single failing store must not suppress
 // notifications for the other types.

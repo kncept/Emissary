@@ -222,7 +222,7 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 		return err == nil
 	})
 	pushHub.Start(ctx)
-	dispatcher := jmap.NewDispatcher(jmapHandler, emailStore)
+	dispatcher := jmap.NewDispatcher(jmapHandler, emailStore, userManager)
 
 	mux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
