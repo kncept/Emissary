@@ -182,6 +182,32 @@ it. When renaming tests, keep this table in sync.
   or freshness checks — so treat branch/PR CI as the gate that actually
   validated a commit.
 
+### External JMAP conformance suite (manual gate)
+
+`./run.sh spectest` is the documented manual conformance gate. It clones
+`jmapio/jmap-test-suite` pinned to a specific commit, applies the
+advertised-profile adaptations in `scripts/spectest/jmap-test-suite.patch`,
+builds a throwaway local server with bearer auth and two real users, runs
+the suite's `core`, `binary`, `push`, `email`, `mailbox`, `thread`,
+`identity`, `submission`, `vacation` and `search-snippet` categories, and
+writes a report to `${SPECTEST_REPORT}` (default
+`${TMPDIR}/emissary-spectest/report.json`). It needs `git`, `curl`,
+`python3`, `npm` and `node` on the PATH and network access for the initial
+suite clone. All credentials are generated per run unless supplied via
+`SPECTEST_USERNAME`, `SPECTEST_PASSWORD`, `SPECTEST_JWT_SECRET`,
+`SPECTEST_SECONDARY_USERNAME` or `SPECTEST_SECONDARY_PASSWORD`; the script
+embeds none.
+
+The gate passes only when every **required** test passes. Any skip is a
+consequence of the limits advertised in Session (for example
+`maxMailboxDepth=1`, `maxMailboxesPerEmail=1`,
+`emailQuerySortOptions=["receivedAt"]`, `maxDelayedSend=0`) or the
+single-account-per-user model; the full skip list with RFC citations is
+recorded in `_JMAP_PLAN.md` §7.1. Genuine defects found by the suite are
+fixed and covered by protocol-level HTTP tests named
+`Test<Type>_<Behavior>_RFC<section>` in
+`mailer/handler/jmap_conformance_rfc_test.go`.
+
 ## Conventions for new tests
 
 **Go**
