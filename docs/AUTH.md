@@ -1,18 +1,15 @@
 # Authentication
 
-Emissary authenticates with a form login that issues a pair of signed
-JWTs: a short-lived **access token** for API calls, and a long-lived
-**refresh token** for rotating the pair. Every login starts a new
-session, and the two tokens step together: the session id (`sid`) stays
-the same for the session's whole life, while the refresh issue number
-(`issue`) advances on every rotation. That is what stops a refresh token
-from being replayed. A token cannot outlive its session or be used out
-of sequence.
+Emissary authenticates with a form login that issues a pair of signed JWTs: a
+short-lived **access token** for API calls and a long-lived **refresh token**
+for rotating the pair. Every login starts a new session: the session id (`sid`)
+stays fixed while the refresh issue number (`issue`) advances on every
+rotation, so a refresh token cannot be replayed or used out of sequence.
 
-The normative wire contract is [`api/auth.yaml`](../api/auth.yaml);
-this document describes the design. Error conventions (status codes,
-`{"error": "<message>"}` bodies, generic messages) are shared with the
-rest of the API — see [API.md](API.md).
+The wire contract is [`api/auth.yaml`](../api/auth.yaml); error conventions
+are shared with the rest of the API ([API.md](API.md#conventions)). Tokens use
+[`auth.Claims`](../mailer/auth/auth.go) and
+[`auth.Authenticator`](../mailer/auth/auth.go).
 
 ## Endpoints
 
@@ -20,25 +17,19 @@ rest of the API — see [API.md](API.md).
 | --- | --- | --- | --- |
 | `POST` | `/api/auth/login` | — | Form login; starts a session and issues the token pair. |
 | `POST` | `/api/auth/refresh` | — (refresh token in body) | Exchange the current refresh token for a fresh pair. |
-| `POST` | `/api/auth/logout` | Bearer | Revoke the session so its refresh token cannot be used. |
+| `POST` | `/api/auth/logout` | Bearer | Revoke the session so its refresh tokens cannot be used. |
 
-Login and refresh are public: the credentials (login) or the refresh
-token (refresh) travel in the JSON body, so no `Authorization` header
-is involved. Logout requires the access token as a bearer token.
-A malformed body is a `400`; a rejected credential or token is a `401`
-with a generic message (details are only logged server-side). A rejected
-login also counts against a rate limit; once it is reached, further
-login attempts receive `429` with a `Retry-After` header (see below).
+Login and refresh are public: credentials or the refresh token travel in the
+JSON body. Malformed bodies are `400`; rejected credentials or tokens are `401`
+with a generic message. Disabled users get `403`, passwordless users `401`, and
+rejected logins over the rate limit `429` with `Retry-After`.
 
 ## Login
 
-Login is form-based: `username` (the user's email address) and
-`password`. The built-in administrator (`USERNAME`/`PASSWORD`) is
-checked first, then the configured user manager backend
-(`USER_MANAGER`). Support for other login types will be added later,
-as required.
-
-A successful login creates a new session and returns the token pair:
+Login is form-based: `username` (email address) and `password`. The built-in
+administrator (`USERNAME`/`PASSWORD`) is checked first, then the configured
+user manager (`USER_MANAGER`); both use bcrypt at cost 12. A successful login
+creates a new session and returns:
 
 ```json
 {
@@ -49,31 +40,25 @@ A successful login creates a new session and returns the token pair:
 }
 ```
 
-`expiresAt` is the access token's `exp` claim. Invalid credentials
-return `401`; a disabled user (see [USERS.md](USERS.md)) is rejected
-with `403`, even with a correct password. Users created without a
-password are always rejected with `401` — a blank password never
-authenticates anyone.
+`expiresAt` is the access token's `exp`. Invalid credentials or a passwordless
+user return `401`; a disabled user ([USERS.md](USERS.md)) is rejected with
+`403` even with a correct password.
 
-Failed logins are rate limited in two independent fixed windows: one
-per client IP and one per account. The default is 10 failures per
-minute in each window; a successful login clears that account's
-window but not the IP window. An attempt over either limit returns
-`429` with `Retry-After` (seconds) instead of checking the password.
-The limiter is per process, so deployments with more than one instance
-should also limit login attempts at the edge. The leftmost
-`X-Forwarded-For` value is used as the client IP when present; edge
-proxies should overwrite that header. The per-account limit is
-independent of it, so a spoofed header cannot bypass the account
-limit. Administrator and managed-user passwords both use bcrypt at
-cost 12, so a wrong guess is expensive in either case.
+Failed logins are rate limited in two independent one-minute windows: per
+client IP and per account (10 failures each by default). Success clears the
+account window but not the IP window; over either limit the response is `429`
+with `Retry-After` instead of checking the password. The limiter is per
+process, so multi-instance deployments should limit at the edge. The leftmost
+`X-Forwarded-For` is the client IP when present, but the independent
+per-account limit prevents header spoofing. See
+[CONFIGURATION.md](CONFIGURATION.md#server-and-authentication) for env vars.
 
 ## The token pair
 
-Both tokens are HS256-signed JWTs (signed with `JWT_SECRET`; standard
-`iat`/`exp` claims in Unix seconds, plus `aud`/`iss` when
-configured). Both are full JWTs rather than opaque strings, so a
-client can decode and inspect the claims.
+Both tokens are HS256-signed JWTs (`JWT_SECRET`) with `iat`/`exp` in Unix
+seconds plus `aud`/`iss` when configured; clients can decode them. See
+[`Claims`](../mailer/auth/auth.go) for the complete struct. The `sub` claim is
+the user's email address.
 
 | | Access token | Refresh token |
 | --- | --- | --- |
@@ -85,121 +70,91 @@ client can decode and inspect the claims.
 
 ### Access token
 
-The following claims must always be present:
+Claims that must always be present:
 
 | Claim | Type | Meaning |
 | --- | --- | --- |
 | `sub` | string | The user id (the user's email address). |
 | `sid` | string | The session id; used to ensure strict access/refresh token stepping. |
 
-In addition to standard claims, the JWT MAY have the following
-attributes: `Subscribed` (boolean), `systemManager` (boolean),
-`EmissaryUserManagement` (boolean). The user manager decides which apply
-to the authenticated user. The built-in administrator receives both
-privilege claims; an Emissary-managed user receives them from their
-System Manager and User Manager roles. The obsolete `admin` claim is no
-longer issued or honored.
-
-The `sub` claim is the user's email address; the default JMAP `accountId` is
-the opaque `acct_` id derived from it. The dispatcher resolves that id to
-the internal user id used by the storage prefix. A user without User Manager
-permission cannot select another account; a token with
-`EmissaryUserManagement: true` may supply another known opaque `accountId` on
-a JMAP method call to masquerade (see [USERS.md](USERS.md#admin-masquerade)).
+Optional attributes include `systemManager` (support privileges) and
+`EmissaryUserManagement` (manage users and masquerade), set by the user manager
+from the built-in admin role or an Emissary user's roles. The obsolete `admin`
+claim is no longer issued or honored. The default JMAP `accountId` is the
+opaque `acct_` id derived from `sub`; a token with `EmissaryUserManagement`
+may supply another known one to masquerade
+([USERS.md](USERS.md#admin-masquerade)).
 
 ### Refresh token
 
-The refresh token must contain:
+Claims the refresh token must contain:
 
 | Claim | Type | Meaning |
 | --- | --- | --- |
-| `sub` | string | The user id (the user's email address); used to double-check the session. |
+| `sub` | string | The user id (email address); double-checks the session. |
 | `sid` | string | The session id. |
-| `issue` | integer | The issue number of this refresh token; strict ordering is enforced. |
-| `nbf` | integer | Not-before time: 8 hours after `iat`. The token is rejected before then. |
+| `issue` | integer | This token's issue number; strict ordering is enforced. |
+| `nbf` | integer | Not-before time: 8 hours after `iat`; rejected before then. |
 
-The refresh token issued at login carries the session's first issue
-number; every subsequent refresh increments it by one while keeping the
-same `sid`. It expires when the session expires, 30 days after login, so
-a refreshed token never extends the session's lifetime.
+The login token carries the first issue number; each refresh increments it with
+the same `sid`, and it expires with the 30-day session.
 
 ### JWT validation
 
-Every token is fully validated before it is trusted. The server checks
-the `HS256` algorithm, `typ: JWT`, the signature over the exact header
-and payload, non-empty `sub` and `sid`, `iat`, `exp`, `nbf <= now` (when
-present), `exp > now`, `iat` not in the future (60 seconds of clock skew
-allowed), and `aud`/`iss` when configured. Access tokens must not carry
-`issue` or `nbf`; refresh tokens must carry both. A refresh token is
-therefore rejected if it is presented too early, after expiry, with a
-broken signature, or with any other invalid claim.
+Every token is fully validated: `HS256`, `typ: JWT`, signature over the exact
+header and payload, non-empty `sub`/`sid`, `iat`, `exp > now`, `nbf <= now`
+(when present), `iat` not in the future (60 seconds of skew) and `aud`/`iss`
+when configured. Access tokens must not carry `issue`/`nbf`; refresh tokens
+must carry both. `JWT_TTL` is legacy; lifetimes are fixed as above.
 
 ## Refresh and token stepping
 
-`POST /api/auth/refresh` accepts the session's current refresh token
-and returns a new access token and a new refresh token with `issue`
-incremented by one. The session id is unchanged; no new session is
-created:
+`POST /api/auth/refresh` takes the current refresh token and returns a new pair
+with `issue` incremented by one and `sid` unchanged:
 
 ```json
 { "refreshToken": "eyJ..." }
 ```
 
-The server validates every refresh request:
+Validation steps:
 
-1. **Full JWT validation** — signature, algorithm, claims, expiry and
-   the eight-hour `nbf` must all be valid. A refresh inside the
-   not-before window is rejected with `401`.
-2. **Session** — `sub` and `sid` identify an active session, and
-   `sub` double-checks that the token belongs to the expected user.
-3. **Strict ordering** — the token must be the latest one issued for
-   its session. The server persists the highest `issue` issued per
-   session, so stepping survives restarts and Lambda cold starts.
+1. **Full JWT validation** — signature, claims, expiry and the eight-hour `nbf`
+   must be valid; a refresh inside `nbf` returns `401`.
+2. **Session** — `sub` and `sid` identify an active session.
+3. **Strict ordering** — the token must be the latest issued; the highest
+   `issue` is persisted, so stepping survives restarts and cold starts.
 
-A successful refresh invalidates the token that was presented; a
-refresh token with a stale or unknown `issue` is rejected with `401`.
-Every refresh moves the *same* session exactly one step forward: `sid`
-identifies the session, `issue` prevents repeats. Consequences:
+A stale or unknown `issue` returns `401`; a successful refresh invalidates the
+presented token. Consequences:
 
-- The refresh token is single-use per step. If a refresh fails,
-  discard both tokens and re-login.
-- Two concurrent refreshes with the same token: the first wins, the
-  second gets `401`.
-- Refreshing never creates another session and never extends the
-  30-day session lifetime. A refresh in the final eight hours of a
-  session is rejected: a new token could not have a valid eight-hour
-  not-before window before the session expires.
+- Single-use per step: two concurrent refreshes with the same token yield one
+  success and one `401`; if a refresh fails, discard both tokens and re-login.
+- Refreshing never extends the 30-day session. A refresh in the final eight
+  hours is rejected because the new token could not have a valid `nbf` before
+  the session expires.
 
 ## Logout
 
-`POST /api/auth/logout` takes no body. It deletes the session named by the
-access token's `sid` claim and returns `{ "success": true }`. Because
-`sid` is stable across refreshes, this revokes the whole refresh chain:
-every refresh token issued for that session is then rejected with `401`.
-The access token itself is stateless and keeps working until it expires
-(9 hours), so clients must also discard both tokens locally. Calling
-logout twice is harmless.
+`POST /api/auth/logout` takes no body, deletes the session named by the access
+token's `sid` and returns `{ "success": true }`. The stable `sid` revokes the
+whole refresh chain; the stateless access token remains valid until its 9-hour
+expiry, so clients must discard both tokens locally. Calling logout twice is
+harmless; live EventSource streams are closed.
 
 ## Client guidance
 
 - Store both tokens (the SPA keeps them in `localStorage`).
-- Send the access token as `Authorization: Bearer <accessToken>`;
-  never send the refresh token as a bearer.
-- When an API call returns `401`, call `/api/auth/refresh` once and
-  retry; if the refresh fails, clear the stored tokens and show the
-  login form. Do not refresh before the refresh token's `nbf`: the
-  access token lives 9 hours, so there is a one-hour window to refresh.
-- Treat the refresh token as a credential: do not log it, and never
-  put it in a URL.
+- Send the access token as `Authorization: Bearer <accessToken>`; never send
+  the refresh token as a bearer or in a URL.
+- On `401`, call `/api/auth/refresh` once and retry; if it fails, clear the
+  tokens and show the login form. Do not refresh before the refresh token's
+  `nbf`: the 9-hour access token leaves a one-hour window.
+- Treat the refresh token as a credential; do not log it.
 
 ## Status
 
-The handler implements the login, refresh and logout flow described
-above, including the stable session id, issue stepping, eight-hour
-not-before window and full JWT validation. The `ddb` user manager is
-implemented; the `ldap` user manager is reserved but unimplemented.
-
-See [API.md](API.md) for the endpoints as implemented,
-[ARCHITECTURE.md](ARCHITECTURE.md) for the authentication and
-visibility flow, and [CONFIGURATION.md](CONFIGURATION.md) for
-`USERNAME`, `PASSWORD`, `JWT_SECRET` and `USER_MANAGER`.
+The flow above is implemented, including issue stepping and full JWT validation.
+The `ddb` manager is implemented; `ldap` is reserved but unimplemented. See
+[API.md](API.md#post-apiauthlogin) for endpoint examples,
+[ARCHITECTURE.md](ARCHITECTURE.md#authentication-and-visibility) for enforcement,
+and [CONFIGURATION.md](CONFIGURATION.md#server-and-authentication) for env vars.

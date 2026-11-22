@@ -1,381 +1,252 @@
 # Architecture
 
+One Go binary serves both the API and the webmail client. This page explains how the pieces connect;
+[DESIGN.md](DESIGN.md) covers rationale and [CONFIGURATION.md](CONFIGURATION.md) covers every setting.
+
 ## System overview
 
-Deployed on AWS, Emissary looks like this:
+Deployed on AWS:
 
 ```
-                        ┌──────────────────────── Route 53 ─────────────────────────┐
-                        │  MX  <DOMAIN>  → inbound-smtp.<region>.amazonaws.com      │
-                        │  MX  mail.<DOMAIN> → feedback-smtp.<region>.amazonaws.com│
-                        │  DKIM CNAMEs, SPF TXT, DMARC TXT                         │
-                        └──────────────────────────────┬──────────────────────────┘
-                                                       │
-        inbound mail                                   ▼
-  ─────────────────► SES receipt rule (active rule set, S3 action)
-                                                       │  raw EML, key = SES message id
-                                                       ▼
-                                              ┌────────────────┐
-                                              │  S3 bucket     │
-                                              │  (in stack)    │
-                                              └───────┬────────┘
-                                                      │ GetObject / ListObjectsV2
- https://mail.<DOMAIN>                                ▼
-  ─────────────────► API Gateway (regional, proxy) ──► Lambda (Go, custom runtime)
-        ▲                                              │  also: DynamoDB metadata table
-        │ A alias record                               │  Secrets Manager (JWT secret)
-        │ + ACM cert                                  ▼
-        │                                       single http.Handler
-        │                                       ┌─────────────────────────────┐
-   browser ── React SPA ──────────────────────►│  /api/*  JSON API           │
-                                               │  /*      embedded frontend  │
-                                               └─────────────────────────────┘
-        outbound mail ◄──────────────────── SES SendEmail ◄──── EmailSubmission/set
+                  Route 53: MX <DOMAIN> → SES inbound; MX mail.<DOMAIN> → SES feedback
+                  DKIM CNAMEs, SPF TXT, DMARC TXT
+                                 │
+   inbound mail ────────────────► SES receipt rule → S3 staging (raw EML)
+                                 │
+  https://mail.<DOMAIN> ────────► API Gateway → Lambda (Go, custom runtime)
+         ▲                            │  DynamoDB metadata / sessions / users
+         │ A alias + ACM cert          │  Secrets Manager JWT secret
+    browser ── React SPA ────────────► one http.Handler: /api/* JSON, /* SPA
+         outbound ◄──────────── SES SendRawEmail ◄──── EmailSubmission/set
 ```
 
-The same `http.Handler` runs without AWS when started natively: it
-listens with `net/http`. For an AWS-free run the local/no-op implementations
-(memory/log/none) must be selected explicitly; `run.sh run` does this when no
-backend configuration is present. `config.Load` never selects them as a
-fallback.
+SES receives mail for `DOMAIN` and writes the untouched RFC 5322 message to an S3 staging area under its message id.
+A consumer process validates recipients and delivers a copy to each user's mailbox; nothing writes mail directly
+into another account's tree. API Gateway proxies HTTPS requests to the Lambda, which hands API Gateway events to the
+same `http.Handler` used for native runs. Outbound submissions go through the configured sender (SES or direct
+SMTP). See [S3.md](S3.md#bucket-layout) for keys and [DEPLOYMENT.md](DEPLOYMENT.md#the-three-stacks) for the stacks.
+
+The same handler runs natively with `net/http`. For an AWS-free run the local or no-op backends (`memory`, `log`,
+`none`) must be selected explicitly; `./run.sh run` does that when no backend configuration is present.
+`config.Load` never chooses them as a fallback ([CONFIGURATION.md](CONFIGURATION.md#backend-selection-all-pluggable-components)).
 
 ## Application startup
 
-`mailer/cmd/frontend/main.go`:
+[`mailer/cmd/frontend/main.go`](../mailer/cmd/frontend/main.go) is the entry point for both the web application and the `bootstrap` Lambda:
 
-1. `config.Load` reads all environment variables (see
-   [CONFIGURATION.md](CONFIGURATION.md)), resolves every pluggable backend
-   with the shared explicit-or-unique-configuration rule, applies non-backend
-   defaults, and validates. Any variable whose value starts with `arn:aws:` is
-   resolved from AWS Secrets Manager at this point (`envutil` +
-   `awsutil`) — that is how the deployed Lambda receives its JWT
-   secret as an ARN.
-2. `configvendor.FromConfig` selects and constructs every pluggable
-   component from the loaded configuration, returning a `Bundle`
-   containing:
-   - a `usermanager.UserManager` (the built-in administrator plus the
-     selected backend),
-   - a `storage.Storage` (S3, filesystem, or memory),
-   - a `metadata.MetadataStore` (memory, file, or DynamoDB),
-   - a `sender.Sender` (SES, MTA, or log),
-   - a `session.SessionStore` (memory or DynamoDB),
-   - a `receiver.ConfigStore` (S3, filesystem, memory, or DynamoDB),
-   - the loaded receiver mail-identity configuration.
-3. `handler.New` consumes that `Bundle` (along with a few scalar
-   settings), builds the `auth.Authenticator` over the user manager,
-   wires the routes, auth middleware and embedded frontend into one
-   `http.Handler`.
-4. Runtime mode is detected with `awsutil.IsAwsLambda()`:
-   - **In Lambda**, the handler is handed to the Lambda runtime via
-     `aws-lambda-go-api-proxy`, so API Gateway events are translated
-     to `net/http` requests. The binary is built as `bootstrap`
-     (custom runtime `provided.al2023`).
-   - **Otherwise**, the process listens on `LISTEN_ADDR`/`PORT`.
+1. [`config.Load`](../mailer/config/config.go) reads and validates the
+   environment, applies non-backend defaults, and resolves any value beginning with `arn:aws:` through
+   [`envutil`](../mailer/envutil/envutil.go) and [`awsutil`](../mailer/awsutil/awsutil.go). This is how the deployed
+   Lambda receives its JWT secret from Secrets Manager as an ARN.
+2. [`configvendor.FromConfig`](../mailer/config-vendor/vendor.go) selects and
+   constructs every pluggable component, returning a `Bundle` with the user manager (built-in administrator plus
+   selected backend), storage, metadata store, sender, session store, receiver config store and loaded routing rules.
+3. [`handler.New`](../mailer/handler/handler.go) takes that `Bundle` plus a few
+   scalar settings, builds the [`auth.Authenticator`](../mailer/auth/auth.go), and wires routes, auth middleware,
+   panic recovery and the embedded frontend into one `http.Handler`.
+4. [`awsutil.IsAwsLambda`](../mailer/awsutil/awsutil.go) picks the runtime: in
+   Lambda the handler is passed to `aws-lambda-go-api-proxy` so API Gateway events become `net/http` requests (custom
+   runtime `provided.al2023`); otherwise the process listens on `LISTEN_ADDR`/`PORT`, with bounded timeouts and
+   graceful SIGINT/SIGTERM shutdown.
+
+The standalone [`s3-receiver`](../mailer/cmd/s3-receiver) binary reuses the same config, storage and receiver
+packages to process staged objects outside the web process.
 
 ## Package map
 
 | Package | Responsibility |
 | --- | --- |
-| `cmd/frontend` | Entry point; chooses Lambda vs. native listener. |
-| `config` | Loads and validates environment configuration. |
-| `envutil` | Cached environment lookups; resolves `arn:aws:` values via Secrets Manager. |
-| `awsutil` | Lambda detection and Secrets Manager access. |
-| `auth` | JWT issue/validate (`Claims`: `sub`, `sid`, opaque `accountId`, `systemManager`, `EmissaryUserManagement`, `iat`, `exp`, optional `aud`/`iss`). |
-| `components/usermanager` | Pluggable login backends; every backend also knows the built-in admin. |
-| `components/storage` | Mail source: `ListEmails` (scoped by resolved internal user id and `mailboxId`), plus `GetEmail`, `AddEmail`, `DeleteEmail`. `RootObject`/`ListRoot` are the one deliberately admin-facing capability, used only by the system-manager support API. |
-| `components/sender` | Write side of mail: `Send`. |
-| `components/metadata` | Per-message JMAP keywords (`$seen`, `$flagged`, `$draft`, and the other supported system keywords) plus the server-owned `receivedAt` timestamp, keyed by email id and discarded when a message is deleted. Every backend normalizes read results from lookup keys and returns `List` sorted by mail id. |
-| `components/session` | Refresh-token store for JWT sessions (`memory` or `ddb`). |
-| `email` | RFC 5322 parsing: `WireFormatEmail` (full structure) and `UserEmail` (simplified). |
-| `handler` | The HTTP API, auth middleware, panic recovery, and the embedded frontend. |
-| `gui` | `//go:embed all:frontend/dist` — the built SPA. |
+| [`cmd/frontend`, `cmd/s3-receiver`](../mailer/cmd/) | Web application and inbound-consumer binaries. |
+| [`config`](../mailer/config/) | Environment loading and validation; [`config-vendor`](../mailer/config-vendor/) constructs the selected components. |
+| [`envutil`, `awsutil`](../mailer/envutil/) | Cached lookups, ARN secret resolution, Lambda detection. |
+| [`auth`](../mailer/auth/auth.go) | JWT issue/validate; [`Claims`](../mailer/auth/auth.go) carries `sub`, `sid`, `systemManager`, `EmissaryUserManagement`, `iat`, `exp` and optional `aud`/`iss`. |
+| [`components/usermanager`](../mailer/components/usermanager/) | Login backends; every backend also knows the built-in administrator. |
+| [`components/storage`](../mailer/components/storage/) | Mail source: `ListEmails` is scoped by internal user id and mailbox; `RootObject`/`ListRoot` exist only for support tools. |
+| [`components/sender`](../mailer/components/sender/) | Outbound `Send`. |
+| [`components/metadata`](../mailer/components/metadata/) | JMAP keywords and server-owned `receivedAt`, keyed by email id and user id; deleted with the message. |
+| [`components/session`](../mailer/components/session/) | Refresh-token store for JWT sessions. |
+| [`email`](../mailer/email/) | RFC 5322 parsing and rendering: `WireFormatEmail` (lossless) and `UserEmail` (simplified). |
+| [`handler`](../mailer/handler/) | HTTP API, auth middleware, panic recovery and the embedded frontend. |
+| [`jmap`](../mailer/jmap/) | JMAP method dispatch and wire types generated from `api/jmap.yaml`. |
+| [`receiver`](../mailer/receiver/) | Inbound routing rules, recipient validation and delivery. |
+| [`gui`](../mailer/gui/gui.go) | `//go:embed all:frontend/dist` serving the built SPA. |
+
+Each seam is a small interface selected by environment variable; local/no-op implementations are explicit opt-ins, never fallbacks.
 
 ## Pluggable components
 
-Each seam is a small interface, selected by environment variable and
-instantiated in `configvendor.FromConfig`. A selector must be set explicitly,
-or exactly one backend must have configuration; otherwise startup fails. See
-[CONFIGURATION.md](CONFIGURATION.md#backend-selection-all-pluggable-components)
-for the per-backend rules. Local/no-op implementations (`memory`, `log`,
-`none`) are explicit opt-ins, never fallbacks.
+A selector must be set explicitly, or exactly one backend must have configuration; otherwise startup fails. See
+[CONFIGURATION.md](CONFIGURATION.md#backend-selection-all-pluggable-components) for the full rules and settings, and
+[DESIGN.md](DESIGN.md#how-the-pieces-are-selected) for the interfaces.
 
 | Seam | Interface | Selector | Implementations | Notes |
 | --- | --- | --- | --- | --- |
-| Inbound messages | `storage.Storage` | `STORAGE` | `s3`, `filesystem`, `memory` | `s3` needs `S3_BUCKET`; `filesystem` needs `FILESYSTEM_DIR`. `memory` is an explicit opt-in. |
-| Outbound mail | `sender.Sender` | `SENDER` | `aws-ses`, `mta`, `log` | `aws-ses` uses the SDK credential chain; `mta` needs `MTA_PORT`; `log` is an explicit opt-in. The From address comes from the submitting user (or masquerade target), not from configuration. |
-| Message state | `metadata.MetadataStore` | `METADATA` | `memory`, `file`, `ddb` | Stores JMAP keywords and the server-owned `receivedAt` timestamp, keyed by email id and owning user id. `ddb` uses the `<TABLE_PREFIX>metadata` table (requires `TABLE_PREFIX`); its table has partition key `id`, sort key `userId`, and a `userId-index` GSI for `List`. `memory` is an explicit opt-in. Both `handler.New` and the `s3-receiver` build this store with `metadata.NewStore`. |
-| Sessions | `session.SessionStore` | `SESSION` | `memory`, `ddb` | Refresh tokens for JWT sessions. `ddb` uses the `<TABLE_PREFIX>sessions` table (requires `TABLE_PREFIX`); `memory` is an explicit opt-in. |
-| Receiver rules | `receiver.ConfigStore` | `RECEIVER` | `s3`, `filesystem`, `ddb`, `memory` | One routing config per mail identity; `RECEIVER_BUCKET`/`RECEIVER_FILESYSTEM_DIR` override the shared settings. `memory` is an explicit opt-in. |
-| Users | `usermanager.Manager` | `USER_MANAGER` | `none`, `ddb`, `filesystem`, `s3`, `ldap` | `none` is an explicit opt-in. `ddb` uses the `<TABLE_PREFIX>users` table (requires `TABLE_PREFIX`); `s3` stores each user as `users/<email>/user.json` in the mail bucket; `filesystem` stores each user under `FILESYSTEM_DIR/users/<email>/user.json`. Both `ddb` and `s3` are Emissary-mastered. `ldap` is unimplemented. |
+| Inbound messages | [`storage.Storage`](../mailer/components/storage/storage.go) | `STORAGE` | `s3`, `filesystem`, `memory` | `s3` needs `S3_BUCKET`; `filesystem` needs `FILESYSTEM_DIR`; `memory` is an opt-in. |
+| Outbound mail | [`sender.Sender`](../mailer/components/sender/sender.go) | `SENDER` | `aws-ses`, `mta`, `log` | `aws-ses` uses the SDK credential chain; `mta` needs `MTA_PORT`; `log` is an opt-in. From comes from the caller. |
+| Message state | [`metadata.MetadataStore`](../mailer/components/metadata/interface.go) | `METADATA` | `memory`, `file`, `ddb` | Keywords plus `receivedAt` by email id and user id; `ddb` requires `TABLE_PREFIX`. |
+| Sessions | [`session.SessionStore`](../mailer/components/session/session.go) | `SESSION` | `memory`, `ddb` | Refresh tokens; `ddb` requires `TABLE_PREFIX`; `memory` is an opt-in. |
+| Receiver rules | [`receiver.ConfigStore`](../mailer/receiver/receiver_config_store.go) | `RECEIVER` | `s3`, `filesystem`, `ddb`, `memory` | One ordered rule set per mail identity; overrides use `RECEIVER_BUCKET`/`RECEIVER_FILESYSTEM_DIR`. |
+| Users | [`usermanager.UserManager`](../mailer/components/usermanager/usermanager.go) | `USER_MANAGER` | `none`, `ddb`, `filesystem`, `s3`, `ldap` | `ddb`, `s3`, `filesystem` are Emissary-mastered; `ldap` unimplemented; `none` is an opt-in. |
+
+Storage and sending are independent: a deployment can read mail from S3 while logging outbound mail, or use the
+memory store with a real sender.
 
 ## Inbound mail flow
 
-1. A sender's MTA resolves the MX record for `DOMAIN` and delivers to
-   the SES inbound endpoint for the region.
-2. SES evaluates the active receipt rule set (created and activated by
-   the CDK "in" stack; activation is account-wide per region).
-3. The rule's S3 action writes the raw message to a **staging area** at the
-   bucket root, keyed by the SES message id. The bucket policy
-   grants SES `PutObject`; no consumer Lambda is involved for this initial write.
-4. A consumer process (Lambda or scheduled job) reads from the staging area,
-   validates recipients, and delivers each message to the appropriate user mailboxes:
-   - For each valid recipient, the receiver calls
-     `storage.Storage.AddEmail(ctx, recipient, mailboxID, parsedEmail, raw)` on the **configured**
-     store (S3 in production, memory for local runs), passing the original
-     staging bytes as `raw`. Delivery no longer writes an S3 key directly
-     from the receiver.
-   - `AddEmail` assigns the mailbox and generates the email id. `S3Storage`
-     writes `users/<recipient-email>/inbox/<timestamp>_<generated-id>.eml`,
-     deriving the timestamp from the `Date` header (falling back to the current
-     time) as ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`).
-     Legacy deliveries used the SES message id in place of `<generated-id>`;
-     both remain readable. `AddEmail` stores the supplied `raw` bytes verbatim,
-     so the delivered `.eml` keeps every header, MIME part and transfer
-     encoding (including attachments). JMAP-created mail has no wire bytes and
-     is rendered from the parsed fields instead.
-   - The receiver creates a metadata record in the metadata store keyed by the
-     **id returned from `AddEmail`** (the stable delivered token; the full
-     S3 key is derived from the account, mailbox and token).
-     The record starts with an empty keyword set and a server-stamped
-     `receivedAt` (RFC 3339 UTC): the message is unread and unflagged until a
-     JMAP client sets `keywords/$seen` or `keywords/$flagged`. `receivedAt`
-     is not client-assignable or editable.
-   - The staging object is deleted after successful delivery to all recipients.
-     Staging read/delete still use S3 directly and will be decoupled separately.
-5. When a JMAP call lists or opens mail, the dispatcher first resolves the
-   public opaque JMAP `accountId` to the internal user id (the JWT `sub`, or
-   a target user selected by a caller with `EmissaryUserManagement`).
-   `storage.S3Storage` then paginates `ListObjectsV2` over
-   `users/<internal-user-id>/<mailboxId>/`. An `inMailbox` filter narrows the read to one JMAP
-   mailbox; without it every mailbox in the account is searched.
-   `GetObject`s each message, and parses it with `email.Parse`.
-   Unparseable objects are logged and skipped, not fatal.
-   All three backends return `ListEmails` through `SortListedEmails`:
-   `Email.Date` descending, with `Ref.ID` descending as the tie-breaker.
-   This standardizes S3 and memory behavior and is an intentional change for
-   the filesystem backend, which previously returned object-key order.
-6. `handler` merges the full keyword map and `receivedAt` from the metadata
-   store into each JMAP `Email/get` response, and sorts `Email/query` by that
-   receive time. A missing metadata record is not an error: the email is
-   returned with an empty `keywords` object and `receivedAt` falls back to the
-   message `Date` header. Listing is always scoped to one account; there is no
-   cross-account email listing API.
+1. The sender's MTA resolves the MX record for `DOMAIN` and delivers to SES; the
+   active receipt rule set (created by the `in` stack) writes the raw message to S3 staging under the SES message id.
+   The bucket policy grants SES `PutObject`; no consumer Lambda is involved in this first write.
+2. A consumer (Lambda or scheduled job) parses the staged object with
+   [`email.ParseWireFormat`](../mailer/email/wireformat_email.go) and collects SMTP envelope recipients from the
+   topmost `Received` header's `for <address>` clauses. `To`, `Cc` and `Bcc` are sender-controlled and never used for
+   routing; a message without an envelope recipient is skipped.
+3. Recipients are validated and routed as described in
+   [Recipient validation and delivery](#recipient-validation-and-delivery). Rules come from
+   [`HandlerRules`](../mailer/receiver/receiver_config.go) loaded from the configured store; see
+   [CONFIGURATION.md](CONFIGURATION.md#receiver-inbound-routing-rules).
+4. A delivery target gets
+   `Storage.AddEmail(ctx, recipient, mailboxID, parsedEmail, raw)` on the configured store. The store assigns the
+   stable id and writes the original bytes verbatim to that recipient's `inbox` (see [S3.md](S3.md#inbound-flow)), so
+   every header, MIME part and attachment is preserved; the receiver never constructs mailbox keys. Metadata is created
+   from the returned id with an empty keyword set and a server-stamped `receivedAt` (RFC 3339 UTC); `receivedAt` is
+   never client-assignable.
+5. A marker derived from the staging key and recipient is written under
+   `_processed/` after each recipient is handled, so a retry skips completed recipients. Staging is deleted only once
+   every recipient has been handled successfully; a failure leaves it in place and returns an error for retry. Markers
+   are cleared after staging deletion; stale markers are harmless because SES message ids are unique.
+6. For JMAP reads, the dispatcher resolves the public opaque `accountId` to the
+   internal user id and [`storage`](../mailer/components/storage/) paginates that account's mailbox prefix; an
+   `inMailbox` filter narrows the read to one mailbox. `SortListedEmails` gives `Email.Date` descending with id
+   descending as tie-breaker across all backends; unparseable objects are logged and skipped.
+   [`handler`](../mailer/handler/) merges keywords and `receivedAt` into `Email/get`, sorts queries by receive time,
+   and reports a missing metadata record as empty keywords with a `Date` fallback. There is no cross-account listing
+   API.
 
-The email ID used throughout the JMAP API is a URL-safe token derived from the
-stable delivered token (e.g., `20240308T143000_9f1c...eml`) returned by
-`AddEmail`. The underlying object is stored as
-`users/<internal-user-id>/<mailboxId>/<token>` (under the configured bucket
-prefix when present); the account and mailbox come from the JMAP context, so
-a move does not change the id. Older deliveries that used the SES message id
-as the suffix remain valid ids, and legacy full-object-key inputs are still
-accepted.
+The JMAP `Id` is a URL-safe token derived from the delivered filename (`<timestamp>_<generated-id>.eml`), with the
+account and mailbox supplied by the JMAP context; a move changes the physical key but not the id. Older
+SES-message-id suffixes and legacy full-key inputs remain readable. See [S3.md](S3.md#bucket-layout) and [API.md](API.md#jmap-mail-operations).
 
-Durable per-session scratch state lives separately at `_storage/<sid>/`. JMAP
-drafts are JSON objects under `_storage/<sid>/drafts/`, and the creation-id map
-is `_storage/<sid>/created-ids.json`. `<sid>` is the server-generated JWT
-`sid`, so drafts and creation references survive across Lambda invocations and
-never appear in mailbox listings.
-
-Durable JMAP change-tracker state uses a separate `_jmap-state/` prefix:
-`_jmap-state/<base64url(accountId)>/state.json` holds the per-type counters,
-fingerprints, bounded change logs and recent query result sets used by
-`Foo/changes` and `Foo/queryChanges`. Writes use optimistic concurrency (an S3
-ETag condition or a filesystem content hash) so a stale Lambda invocation
-cannot roll a state counter backwards. The same state is the source for push
-notifications: `/eventsource` polls it for connected clients, and JMAP writes
-flush their changes after dispatch. Verified PushSubscriptions receive the same
-`StateChange` payload by webhook. Inbound delivery advances the `EmailDelivery`
-counter through the shared store so a different Lambda process is visible to
-push clients.
+Durable per-session scratch state lives at `_storage/<sid>/` (JSON drafts and `created-ids.json`), where `<sid>` is
+the JWT session id; drafts never appear in mailbox listings. JMAP counters, bounded change logs and query snapshots
+live at `_jmap-state/<base64url(accountId)>/state.json`; writes use an S3 ETag condition or filesystem content hash
+so a stale Lambda cannot regress state. The same store drives `/eventsource` polling and verified `PushSubscription`
+webhooks, and inbound delivery advances `EmailDelivery` so other processes become visible to push clients ([API.md](API.md#state-changes)).
 
 ### Recipient validation and delivery
 
-When an inbound message is processed for delivery (by a consumer
-Lambda or scheduled job reading from the S3 bucket staging area), the following
-validation and delivery process applies:
+When a consumer processes a staged object, each recipient is handled independently:
 
-1. **Extract recipients** — Parse the staged object with
-   `email.ParseWireFormat` (the raw wire-format type, unlike the simplified
-   `UserEmail` used for delivered `.eml` files) and collect the SMTP envelope
-   recipients from the `for <address>` clauses of the topmost `Received`
-   header. SES writes one for each `RCPT TO` when it stores the message.
-   `To`, `Cc`, and `Bcc` are sender-controlled and are never used for routing;
-   messages without a usable envelope recipient are skipped.
-
-2. **Resolve routing rules** — For each recipient, load the ordered
-   `HandlerRules` for its mail identity (the hostname after `@`) from the
-   receiver config store, falling back to the `_` entry. Rules are tried in
-   order until one applies:
-
-   - `DeliverToUser` applies only when `UserManager.Lookup(ctx, address)`
-     returns a known user (including the built-in administrator).
-   - `DeliverToMailIdentity` delivers to the identity's mailbox without
+1. **Extract recipients** — [`email.ParseWireFormat`](../mailer/email/wireformat_email.go)
+   gives the lossless wire type (unlike the simplified `UserEmail` used for delivered `.eml` files). SES writes one
+   `for <address>` clause per `RCPT TO` in the topmost `Received` header; header recipients are ignored.
+2. **Resolve routing rules** — Load the ordered
+   [`HandlerRules`](../mailer/receiver/receiver_config.go) for the mail identity (the hostname after `@`), falling
+   back to the `_` entry. First applicable rule wins:
+   - `DeliverToUser` — only when `UserManager.Lookup` returns a known user,
+     including the built-in administrator.
+   - `DeliverToMailIdentity` — delivers to the identity's own mailbox without
      requiring a user account.
-   - `Bounce` sends a standard bounce via `sender.Sender` with the original
-     message ID, a `BounceSender` address (e.g. `mailer-daemon@<DOMAIN>`),
-     the failed recipient and a `UserUnknown` bounce type, over the
-     configured transport (SES or log).
-   - `Drop` discards the message for that recipient: no delivery and no
-     bounce. This is the only path that silently discards mail.
+   - `Bounce` — a standard `UserUnknown` bounce through the configured sender,
+     with the original message id and a `BounceSender` address.
+   - `Drop` — silent discard for that recipient; the only path that discards
+     without notice.
+   With no applicable rule, or no loadable rules, the receiver bounces rather than discards; place terminal rules last.
+3. **Deliver to selected recipients** — Call `Storage.AddEmail` with the
+   original staging bytes, initialize metadata from the returned id, and give each target their own copy in their
+   `inbox`. Delivery, bouncing and dropping are decided per recipient, so one message can have mixed outcomes.
+4. **Mixed outcomes and retries** — Each delivery gets its own physical copy,
+   enabling independent move/delete/flag per user; each bounce is a separate message. Staging is deleted only after
+   every recipient is handled. A failed delivery, bounce or delete leaves the object for retry, and the `_processed/`
+   markers ensure a retry repeats only failed work.
 
-   When no rule applies, or no rules can be loaded, the receiver bounces
-   instead of discarding the message.
-
-3. **Deliver to selected recipients** — For each recipient whose rule
-   selected delivery:
-   - Call `Storage.AddEmail(ctx, recipient, mailboxID, parsedEmail, raw)` on
-     the configured store, passing the original staging bytes. The store
-     assigns the stable id, writes the bytes verbatim to the recipient's
-     `inbox`, and the receiver does not construct mailbox keys.
-   - For `S3Storage`, the key is `users/<recipient-email>/inbox/<timestamp>_<generated-id>.eml`,
-     with the timestamp derived from the `Date` header (or the current time)
-     in ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`).
-   - Initialize metadata with the id returned by `AddEmail`, an empty keyword
-     set and a server-stamped `receivedAt`.
-   - Each recipient gets their own copy in their `inbox` mailbox
-
-4. **Mixed outcomes and retries** — Different recipients of one message can
-   take different paths: delivery targets each get their own copy, bounced
-   recipients each generate a separate bounce, and dropped recipients get
-   neither. The staging object is deleted only after every recipient has been
-   handled successfully. A failed delivery, bounce or delete leaves the object
-   in place and returns an error so the Lambda invocation is retried.
-
-   After each recipient is handled, the receiver records a marker derived from
-   the staging key and that recipient under `_processed/` in the mail bucket.
-   A retry skips recipients with a marker, so a partial failure only repeats
-   the work that failed and a failure to delete staging cannot cause a second
-   delivery. Markers are removed once staging has been deleted; a stale marker
-   is harmless because SES message ids are unique.
-
-Each delivery target has their own physical copy of the message in their
-mailbox structure, enabling independent management (move, delete, flag) per
-user. Delivery, bouncing and dropping are decided independently for every
-recipient by the configured rules for its domain.
+See [SUPPORT.md](SUPPORT.md#receiver-rules-editor) for the rules editor and [S3.md](S3.md#bucket-layout) for the staging layout.
 
 ## Outbound mail flow
 
 1. The client creates a draft with `Email/set` and submits it with
-   `EmailSubmission/set`, both on the JMAP batch endpoint. With a JWT `sid`,
-   `Email/set` writes the draft to `_storage/<sid>/drafts/` instead of trying
-   to add a message to the delivered-mail tree (which `S3Storage` does not
-   support). `EmailSubmission/set` reads that draft first and falls back to
+   `EmailSubmission/set` on the JMAP batch endpoint. With a JWT `sid`, [`handler`](../mailer/handler/) writes drafts
+   to `_storage/<sid>/drafts/` rather than the delivered-mail tree; submission reads that draft first and falls back to
    delivered mail.
-2. The handler verifies the submitted email belongs to the request's
-   `accountId`, then locks the From address to the authenticated user: the
-   submission sends as the caller's own account, or as the target account
-   when a caller with `EmissaryUserManagement` masquerades as another
-   `accountId`. There is no configured From address, and a From supplied by
-   the client (envelope sender or draft header) is ignored.
-3. When masquerading, Reply-To must match From (it defaults to From when
-   omitted); a conflicting Reply-To is rejected with `invalidProperties`.
-4. The message is handed to the configured `sender.Sender` implementation.
-   Both wire senders serialize the message once with a shared builder that
-   writes the RFC 5322 headers through `email.RenderHeaders` (including
-   `In-Reply-To` and `References` when the draft carries them, and the
-   message's stored `Message-ID`) and the MIME body. The same header renderer
-   backs `email.RawFromUserEmail` for JMAP-created mail, so address formatting
-   and CRLF sanitization live in one place. `aws-ses` sends that raw message
-   with the SES v2 `SendRawEmail` API, with the envelope recipients passed
-   separately;
-   `mta` resolves the recipient domains' MX records and delivers the same
-   bytes directly over SMTP on port 25, after a DMARC/SPF alignment warning
-   check; `log` writes a line to the process log.
-5. On success, the session draft is deleted; on failure it is kept so the
-   client can retry without re-entering the message.
+2. The handler verifies the email belongs to the request's `accountId` and locks
+   From to that account (or the masquerade target). A client-supplied From is ignored; a masqueraded Reply-To must
+   match From, defaulting to From when omitted. See [API.md](API.md#send-email).
+3. [`sender.Sender`](../mailer/components/sender/) serializes the message once
+   through [`email.RenderHeaders`](../mailer/email/headers.go), including `In-Reply-To`, `References` and the stored
+   `Message-ID`; the same renderer backs `email.RawFromUserEmail`, so address formatting and CRLF sanitization live
+   in one place. `aws-ses` calls `SendRawEmail` with envelope recipients passed separately; `mta` resolves MX records
+   and speaks SMTP on `MTA_PORT` after a DMARC/SPF alignment warning check; `log` writes a process-log line. The exact
+   SMTP envelope is modeled in [`email.SubmissionEnvelope`](../mailer/email/envelope.go) so Bcc and SMTP-only
+   recipients never enter the headers.
+4. On success the session draft and its metadata are deleted; on failure the
+   draft is kept so the client can retry without re-entering the message.
 
 ## Authentication and visibility
 
-- `POST /api/auth/login` authenticates through the user manager: the
-  built-in administrator (`USERNAME`/`PASSWORD`, constant-time compare)
-  is checked first by every backend, then the backend's own logic.
-- A successful login returns an HS256 JWT plus its expiry. The SPA
-  stores it in `localStorage` and sends it as
-  `Authorization: Bearer <token>`.
-- `requireAuth` middleware validates the signature, expiry, audience
-  and issuer, then stashes the claims in the request context.
-- The JMAP dispatcher uses the opaque `accountId` derived from the JWT `sub`
-  as the default and rejects a different one for users without
-  `EmissaryUserManagement`. A user with that claim may supply any known
-  opaque `accountId` to masquerade.
-- `Email/query`, `Email/get`, `Email/set` and `EmailSubmission/set` are
-  scoped to that account. Storage uses a mailbox-key prefix rather than a
-  header-based `canAccessEmail` filter; messages outside the account are
-  absent from query results and reported as `notFound` by `Email/get`.
-- Each delivered message has one object per recipient mailbox, so
-  deleting a message affects only that account's copy.
+[`POST /api/auth/login`](../mailer/handler/handler.go) checks the built-in administrator first (constant-time
+compare), then the configured user manager. A successful login returns an HS256 access/refresh pair over a new
+session; [`requireAuth`](../mailer/handler/handler.go) validates signature, expiry, audience and issuer, then
+stashes claims in the request context. The JMAP dispatcher defaults to the `acct_` id derived from the JWT `sub` and
+rejects another account unless the caller has `EmissaryUserManagement`, which permits masquerade. `Email/query`,
+`Email/get`, `Email/set` and `EmailSubmission/set` are scoped to that account by storage prefix: another account's
+mail is absent from results and reported `notFound`. Each recipient has their own object, so deleting a message
+affects only that account's copy. Token lifetimes, refresh stepping and login limits are in [AUTH.md](AUTH.md);
+account management and masquerade are in [USERS.md](USERS.md#admin-masquerade) and [API.md](API.md#account-selection-and-masquerade).
 
 ## Request handling details
 
-- All API routes live under `/api`; unknown `/api` paths return a JSON
-  `404`, and every other path serves the SPA.
-- The SPA server falls back to `index.html` for client-side routes and
-  sets long-lived immutable caching only for `/assets/`.
-- Request bodies are capped at 1 MiB.
-- A top-level `recover` turns panics into a JSON `500`.
-- Errors sent to clients are generic; the underlying cause is logged
-  server-side only.
+- All API routes live under `/api`; unknown `/api` paths return JSON `404`,
+   every other path serves the SPA with `index.html` fallback. Long-lived immutable caching applies only to `/assets/`.
+- REST bodies are capped at 1 MiB; JMAP batches by `MAX_FILESIZE` (10 MiB by
+   default). Oversized batches return 413 with `urn:ietf:params:jmap:error:limit`.
+- A top-level `recover` converts panics to JSON `500`; client errors are
+   generic and details are logged server-side only. See [API.md](API.md#conventions) and
+   [CONFIGURATION.md](CONFIGURATION.md#server-and-authentication).
 
 ## Email data model
 
-- `email.WireFormatEmail` — lossless, lenient RFC 5322 parser
-  (headers, MIME tree, transfer encodings, charsets, folded headers).
-  Parse errors are collected, not fatal. It can serialize back to wire
-  format. The whole message and each decoded MIME part are capped by
-  `MAX_FILESIZE` (10 MiB by default).
-- `email.EmailRef` — metadata about where a message lives: its storage id
-  plus the derived `AccountID`/`MailboxID`.
-- `email.UserEmail` — the simplified message content used everywhere else:
-  addresses, subject, date, text and HTML bodies.
-- `email.ListedEmail` — a storage listing result pairing an `EmailRef` with
-  its `UserEmail`.
-- `email.Parse` is the convenience path used by storage; attachments
-  and other non-text parts are ignored. Use `email.EmailRefFromID` to build
-  the ref for a stored id.
+The types live in [`mailer/email/`](../mailer/email/):
+
+- [`WireFormatEmail`](../mailer/email/wireformat_email.go) — lossless, lenient
+   RFC 5322 parsing (headers, MIME tree, transfer encodings, charsets, folded headers) that can serialize back to wire
+   format. Parse errors are collected rather than fatal; the whole message and each decoded part are capped by
+   `MAX_FILESIZE`. Used for inbound routing.
+- [`UserEmail`](../mailer/email/email.go) — simplified content used by storage,
+   sender and HTTP layers: addresses, subject, date, text and HTML bodies. [`EmailRef`](../mailer/email/email.go) holds
+   its storage id plus derived `AccountID`/`MailboxID`, and [`ListedEmail`](../mailer/email/email.go) pairs the two.
+   [`Parse`](../mailer/email/email.go) is the convenience path used by storage; attachments are ignored there, while
+   `Email/set` creates can supply an [`Attachment`](../mailer/email/email.go).
+- [`RenderHeaders`](../mailer/email/headers.go) — shared RFC 5322 header writer
+   used by both senders and by `email.RawFromUserEmail`.
+- [`SubmissionEnvelope`](../mailer/email/envelope.go) — send-time MAIL FROM and
+   RCPT TO metadata, kept separate from the stored message.
 
 ## Frontend
 
-- React 19 + Vite + TypeScript SPA (React Router): `/login`,
-  `/` (inbox of the current JMAP account), `/email/:id`, `/compose`,
-  `/compose/:id` (reply).
-- The API client keeps the JWT in `localStorage` under `emissary_token`,
-  attaches the Bearer header, and redirects to `/login` on a `401`. JMAP
-  calls use the Session's account id by default; when a user with
-  `EmissaryUserManagement` selects a masquerade target, the client converts
-  the stored email address to the opaque `acct_` id before using it as
-  `accountId`.
-- Vite builds into `mailer/gui/frontend/dist`, which `mailer/gui`
-  embeds; the Go binary serves the SPA from the same origin and port
-  as the API. CORS is not enabled; long-lived JMAP streams use the
-  dedicated `eventSourceUrl` advertised by the Session.
+[`frontend/`](../frontend/) is a React 19 + Vite + TypeScript SPA (React Router) with routes `/login`, `/` (current
+account inbox), `/email/:id`, `/compose` and `/compose/:id` (reply). [`api.ts`](../frontend/src/api.ts) keeps the
+JWT in `localStorage`, sends the Bearer header and redirects to `/login` on `401`;
+[`masquerade.ts`](../frontend/src/masquerade.ts) converts a selected masquerade email address to the opaque `acct_`
+id before use. Vite builds into `mailer/gui/frontend/dist`, which [`mailer/gui`](../mailer/gui/gui.go) embeds; the
+Go binary serves the SPA from the same origin as the API, so CORS is off. Long-lived streams use the
+`eventSourceUrl` advertised by the JMAP Session. Dialog conventions are in [DESIGN.md](DESIGN.md#frontend-ui-conventions).
 
 ## Generated API artifacts
 
-The OpenAPI specifications are the single source of truth for HTTP paths and
-schemas. `./run.sh generate:api` regenerates the checked-in Go and TypeScript
-artifacts; `./run.sh check:generated` fails when they are stale.
-
-- **Backend (Go)**: `ogen` produces Go types, decoders, validators and router
-  middleware under `api/*/generated/`. The handler implements the generated
-  server interfaces for auth, users and support. JMAP is dispatched by
-  `mailer/jmap/` from generated wire types; there is no generated JMAP server
-  stub.
-- **Frontend (TypeScript)**: `orval` produces typed fetch helpers under
-  `frontend/src/api/generated/`. Login/refresh use the generated auth helpers;
-  the JMAP client uses generated schema types plus a small wrapper for the
-  batched method-call endpoint. `api/spec_test.go`, not code generation alone,
-  checks spec↔runtime agreement.
+The OpenAPI specs in [`api/`](../api/) are the source of truth for paths and schemas. `./run.sh generate:api`
+regenerates Go types, decoders, validators and router middleware under `api/*/generated/` and TypeScript fetch
+helpers under [`frontend/src/api/generated/`](../frontend/src/api/generated/); `./run.sh check:generated` detects
+staleness. The handler implements the generated auth, user and support server interfaces; JMAP is dispatched by
+[`mailer/jmap/`](../mailer/jmap/) from generated wire types, with no generated server stub.
+[`api/spec_test.go`](../api/spec_test.go) checks spec↔runtime agreement. See [API.md](API.md#generated-api-artifacts).
 
 ## Deployment shape
 
-Three CDK stacks (see [DEPLOYMENT.md](DEPLOYMENT.md)):
+Three CDK stacks ([DEPLOYMENT.md](DEPLOYMENT.md#the-three-stacks)):
 
-1. **id** — SES domain identity for `DOMAIN` with MAIL FROM
-   `mail.<DOMAIN>`, plus the DKIM, MX, SPF and DMARC records.
-2. **in** — inbound MX record, the raw-message S3 bucket, the receipt
-   rule set (recipients from `SUBDOMAINS`), rule-set activation, and an
-   SSM parameter publishing the bucket name.
-3. **client** — the Lambda (from `mailer/cmd/frontend/bootstrap`), API
-   Gateway with a TLS certificate and `mail.<DOMAIN>` alias record,
-   the DynamoDB metadata table, and the JWT secret in Secrets Manager.
-   This stack is skipped when `bootstrap` has not been built.
+1. **id** — SES identity for `DOMAIN` with MAIL FROM `mail.<DOMAIN>`, plus DKIM,
+   MX, SPF and DMARC records.
+2. **in** — inbound MX, raw-message bucket, receipt rule set and activation,
+   and an SSM parameter publishing the bucket name.
+3. **client** — the frontend and `s3-receiver` Lambdas, API Gateway with TLS and
+   a `mail.<DOMAIN>` alias, DynamoDB tables and the JWT secret. This stack is skipped when `bootstrap` has not been
+   built.

@@ -1,30 +1,16 @@
 # Support tools
 
-Emissary includes an administrative support surface for inspecting runtime
-configuration, configuring inbound receiver rules and working with the inbound
-mail staging area. It is available to System Managers and is reached from
-**Settings → Support** in the web client, or directly through the API under
-`/api/support/`. The receiver rules editor is reached from the `receiver`
-configuration details (**Edit**).
-
-The wire contract is [`api/support.yaml`](../api/support.yaml); this document
-describes how the operations behave.
+Emissary includes an administrative support surface for inspecting runtime configuration, configuring inbound receiver rules and working with the inbound mail staging area. It is available to System Managers from **Settings → Support** in the web client, or directly under `/api/support/`. The receiver rules editor is reached from the `receiver` configuration details (**Edit**). The wire contract is [`api/support.yaml`](../api/support.yaml); [API.md](API.md#conventions) covers shared error conventions and [API.md](API.md#support-api) lists the paths.
 
 ## Authorization
 
-Every support operation requires a bearer token from
-`POST /api/auth/login` whose `systemManager` claim is true. The built-in
-`USERNAME`/`PASSWORD` administrator always receives that claim; an
-Emissary-managed user receives it when their account has the System Manager
-role. Ordinary users receive `403 insufficient permissions`. The obsolete
-`admin` claim is no longer issued or checked.
+Every support operation requires a Bearer token from `POST /api/auth/login` whose `systemManager` claim is true. The built-in `USERNAME`/`PASSWORD` administrator always has that claim; an Emissary-managed user gets it from the System Manager role. Ordinary users receive `403 insufficient permissions`. The obsolete `admin` claim is no longer issued or checked.
 
-- Missing or invalid tokens receive `401 authentication required` and a
-  `WWW-Authenticate: Bearer realm="emissary"` header.
-- Support endpoints ignore the ordinary per-user visibility rules. A System
-  Manager can see server configuration and every staging object.
-- Response bodies use the shared `{"error": "<message>"}` convention from
-  [API.md](API.md#conventions).
+- Missing or invalid tokens receive `401 authentication required` and a `WWW-Authenticate: Bearer realm="emissary"` header.
+- Support endpoints ignore ordinary per-user visibility rules: a System Manager can see server configuration and every staging object.
+- Error bodies use the shared `{"error": "<message>"}` convention ([API.md](API.md#conventions)).
+
+See [AUTH.md](AUTH.md#the-token-pair) for the token pair and its claims.
 
 ## Endpoints
 
@@ -34,30 +20,26 @@ role. Ordinary users receive `403 insufficient permissions`. The obsolete
 | `GET` | `/api/support/configurations/{name}` | Get the full settings for one section. |
 | `GET` | `/api/support/bucket/root` | List the immediate contents of the mail bucket. |
 | `POST` | `/api/support/process-email` | Run the standard inbound pipeline on a staging object. |
-| `GET` | `/api/support/receiver/identities` | List receiving mail identities (verified SES identities) and whether each has receiver rules. |
-| `GET` | `/api/support/receiver/rules` | List the configured receiver rules (domain → ordered rules). |
+| `GET` | `/api/support/receiver/identities` | List verified SES identities and whether each has rules. |
+| `GET` | `/api/support/receiver/rules` | List receiver rules (identity → ordered rules). |
 | `PUT` | `/api/support/receiver/rules` | Add or replace receiver rules entries. |
-| `DELETE` | `/api/support/receiver/rules/{identity}` | Remove a configured receiving identity. The `_` fallback is rejected. |
+| `DELETE` | `/api/support/receiver/rules/{identity}` | Remove one identity's rules; `_` is rejected. |
 
 ## Configuration sections
 
-`GET /api/support/configurations` reports every runtime section with the name
-of the implementation currently backing it:
+`GET /api/support/configurations` reports every runtime section with the name of the implementation currently backing it:
 
 | Section | Typical implementations | What it describes |
 | --- | --- | --- |
-| `server` | `http` | HTTP listener, JWT settings and administrator configuration. |
+| `server` | `http` | HTTP listener, JWT and administrator settings. |
 | `storage` | `s3`, `filesystem`, `memory` | Email storage backend. |
-| `sender` | `aws-ses`, `mta`, `log` | Outbound email sender. |
-| `receiver` | `memory`, `filesystem`, `s3`, `ddb` | Inbound recipient routing rules (one config per identity; `_` is the base fallback). |
-| `metadata` | `memory`, `file`, `ddb` | Per-message metadata store (JMAP keywords and server-owned `receivedAt`). |
+| `sender` | `aws-ses`, `mta`, `log` | Outbound mail sender. |
+| `receiver` | `memory`, `filesystem`, `s3`, `ddb` | Inbound rules (one config per identity; `_` is the fallback). |
+| `metadata` | `memory`, `file`, `ddb` | Keywords and server-owned `receivedAt`. |
 | `session` | `memory`, `ddb` | Refresh-token session store. |
-| `user-manager` | `none`, `ddb`, `filesystem`, `s3`, `ldap` | Ordinary-user authentication backend. |
+| `user-manager` | `none`, `ddb`, `filesystem`, `s3`, `ldap` | Ordinary-user authentication. |
 
-Every value above is an explicit implementation, not a fallback. If a selector
-and its component are both absent, the support API reports `unconfigured`
-instead of inventing a default; see
-[Backend selection](CONFIGURATION.md#backend-selection-all-pluggable-components).
+Every value is an explicit implementation, not a fallback. If a selector and its component are both absent, the API reports `unconfigured` rather than inventing a default; see [CONFIGURATION.md](CONFIGURATION.md#backend-selection-all-pluggable-components) for the selection rules and each variable.
 
 Example response (`200`):
 
@@ -75,11 +57,7 @@ Example response (`200`):
 
 ## Configuration details
 
-`GET /api/support/configurations/{name}` returns the complete settings for one
-section. Names are case-insensitive; `_` and `-` are interchangeable, and
-`user`, `users` and `usermanager` all resolve to `user-manager`. `receiver`,
-`receiver-config`, `receiver-configuration` and `routing` all resolve to
-`receiver`.
+`GET /api/support/configurations/{name}` returns the complete settings for one section. Names are case-insensitive; `_` and `-` are interchangeable; `user`, `users` and `usermanager` resolve to `user-manager`, and `receiver-config`, `receiver-configuration` and `routing` resolve to `receiver`.
 
 Example response (`200`) for `server`:
 
@@ -100,9 +78,7 @@ Example response (`200`) for `server`:
 }
 ```
 
-The `receiver` section reports the backend settings plus the rule names for
-every loaded identity as `rules.<identity>` (a JSON array of rule names). For
-example:
+The `receiver` section adds `identityCount` and one `rules.<identity>` entry per loaded identity, holding a JSON array of rule names:
 
 ```json
 {
@@ -117,40 +93,22 @@ example:
 }
 ```
 
-The `_` entry is the base fallback used by recipients without their own rules.
-The editor uses the dedicated operations below instead of this flattened view,
-because it needs the ordered handler groups as well as their actions.
-
-Unknown sections return `404 configuration section not found`.
+The flattened view is for inspection; the editor below uses the dedicated operations because it needs the ordered lists. An unknown section returns `404 configuration section not found`.
 
 ### Secret handling
 
-Secret values are never returned. The response only reports whether a secret
-is configured:
+Secret values are never returned; the response only reports whether a secret is configured:
 
-| Section | Redaction field |
+| Section | Redaction fields |
 | --- | --- |
 | `server` | `adminPasswordConfigured`, `jwtSecretConfigured` |
 | `user-manager` | `ldapBindPasswordConfigured` |
 
-AWS credentials are never part of the configuration response. The `settings`
-object contains only values that are safe for a System Manager to read;
-passwords, signing secrets, LDAP bind passwords and access keys are omitted.
-
-Because settings are string-valued, booleans are reported as `"true"` or
-`"false"`. Empty or unconfigured values are omitted from the object.
+AWS credentials are never part of the response. The `settings` object holds only values a System Manager can read: passwords, signing secrets, LDAP bind passwords and access keys are omitted. Settings are string-valued, so booleans appear as `"true"` or `"false"`; empty and unconfigured values are omitted. See [CONFIGURATION.md](CONFIGURATION.md#server-and-authentication) for the variables behind the `server` section.
 
 ## Receiver rules editor
 
-`GET /api/support/receiver/identities` lists the receiving mail identities: the
-verified identities returned by the AWS SES `ListIdentities` operation (both
-domains and individual email addresses), sorted by name. `hasRules` is true
-when the receiver has its own rules entry for that identity; false means mail
-for it is routed by the `_` fallback. The frontend shows a tick (✓) for `true`
-and a plus (+) for `false`. Each receiving identity is also the `domain` key of
-the corresponding rules entry below — there is no separate mailbox field.
-
-Example response (`200`):
+`GET /api/support/receiver/identities` lists the verified SES identities (domains and individual addresses, sorted by name). `hasRules` is true when the receiver has a dedicated rules entry; false means the `_` fallback routes that mail. The frontend shows a tick for true and a plus for false. Each identity is the `domain` key of its rules entry — there is no separate mailbox field.
 
 ```json
 {
@@ -161,20 +119,9 @@ Example response (`200`):
 }
 ```
 
-SES identities are account-wide. The frontend role needs the
-`ses:ListIdentities` IAM permission (`ListIdentities` does not support
-resource-level permissions, so it is granted on `*`). A failed SES query
-returns `502 failed to list SES identities`.
+SES identities are account-wide. The `ses:ListIdentities` permission is granted on `*` because that action does not support resource-level permissions; a failed query returns `502 failed to list SES identities`.
 
-`GET /api/support/receiver/rules` reads the rules from the configured receiver
-config store on every call, so it also serves as the GUI's **Reload** action.
-Each receiving identity has exactly one ordered list of rules; the first
-applicable rule wins, and `DeliverToUser` falls through when no such user
-exists. The fallback `_` is returned first, followed by other identities in
-name order. There are no nested handler groups or actions — the entries are
-just identities and their rules.
-
-Example response (`200`):
+`GET /api/support/receiver/rules` reads the active store on every call, which is also the GUI's **Reload** action. The `_` fallback comes first, then other identities in name order:
 
 ```json
 {
@@ -186,19 +133,9 @@ Example response (`200`):
 }
 ```
 
-`domain` is the receiving identity and maps directly onto the list above. The
-allowed rules are `DeliverToUser`, `DeliverToMailIdentity`, `Bounce` and
-`Drop`. `DeliverToMailIdentity` delivers to the identity's own mailbox, even
-when no user account exists (administrators can open it via masquerade); the
-`_` fallback and a `*` key both mean the recipient's own mailbox. `Bounce`
-sends a standard bounce; `Drop` discards the message for that recipient with
-no delivery and no bounce. Both are terminal, so order them after any rule
-that should take precedence. See
-[CONFIGURATION.md](CONFIGURATION.md#receiver-inbound-routing-rules) for the
-backend settings.
+Rules are first-match-wins: `DeliverToUser` (known users only), `DeliverToMailIdentity` (the identity's own mailbox, no account required), `Bounce` (standard bounce) and `Drop` (silent discard). `Bounce` and `Drop` are terminal, so order them after rules that should take precedence; no match bounces. The `_` fallback and a `*` key both mean the recipient's own mailbox. See [CONFIGURATION.md](CONFIGURATION.md#receiver-inbound-routing-rules) for storage and [ARCHITECTURE.md](ARCHITECTURE.md#inbound-mail-flow) for routing.
 
-`PUT /api/support/receiver/rules` adds or replaces the rules entries for the
-identities supplied in the request:
+`PUT /api/support/receiver/rules` adds or replaces only the supplied identities; all others, including `_`, are left untouched, so it never deletes an entry:
 
 ```json
 {
@@ -208,46 +145,18 @@ identities supplied in the request:
 }
 ```
 
-Identities not included in the request (in particular `_`) are left untouched,
-so this operation never deletes a rules entry; use `DELETE` for that. Each
-identity needs at least one known rule, identities must be valid config keys,
-and the resulting config must keep a valid `_` fallback; invalid requests
-return `400 invalid receiver rules`, `400 invalid handler rules`,
-`400 invalid receiving domain` or `400 no rules supplied`. Store failures
-return `500 failed to save receiver rules`. The response is the full saved
-rules list in the same shape as `GET`.
+Each identity needs at least one known rule and a valid config key, and the resulting config must keep a valid `_` fallback. Errors are `400 invalid receiver rules`, `400 invalid handler rules`, `400 invalid receiving domain` and `400 no rules supplied`; store failures are `500 failed to save receiver rules`. The response is the full saved list in the same shape as `GET`.
 
-`DELETE /api/support/receiver/rules/{identity}` removes one receiving identity's
-rules entry from the config store and returns the remaining rules list. The
-identity then appears with a plus in the identities list and is routed by the
-`_` fallback until rules are added again. An unknown identity returns
-`404 receiver rules not found`; an invalid key returns
-`400 invalid receiving identity`. The `_` fallback can never be deleted —
-every recipient without its own entry relies on it — so the operation returns
-`400 the fallback receiving identity cannot be removed` for it. The config
-store implementations enforce the same rule independently of the API.
+`DELETE /api/support/receiver/rules/{identity}` removes one entry and returns the remaining list. The identity then shows a plus and is routed by `_` until rules are added again. Unknown identities give `404 receiver rules not found`, invalid keys `400 invalid receiving identity`, and `_` gives `400 the fallback receiving identity cannot be removed`. The config stores enforce that rule independently of the API.
 
-Saved rules are written to the active receiver config store (`memory`,
-`filesystem`, `s3` or `ddb`) and published to the in-process receiver used by
-`ProcessEmail`. With `RECEIVER=s3` the target bucket is `RECEIVER_BUCKET`
-(defaulting to `S3_BUCKET`); with `RECEIVER=filesystem` it is
-`RECEIVER_FILESYSTEM_DIR` (defaulting to `FILESYSTEM_DIR`). Loading rules is
-read-only, so startup and **Reload** never write to the store. A newly created support handler loads the current rules from
-that store, falling back to the base rules only when no stored rules are
-available. The `s3-receiver` Lambda reloads the store on every invocation, so
-with a persistent backend the new rules apply to the next inbound message. With
-`memory`, each process keeps its own rules.
+Saved rules go to the active store (`memory`, `filesystem`, `s3` or `ddb`) and to the in-process receiver used by `ProcessEmail`. With `RECEIVER=s3` the bucket is `RECEIVER_BUCKET` (default `S3_BUCKET`); with `filesystem` it is `RECEIVER_FILESYSTEM_DIR` (default `FILESYSTEM_DIR`). Loading is read-only, so startup and **Reload** never write rules. The `s3-receiver` Lambda reloads on every invocation, so persistent backends apply rules to the next message; `memory` keeps rules per process.
 
 ## Bucket root
 
-`GET /api/support/bucket/root` lists the immediate contents of the configured
-mail bucket using a single `ListObjectsV2` call with `Delimiter: "/"`:
+`GET /api/support/bucket/root` lists the immediate contents of the configured mail bucket with one `ListObjectsV2` call using `Delimiter: "/"`:
 
-- `objects` are the raw messages SES wrote to the bucket root and that have
-  not been processed yet. Their keys are the SES message IDs.
-- `prefixes` are the top-level virtual directories, normally `users/` and the
-  internal `_processed/` idempotency-marker prefix. See
-  [S3.md](S3.md#bucket-layout) for the bucket layout.
+- `objects` are unprocessed raw messages SES wrote at the bucket root, keyed by SES message id.
+- `prefixes` are top-level virtual directories, normally `users/` and the internal `_processed/` idempotency-marker prefix. See [S3.md](S3.md#bucket-layout) for the layout.
 
 Example response (`200`):
 
@@ -266,88 +175,56 @@ Example response (`200`):
 }
 ```
 
-This operation is available only when the configured storage is S3. With any
-other backend it returns `501 bucket operations require s3 storage`. A bucket
-that cannot be listed returns `502 failed to list bucket root`.
+This operation is available only with `STORAGE=s3`; otherwise it returns `501 bucket operations require s3 storage`. A listing failure returns `502 failed to list bucket root`.
 
 ## Processing a staging email
 
-`POST /api/support/process-email` runs the same inbound pipeline used by the
-S3/SNS receivers on one object from the bucket root:
+`POST /api/support/process-email` runs the standard inbound pipeline on one object from the bucket root:
 
 ```json
 { "id": "01000192a3b4c5d6-12345678-9abc-def0-1234-56789abcdef0" }
 ```
 
-The `id` is the `key` reported by `GET /api/support/bucket/root`. Processing:
+The `id` is a `key` from `GET /api/support/bucket/root`. Processing:
 
-1. Parses the raw message and extracts the SMTP envelope recipients from the
-   `for <address>` clauses of its topmost `Received` header (the addresses SES
-   accepted via `RCPT TO`), not from `To`, `Cc` or `Bcc`. A staged message with
-   no envelope recipient is skipped.
+1. Parses the raw message and extracts SMTP envelope recipients from the `for <address>` clauses of its topmost `Received` header (the addresses SES accepted via `RCPT TO`), not from `To`, `Cc` or `Bcc`; a staged message with no envelope recipient is skipped.
 2. Validates each recipient with the configured user manager.
-3. Copies the message into each valid recipient's inbox at
-   `users/<recipient>/inbox/<timestamp>_<ses-message-id>.eml`, where
-   `<timestamp>` is ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`, e.g. `20240308T143000`).
+3. Copies the message into each valid recipient's `inbox` at `users/<recipient>/inbox/<timestamp>_<ses-message-id>.eml`, where the timestamp is ISO 8601 basic UTC (`YYYYMMDDTHHMMSS`).
 4. Sends bounces for recipients that do not exist.
-5. Records a per-recipient idempotency marker, then deletes the staging object
-   only when every recipient has been handled successfully.
+5. Records a per-recipient marker, then deletes the staging object only when every recipient has been handled.
 
-Example response (`200`):
+Success returns:
 
 ```json
 { "success": true, "id": "01000192a3b4c5d6-...", "message": "message processed" }
 ```
 
-Processing is irreversible. Once the staging object is deleted, repeating the
-call returns `404 staging object not found`. The operation returns:
+Processing is irreversible once staging is deleted; a retry then returns `404`. The error statuses are:
 
 | Status | Meaning |
 | --- | --- |
 | `400` | The `id` is missing or blank. |
 | `404` | The staging object does not exist (already processed). |
 | `501` | Storage is not S3. |
-| `502` | The message could not be processed; details are logged server-side. |
+| `502` | Read, parse, delivery, bounce or staging delete failed; details are logged. |
 
-A `502` can mean the object could not be read, the message could not be
-parsed, a delivery failed, a bounce failed, or the staging delete failed. The
-staging object is only deleted after all deliveries and bounces succeed. A
-retry after a partial failure skips recipients that were already handled, so
-it does not deliver or bounce them twice.
+A `502` leaves staging in place for a retry, which skips recipients already marked as handled so it does not deliver or bounce them twice. See [S3.md](S3.md#inbound-flow) for the pipeline and [CONFIGURATION.md](CONFIGURATION.md#receiver-inbound-routing-rules) for the rules it applies.
 
 ## Frontend
 
-The **Support** screen is reachable from Settings only when the signed-in user
-has the `systemManager` claim. It shows:
+The **Support** screen appears under Settings only for System Managers. It shows:
 
-- The configuration section list with its implementation; selecting a section
-  shows its settings. The `receiver` details have an **Edit** button next to
-  **Close**, which opens `/support/receiver`.
-- The bucket root with unprocessed staging messages.
-- A **Process** action for each staging object, with a `Processing…` busy
-  state. It does not use a browser dialog; see
-  [DESIGN.md](DESIGN.md#frontend-ui-conventions) for the no-native-dialog rule.
+- The configuration section list with implementations; selecting a section shows its settings. `receiver` has an **Edit** action next to **Close** that opens `/support/receiver`.
+- The bucket root with unprocessed staging messages and a **Process** action per object, with a busy state.
+- No native dialogs: status messages and confirmations are in-app ([DESIGN.md](DESIGN.md#frontend-ui-conventions)).
 
-The **receiver rules** screen (`/support/receiver`) shows the receiving mail
-identities with tick/plus indicators, then each configured identity with its
-single ordered list of rules. The identity of each entry is its `domain` key,
-matching the list above; there are no mailbox identity fields, handler groups
-or "actions" nesting. Clicking a **+** adds a rules entry (seeded from the
-fallback rules) so it can be edited. **Remove** deletes a configured identity
-via `DELETE` after an in-app confirmation; the `_` fallback button is disabled
-and the backend rejects the same request. **Cancel** returns to Support,
-**Reload** re-reads both lists and discards unsaved edits, and **OK** saves via
-`PUT`. Rules can be reordered (↑/↓), changed or removed, and more rules can be
-added with **+ Add rule**. The page uses only in-app status messages and
-dialogs, never native dialogs.
+The receiver screen lists identities with tick/plus indicators, then each configured identity with its ordered rules. **+** adds an entry seeded from the fallback, ↑/↓ reorder, **Remove** deletes after in-app confirmation (disabled for `_`), **Reload** discards unsaved edits, and **OK** saves via `PUT`. Users without the System Manager claim do not see the Settings entry and are redirected away from `/support` and `/support/receiver`; the API enforces the claim regardless of the client.
 
-Users without System Manager permission do not see the Settings entry and are
-redirected away from `/support` and `/support/receiver`; the API also enforces
-the `systemManager` claim regardless of the client.
+See [API.md](API.md#support-api), [S3.md](S3.md), [`frontend/src/components/Support.tsx`](../frontend/src/components/Support.tsx) and [`ReceiverSupport.tsx`](../frontend/src/components/ReceiverSupport.tsx).
 
 ## Related documentation
 
-- [API.md](API.md) — the full HTTP API and path-ownership rules.
+- [API.md](API.md) — HTTP API, path ownership and status conventions.
+- [CONFIGURATION.md](CONFIGURATION.md) — environment variables behind each section.
 - [S3.md](S3.md) — bucket layout and the inbound staging flow.
-- [CONFIGURATION.md](CONFIGURATION.md) — environment variables behind each
-  configuration section.
+- [DESIGN.md](DESIGN.md) — frontend conventions and component overview.
