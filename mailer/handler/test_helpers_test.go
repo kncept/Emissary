@@ -78,6 +78,7 @@ type handlerTestConfig struct {
 	ReceiverConfigStore   receiver.ConfigStore
 
 	SESIdentityLister    SESIdentityLister
+	BlobLifecycle        *storage.BlobLifecycle
 	IsLambda             bool
 	LoginRateLimit       int
 	LoginRateLimitWindow time.Duration
@@ -276,6 +277,7 @@ func (tc handlerTestConfig) build(t *testing.T) (*config.Config, *configvendor.B
 		MaxFileSize:          tc.MaxFileSize,
 		IsLambda:             tc.IsLambda,
 		SESIdentityLister:    tc.SESIdentityLister,
+		BlobLifecycle:        tc.BlobLifecycle,
 	}
 	return cfg, b, opts
 }

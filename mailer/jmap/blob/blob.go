@@ -172,7 +172,8 @@ func (h *Handler) BlobCopy(ctx context.Context, accountID string, args json.RawM
 		newMeta, err := h.deps.Storage.PutBlob(ctx, req.AccountID, meta.Type, data)
 		if err != nil {
 			releasePin()
-			notCopied[blobID] = setErrorOf("invalidProperties", "Could not store blob in destination account")
+			mapped := base.StoreSetError(err, "Could not store blob in destination account", 0)
+			notCopied[blobID] = mapped
 			continue
 		}
 

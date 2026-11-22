@@ -1,5 +1,12 @@
 package base
 
+import (
+	"errors"
+	"strings"
+
+	"github.com/kncept/Emissary/mailer/components/storage"
+)
+
 // SetError is the RFC 8620 section 5.3 SetError object. Every /set response
 // uses this type so the JSON shape (and the optional RFC-defined fields) is
 // identical across all data types.
@@ -34,15 +41,15 @@ var setErrorTypes = map[string]bool{
 	"alreadyExists": true,
 	"stateMismatch": true,
 	// RFC 8621 mail extensions.
-	"mailboxHasChild":    true,
-	"mailboxHasEmail":    true,
-	"invalidEmail":       true,
-	"tooManyRecipients":  true,
-	"forbiddenMailFrom":  true,
-	"forbiddenFrom":      true,
-	"forbiddenToSend":    true,
-	"cannotUnsend":       true,
-	"blobNotFound":       true,
+	"mailboxHasChild":   true,
+	"mailboxHasEmail":   true,
+	"invalidEmail":      true,
+	"tooManyRecipients": true,
+	"forbiddenMailFrom": true,
+	"forbiddenFrom":     true,
+	"forbiddenToSend":   true,
+	"cannotUnsend":      true,
+	"blobNotFound":      true,
 	// Documented server extensions used in existing /set responses.
 	"serverFail":        true,
 	"invalidRecipients": true,
@@ -75,6 +82,31 @@ func AlreadyExists(description, existingID string) SetError {
 // "maxSize" field when this type is used for EmailSubmission/create.
 func TooLarge(description string, maxSize uint64) SetError {
 	return SetError{Type: "tooLarge", Description: description, MaxSize: &maxSize}
+}
+
+// StoreSetError maps a storage failure to the RFC SetError that describes it.
+// Every /set method uses this mapping so quota, size and reference failures
+// produce the same type across Email, Blob and future binary types. maxSize is
+// zero when the caller has no size limit to advertise.
+func StoreSetError(err error, fallback string, maxSize uint64) SetError {
+	if err == nil {
+		return NewSetError("serverFail", fallback)
+	}
+	if errors.Is(err, storage.ErrBlobQuota) {
+		return NewSetError("overQuota", "Blob storage quota exceeded")
+	}
+	if errors.Is(err, storage.ErrBlobReferenced) {
+		return NewSetError("forbidden", "Blob is still referenced by a JMAP object")
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "exceeds maximum size") || strings.Contains(message, "too large") ||
+		strings.Contains(message, "size limit") {
+		if maxSize == 0 {
+			return NewSetError("tooLarge", "Message exceeds the server size limit")
+		}
+		return TooLarge("Message exceeds the server size limit", maxSize)
+	}
+	return NewSetError("serverFail", fallback)
 }
 
 // InvalidEmail builds the RFC 8621 EmailSubmission create SetError. The

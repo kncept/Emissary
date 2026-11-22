@@ -16,6 +16,19 @@ import (
 	"github.com/kncept/Emissary/mailer/jmap/internal/base"
 )
 
+// releaseBlobRefs drops the references held by a destroyed Email. A blob may
+// back several messages, so only this Email's registrations are released; the
+// bytes remain downloadable until the last reference is gone and the
+// unreferenced-blob lifetime expires (RFC 8620 section 6).
+func (h *Handler) releaseBlobRefs(ctx context.Context, accountID string, raw []byte) {
+	for _, blobID := range storage.EmailBlobIDs(raw) {
+		if _, err := h.deps.Storage.AddBlobRefs(ctx, accountID, blobID, -1); err != nil &&
+			!errors.Is(err, storage.ErrNotFound) {
+			slog.Warn("JMAP: failed to release email blob reference", "account", accountID, "blob", blobID, "err", err)
+		}
+	}
+}
+
 func (h *Handler) EmailGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	var req struct {
 		FetchTextBodyValues bool `json:"fetchTextBodyValues"`
@@ -141,6 +154,10 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 				}
 			}
 			originalMeta := base.EmailMetadata(ctx, h.deps, accountID, id)
+			// Capture the raw bytes before deleting the message. Blob ids are
+			// digests of those bytes, so the same ids registered at creation
+			// can be released once the last reference to this Email is gone.
+			raw, rawErr := h.deps.Storage.GetEmailRaw(ctx, accountID, id)
 			if err := h.deps.Metadata.Delete(ctx, accountID, id); err != nil {
 				slog.Error("JMAP: failed to delete email metadata", "account", accountID, "id", id, "err", err)
 				return fail(base.NewSetError("serverFail", "Failed to delete email metadata"))
@@ -154,6 +171,9 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 				}
 				slog.Error("JMAP: failed to delete email", "account", accountID, "id", id, "err", err)
 				return fail(base.NewSetError("serverFail", "Failed to delete email"))
+			}
+			if rawErr == nil {
+				h.releaseBlobRefs(ctx, accountID, raw)
 			}
 			if err := h.deps.Changes.Record(ctx, accountID, base.StateEmail, id, base.ChangeDestroy); err != nil {
 				destroyErr = err

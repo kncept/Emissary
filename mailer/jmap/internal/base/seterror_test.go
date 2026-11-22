@@ -2,8 +2,11 @@ package base
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/kncept/Emissary/mailer/components/storage"
 )
 
 // TestSetErrorVocabulary asserts that every declared SetError type is known
@@ -123,6 +126,42 @@ func TestSetErrorVocabulary(t *testing.T) {
 			}
 			if !IsSetErrorType(tc.err.Type) {
 				t.Errorf("emitted type %q is not in the vocabulary", tc.err.Type)
+			}
+		})
+	}
+}
+
+// TestStoreSetErrorMapping ensures every /set method reports the same storage
+// failures the same way, including references that block a blob delete.
+func TestStoreSetErrorMapping(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		maxSize    uint64
+		wantType   string
+		wantMaxSet bool
+	}{
+		{"quota", storage.ErrBlobQuota, 0, "overQuota", false},
+		{"referenced", storage.ErrBlobReferenced, 0, "forbidden", false},
+		{"size with limit", errors.New("blob exceeds maximum size of 10 bytes"), 10, "tooLarge", true},
+		{"size without limit", errors.New("blob too large"), 0, "tooLarge", false},
+		{"generic", errors.New("disk unavailable"), 0, "serverFail", false},
+		{"nil", nil, 0, "serverFail", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := StoreSetError(tc.err, "fallback", tc.maxSize)
+			if got.Type != tc.wantType {
+				t.Errorf("type = %q, want %q", got.Type, tc.wantType)
+			}
+			if tc.wantMaxSet && (got.MaxSize == nil || *got.MaxSize != tc.maxSize) {
+				t.Errorf("maxSize = %v, want %d", got.MaxSize, tc.maxSize)
+			}
+			if !tc.wantMaxSet && got.MaxSize != nil {
+				t.Errorf("maxSize = %v, want nil", got.MaxSize)
+			}
+			if !IsSetErrorType(got.Type) {
+				t.Errorf("emitted type %q is not in the vocabulary", got.Type)
 			}
 		})
 	}

@@ -102,6 +102,9 @@ type Options struct {
 	// SESIdentityLister is an optional override for tests. Nil means create
 	// an SES client lazily on first use.
 	SESIdentityLister SESIdentityLister
+	// BlobLifecycle is an optional override for tests that need a controlled
+	// clock when verifying RFC 8620 section 6 expiry.
+	BlobLifecycle *storage.BlobLifecycle
 }
 
 // jmapRequestLimits mirrors the limits advertised in the Session object. The
@@ -210,7 +213,10 @@ func newHandler(ctx context.Context, authenticator *auth.Authenticator, b *confi
 	// over the account-scoped immutable blob store. The configured upload
 	// size is also the maximum attachment total for one message, so it is a
 	// valid (and advertised) unreferenced-blob quota.
-	blobLifecycle := storage.NewBlobLifecycle(emailStore, maxFileSize)
+	blobLifecycle := opts.BlobLifecycle
+	if blobLifecycle == nil {
+		blobLifecycle = storage.NewBlobLifecycle(emailStore, maxFileSize)
+	}
 	uploadSlots := make(chan struct{}, jmapMaxConcurrentUpload)
 	requestSlots := make(chan struct{}, jmapMaxConcurrentRequests)
 

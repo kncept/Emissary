@@ -89,22 +89,10 @@ func receivedAtFor(value *string) (string, error) {
 	return parsed.UTC().Format(time.RFC3339), nil
 }
 
-// storeSetError translates a storage failure into the RFC SetError that
-// describes it. Blob quota and message size are distinguishable from generic
-// storage failures, even where a backend reports size as an untyped error.
+// storeSetError translates a storage failure using the shared JMAP mapping so
+// Email, Blob and binary endpoints report the same quota and size errors.
 func storeSetError(err error, fallback string) base.SetError {
-	if err == nil {
-		return base.NewSetError("serverFail", fallback)
-	}
-	if errors.Is(err, storage.ErrBlobQuota) {
-		return base.NewSetError("overQuota", "Blob storage quota exceeded")
-	}
-	message := strings.ToLower(err.Error())
-	if strings.Contains(message, "exceeds maximum size") || strings.Contains(message, "too large") ||
-		strings.Contains(message, "size limit") {
-		return base.TooLarge("Message exceeds the server size limit", uint64(mailemail.MaxPartSize()))
-	}
-	return base.NewSetError("serverFail", fallback)
+	return base.StoreSetError(err, fallback, uint64(mailemail.MaxPartSize()))
 }
 
 // duplicateEmailID implements the server's documented duplicate rule: one
