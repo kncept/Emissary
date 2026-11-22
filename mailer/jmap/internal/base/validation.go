@@ -210,6 +210,90 @@ func patchKey(tokens []string) string {
 	return strings.Join(parts, "/")
 }
 
+// JSONEqual compares two JSON values by structure rather than by byte layout,
+// so key order and whitespace do not create false changes.
+func JSONEqual(left, right json.RawMessage) bool {
+	return canonicalJSON(left) == canonicalJSON(right)
+}
+
+func canonicalJSON(raw json.RawMessage) string {
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return string(raw)
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return string(raw)
+	}
+	return string(encoded)
+}
+
+// PatchValidation is the classified result of applying a PatchObject to the
+// current JSON representation of an object.
+type PatchValidation struct {
+	Patched   json.RawMessage
+	Changed   map[string]json.RawMessage
+	Unknown   []string
+	Immutable []string
+}
+
+// ValidatePatch applies an RFC 8620 section 5.3 PatchObject and classifies its
+// effects. A removed property is treated as an explicit null so nullable
+// properties can be cleared even when the current object includes null fields.
+// Unknown top-level keys are reported even when a null value makes ApplyPatch
+// a no-op. Immutable names are reported only when their value actually changes,
+// allowing a full-object patch to repeat unchanged server-set properties.
+// Nested patch pointers are never allowed: they are rejected by ApplyPatch with
+// an invalidPatch error before classification.
+func ValidatePatch(current, patch json.RawMessage, allowed, immutable map[string]bool) (PatchValidation, error) {
+	patched, err := ApplyPatch(current, patch)
+	if err != nil {
+		return PatchValidation{}, err
+	}
+	var currentFields, patchedFields map[string]json.RawMessage
+	if err := json.Unmarshal(current, &currentFields); err != nil {
+		return PatchValidation{}, Errorf("invalidPatch", "current value is not an object")
+	}
+	if err := json.Unmarshal(patched, &patchedFields); err != nil {
+		return PatchValidation{}, Errorf("invalidPatch", "patched value is not an object")
+	}
+	changed := make(map[string]json.RawMessage)
+	for name, oldValue := range currentFields {
+		newValue, ok := patchedFields[name]
+		if !ok {
+			newValue = json.RawMessage("null")
+		}
+		if !JSONEqual(oldValue, newValue) {
+			changed[name] = newValue
+		}
+	}
+	for name, newValue := range patchedFields {
+		if _, existed := currentFields[name]; !existed {
+			changed[name] = newValue
+		}
+	}
+	var rawPatch map[string]json.RawMessage
+	if err := json.Unmarshal(patch, &rawPatch); err != nil {
+		return PatchValidation{}, Errorf("invalidPatch", "PatchObject must be an object")
+	}
+	result := PatchValidation{Patched: patched, Changed: changed}
+	for name := range rawPatch {
+		if !allowed[name] {
+			result.Unknown = append(result.Unknown, name)
+		}
+	}
+	for name := range changed {
+		if immutable[name] {
+			result.Immutable = append(result.Immutable, name)
+		}
+	}
+	sort.Strings(result.Unknown)
+	sort.Strings(result.Immutable)
+	return result, nil
+}
+
 // SetErrorNames formats a list of property names for an invalidProperties
 // SetError description.
 func SetErrorNames(names []string) string {

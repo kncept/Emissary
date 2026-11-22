@@ -1,7 +1,6 @@
 package emailsubmission
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"sort"
@@ -209,51 +208,17 @@ func applySubmissionPatch(record storage.SubmissionRecord, patch json.RawMessage
 	if err != nil {
 		return record, nil, err
 	}
-	patchedJSON, err := base.ApplyPatch(currentJSON, patch)
+	validation, err := base.ValidatePatch(currentJSON, patch,
+		submissionPatchProperties, submissionImmutableProperties)
 	if err != nil {
 		return record, nil, err
 	}
-	var current, patched map[string]json.RawMessage
-	if err := json.Unmarshal(currentJSON, &current); err != nil {
-		return record, nil, err
-	}
-	if err := json.Unmarshal(patchedJSON, &patched); err != nil {
-		return record, nil, err
-	}
-
-	changed := make(map[string]json.RawMessage)
-	for name := range current {
-		if _, ok := patched[name]; !ok {
-			changed[name] = nil
-			continue
-		}
-		if !sameJSON(current[name], patched[name]) {
-			changed[name] = patched[name]
-		}
-	}
-	for name, value := range patched {
-		if _, ok := current[name]; !ok {
-			changed[name] = value
-		}
-	}
-
 	invalidSet := make(map[string]bool)
-	// A null patch value for an unknown property is a no-op in ApplyPatch,
-	// so inspect the raw patch keys as well. Nested pointers are never allowed
-	// because every nested EmailSubmission property is immutable.
-	var patchFields map[string]json.RawMessage
-	if err := json.Unmarshal(patch, &patchFields); err != nil {
-		return record, nil, err
+	for _, name := range validation.Unknown {
+		invalidSet[name] = true
 	}
-	for name := range patchFields {
-		if !submissionPatchProperties[name] {
-			invalidSet[name] = true
-		}
-	}
-	for name := range changed {
-		if name != "undoStatus" {
-			invalidSet[name] = true
-		}
+	for _, name := range validation.Immutable {
+		invalidSet[name] = true
 	}
 	if len(invalidSet) > 0 {
 		invalid := make([]string, 0, len(invalidSet))
@@ -265,7 +230,7 @@ func applySubmissionPatch(record storage.SubmissionRecord, patch json.RawMessage
 		return record, &setError, nil
 	}
 
-	rawUndoStatus, changedUndoStatus := changed["undoStatus"]
+	rawUndoStatus, changedUndoStatus := validation.Changed["undoStatus"]
 	if !changedUndoStatus {
 		return record, nil, nil
 	}
@@ -283,24 +248,6 @@ func applySubmissionPatch(record storage.SubmissionRecord, patch json.RawMessage
 	// "final". A cancel attempt on such a record has the RFC 8621 SetError.
 	setError := base.NewSetError("cannotUnsend", "This submission has already been relayed")
 	return record, &setError, nil
-}
-
-func sameJSON(left, right json.RawMessage) bool {
-	return canonicalJSON(left) == canonicalJSON(right)
-}
-
-func canonicalJSON(raw json.RawMessage) string {
-	var value any
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if err := decoder.Decode(&value); err != nil {
-		return string(raw)
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return string(raw)
-	}
-	return string(encoded)
 }
 
 // submissionCreateResponse returns only the properties the client did not

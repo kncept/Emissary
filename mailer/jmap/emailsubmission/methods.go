@@ -27,6 +27,16 @@ var submissionPatchProperties = base.ArgumentSet(
 	"id", "identityId", "emailId", "threadId", "envelope", "sendAt",
 	"undoStatus", "deliveryStatus", "dsnBlobIds", "mdnBlobIds")
 
+// submissionImmutableProperties marks every property except undoStatus, the
+// only property RFC 8621 section 7.5 allows a client to change.
+var submissionImmutableProperties = func() map[string]bool {
+	immutable := make(map[string]bool, len(submissionPatchProperties))
+	for name := range submissionPatchProperties {
+		immutable[name] = name != "undoStatus"
+	}
+	return immutable
+}()
+
 func (h *Handler) EmailSubmissionGet(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, error) {
 	records, _, err := h.deps.Submissions.Load(ctx, accountID)
 	if err != nil {

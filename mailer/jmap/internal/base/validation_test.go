@@ -73,6 +73,73 @@ func TestApplyPatch(t *testing.T) {
 	}
 }
 
+// TestValidatePatchRFC8620_5_3 covers the shared PatchObject classification
+// used by every /set type with immutable properties.
+func TestValidatePatchRFC8620_5_3(t *testing.T) {
+	current := json.RawMessage(`{"id":"singleton","isEnabled":true,"subject":"Away","fromDate":null}`)
+	allowed := ArgumentSet("id", "isEnabled", "subject", "fromDate")
+	immutable := ArgumentSet("id")
+
+	t.Run("unchanged server set properties", func(t *testing.T) {
+		got, err := ValidatePatch(current, json.RawMessage(`{"id":"singleton","subject":"Back"}`), allowed, immutable)
+		if err != nil {
+			t.Fatalf("ValidatePatch() error = %v", err)
+		}
+		if len(got.Immutable) != 0 || len(got.Unknown) != 0 {
+			t.Fatalf("unchanged id was rejected: %+v", got)
+		}
+		if want := "Back"; string(got.Changed["subject"]) != `"`+want+`"` {
+			t.Errorf("changed subject = %s, want %q", got.Changed["subject"], want)
+		}
+	})
+
+	t.Run("null clears a nullable property", func(t *testing.T) {
+		got, err := ValidatePatch(current, json.RawMessage(`{"subject":null}`), allowed, immutable)
+		if err != nil {
+			t.Fatalf("ValidatePatch() error = %v", err)
+		}
+		if value, ok := got.Changed["subject"]; !ok || string(value) != "null" {
+			t.Errorf("cleared subject = %v (present=%v), want null", value, ok)
+		}
+		if _, ok := got.Changed["fromDate"]; ok {
+			t.Errorf("already-null fromDate reported as changed: %v", got.Changed)
+		}
+	})
+
+	t.Run("immutable and unknown properties", func(t *testing.T) {
+		got, err := ValidatePatch(current, json.RawMessage(`{"id":"other","bogus":null}`), allowed, immutable)
+		if err != nil {
+			t.Fatalf("ValidatePatch() error = %v", err)
+		}
+		if !slices.Equal(got.Immutable, []string{"id"}) {
+			t.Errorf("immutable = %v, want [id]", got.Immutable)
+		}
+		if !slices.Equal(got.Unknown, []string{"bogus"}) {
+			t.Errorf("unknown = %v, want [bogus]", got.Unknown)
+		}
+	})
+
+	t.Run("structural errors remain invalidPatch", func(t *testing.T) {
+		_, err := ValidatePatch(current, json.RawMessage(`{"subject/name":"x"}`), allowed, immutable)
+		if err == nil || !strings.HasPrefix(err.Error(), "invalidPatch:") {
+			t.Fatalf("ValidatePatch() = %v, want invalidPatch", err)
+		}
+	})
+
+	t.Run("repeating an unchanged value is not a change", func(t *testing.T) {
+		got, err := ValidatePatch(
+			json.RawMessage(`{"id":"singleton","subject":"Away"}`),
+			json.RawMessage(`{"subject":"Away"}`),
+			ArgumentSet("id", "subject"), immutable)
+		if err != nil {
+			t.Fatalf("ValidatePatch() error = %v", err)
+		}
+		if len(got.Changed) != 0 {
+			t.Errorf("changed = %v, want no changes", got.Changed)
+		}
+	})
+}
+
 func TestApplyPatchRejectsInvalidPatches(t *testing.T) {
 	current := json.RawMessage(`{"keywords":{"$seen":true},"list":["a"]}`)
 	cases := []struct {

@@ -49,16 +49,6 @@
  * - Blob: `copy`
  * OpenAPI spec version: 1.0.0
  */
-import type { UTCDate } from './uTCDate';
+import type { PatchObject } from './patchObject';
 
-export interface VacationResponseUpdate {
-  isEnabled?: boolean;
-  fromDate?: UTCDate | null;
-  toDate?: UTCDate | null;
-  /** @nullable */
-  subject?: string | null;
-  /** @nullable */
-  textBody?: string | null;
-  /** @nullable */
-  htmlBody?: string | null;
-}
+export type VacationResponseUpdate = PatchObject;

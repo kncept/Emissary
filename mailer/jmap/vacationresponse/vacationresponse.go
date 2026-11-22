@@ -3,8 +3,10 @@
 package vacationresponse
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"sort"
 	"time"
 
 	"github.com/kncept/Emissary/mailer/components/usermanager"
@@ -67,88 +69,72 @@ func fromStored(v usermanager.VacationResponse) VacationResponse {
 	}
 }
 
-// updatePatch is the set of mutable properties accepted by /set. Pointer
-// fields carry a supplied non-null value; cleared records the properties whose
-// PatchObject value was explicitly null. JSON unmarshalling alone cannot tell
-// an absent property from a null one, because both yield a nil pointer.
-type updatePatch struct {
-	IsEnabled *bool      `json:"isEnabled,omitempty"`
-	FromDate  *time.Time `json:"fromDate,omitempty"`
-	ToDate    *time.Time `json:"toDate,omitempty"`
-	Subject   *string    `json:"subject,omitempty"`
-	TextBody  *string    `json:"textBody,omitempty"`
-	HTMLBody  *string    `json:"htmlBody,omitempty"`
-	cleared   map[string]bool
-}
+var (
+	// vacationPatchProperties is the full VacationResponse object. RFC 8620
+	// section 5.3 lets a PatchObject repeat unchanged server-set properties,
+	// so id is accepted here and validated as immutable by ValidatePatch.
+	vacationPatchProperties = base.ArgumentSet(
+		"id", "isEnabled", "fromDate", "toDate", "subject", "textBody", "htmlBody")
+	vacationCreateProperties = base.ArgumentSet(
+		"isEnabled", "fromDate", "toDate", "subject", "textBody", "htmlBody")
+	vacationImmutableProperties = base.ArgumentSet("id")
+)
 
-func (p updatePatch) apply(v *usermanager.VacationResponse) {
-	if p.IsEnabled != nil {
-		v.IsEnabled = *p.IsEnabled
-	}
-	if p.FromDate != nil {
-		t := p.FromDate.UTC()
-		v.FromDate = &t
-	} else if p.cleared["fromDate"] {
-		v.FromDate = nil
-	}
-	if p.ToDate != nil {
-		t := p.ToDate.UTC()
-		v.ToDate = &t
-	} else if p.cleared["toDate"] {
-		v.ToDate = nil
-	}
-	if p.Subject != nil {
-		s := *p.Subject
-		v.Subject = &s
-	} else if p.cleared["subject"] {
-		v.Subject = nil
-	}
-	if p.TextBody != nil {
-		s := *p.TextBody
-		v.TextBody = &s
-	} else if p.cleared["textBody"] {
-		v.TextBody = nil
-	}
-	if p.HTMLBody != nil {
-		s := *p.HTMLBody
-		v.HTMLBody = &s
-	} else if p.cleared["htmlBody"] {
-		v.HTMLBody = nil
-	}
-}
-
-// handlePatch decodes a create/update value, rejecting properties that are
-// not part of the singleton. RFC 8620 requires invalidProperties for unknown
-// or unmodifiable fields.
-func handlePatch(raw json.RawMessage) (updatePatch, error) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil {
-		return updatePatch{}, base.Errorf("invalidProperties", "VacationResponse value must be an object")
-	}
-	allowed := map[string]bool{
-		"isEnabled": true,
-		"fromDate":  true,
-		"toDate":    true,
-		"subject":   true,
-		"textBody":  true,
-		"htmlBody":  true,
-	}
-	patch := updatePatch{cleared: make(map[string]bool)}
-	for name, value := range fields {
-		if !allowed[name] {
-			return updatePatch{}, base.Errorf("invalidProperties", "unknown or immutable property %q", name)
-		}
-		if string(value) == "null" {
-			if name == "isEnabled" {
-				return updatePatch{}, base.Errorf("invalidProperties", "isEnabled is not nullable")
+// applyVacationChanges applies the properties ValidatePatch reports as
+// changed. RFC 8621 section 8 defines isEnabled as non-nullable; every other
+// property accepts null to return to its default. Invalid values are returned
+// as property names so the caller can build one invalidProperties SetError.
+func applyVacationChanges(v *usermanager.VacationResponse, changed map[string]json.RawMessage) []string {
+	invalid := make([]string, 0)
+	for name, raw := range changed {
+		isNull := bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+		switch name {
+		case "id":
+			// Handled by the immutable-property check in ValidatePatch.
+		case "isEnabled":
+			var value bool
+			if isNull || json.Unmarshal(raw, &value) != nil {
+				invalid = append(invalid, name)
+				continue
 			}
-			patch.cleared[name] = true
+			v.IsEnabled = value
+		case "fromDate", "toDate":
+			var value *time.Time
+			if !isNull {
+				var parsed time.Time
+				if json.Unmarshal(raw, &parsed) != nil {
+					invalid = append(invalid, name)
+					continue
+				}
+				parsed = parsed.UTC()
+				value = &parsed
+			}
+			if name == "fromDate" {
+				v.FromDate = value
+			} else {
+				v.ToDate = value
+			}
+		case "subject", "textBody", "htmlBody":
+			var value *string
+			if !isNull {
+				var parsed string
+				if json.Unmarshal(raw, &parsed) != nil {
+					invalid = append(invalid, name)
+					continue
+				}
+				value = &parsed
+			}
+			switch name {
+			case "subject":
+				v.Subject = value
+			case "textBody":
+				v.TextBody = value
+			case "htmlBody":
+				v.HTMLBody = value
+			}
 		}
 	}
-	if err := json.Unmarshal(raw, &patch); err != nil {
-		return updatePatch{}, base.Errorf("invalidProperties", "invalid VacationResponse value")
-	}
-	return patch, nil
+	return invalid
 }
 
 // fingerprint derives the value used to detect changes to the singleton so
@@ -231,57 +217,76 @@ func (h *Handler) VacationResponseSet(ctx context.Context, accountID string, arg
 	if err != nil {
 		return nil, err
 	}
+	// Make the state token known even for an account that has never called
+	// /get, so ifInState and oldState are meaningful on the first /set.
+	if _, err := h.syncState(ctx, accountID, stored); err != nil {
+		return nil, err
+	}
+	final := stored
 
 	return base.HandleSet(ctx, accountID, args, base.SetSpec{
 		Allowed: base.ArgumentSet("accountId", "ifInState", "create", "update", "destroy"),
 		State: func(ctx context.Context) (string, error) {
 			return h.deps.Changes.State(ctx, accountID, base.StateVacation)
 		},
-		Create: func(_ context.Context, id string, _ json.RawMessage) (json.RawMessage, *base.SetError, error) {
-			// The singleton always exists, so a create is rejected.
-			err := base.SetError{}
-			if id == SingletonID {
-				err = base.AlreadyExists("the VacationResponse singleton already exists", SingletonID)
-			} else {
-				err = base.NewSetError("invalidProperties", "the only valid VacationResponse id is \"singleton\"")
+		Create: func(_ context.Context, creationID string, record json.RawMessage) (json.RawMessage, *base.SetError, error) {
+			if bad := base.ValidateCreateProperties(
+				map[string]json.RawMessage{creationID: record},
+				vacationCreateProperties, vacationImmutableProperties); len(bad[creationID]) > 0 {
+				setErr := base.InvalidProperties("Invalid create properties", bad[creationID]...)
+				return nil, &setErr, nil
 			}
-			return nil, &err, nil
+			// RFC 8620 section 5.3 defines the singleton SetError for create
+			// and destroy on singleton types. RFC 8621 section 8 requires
+			// exactly one VacationResponse per account.
+			setErr := base.NewSetError("singleton", "VacationResponse is a singleton and cannot be created")
+			return nil, &setErr, nil
 		},
 		Update: func(ctx context.Context, id string, patch json.RawMessage) (json.RawMessage, *base.SetError, error) {
 			if id != SingletonID {
 				setErr := base.NewSetError("notFound", "the only valid VacationResponse id is \"singleton\"")
 				return nil, &setErr, nil
 			}
-			// RFC 8620 section 5.3: validate the PatchObject structure before
-			// applying property semantics.
-			currentJSON, _ := json.Marshal(fromStored(stored))
-			if _, err := base.ApplyPatch(currentJSON, patch); err != nil {
+			currentJSON, err := json.Marshal(fromStored(stored))
+			if err != nil {
+				return nil, nil, err
+			}
+			validation, err := base.ValidatePatch(currentJSON, patch,
+				vacationPatchProperties, vacationImmutableProperties)
+			if err != nil {
 				setErr := base.NewSetError("invalidPatch", err.Error())
 				return nil, &setErr, nil
 			}
-			changes, err := handlePatch(patch)
-			if err != nil {
-				setErr := base.NewSetError("invalidProperties", err.Error())
+			invalid := append([]string{}, validation.Unknown...)
+			invalid = append(invalid, validation.Immutable...)
+			next := stored
+			invalid = append(invalid, applyVacationChanges(&next, validation.Changed)...)
+			if len(invalid) > 0 {
+				sort.Strings(invalid)
+				setErr := base.InvalidProperties("Invalid VacationResponse properties", invalid...)
 				return nil, &setErr, nil
 			}
-			changes.apply(&stored)
-			if err := h.store().SaveVacationResponse(ctx, email, stored); err != nil {
+			if err := h.store().SaveVacationResponse(ctx, email, next); err != nil {
 				return nil, nil, err
 			}
-			// Refresh the derived state so HandleSet's newState read sees the
-			// mutation. The fingerprint makes a no-op update state-neutral.
-			if _, err := h.syncState(ctx, accountID, stored); err != nil {
-				return nil, nil, err
-			}
-			result, err := json.Marshal(fromStored(stored))
-			return result, nil, err
+			stored = next
+			final = next
+			// RFC 8620 section 5.3: an updated entry contains only properties
+			// changed implicitly by the server. Nothing else changes here.
+			return json.RawMessage("{}"), nil, nil
 		},
 		Destroy: func(_ context.Context, id string) *base.SetError {
 			err := base.NewSetError("notFound", "the only valid VacationResponse id is \"singleton\"")
 			if id == SingletonID {
-				err = base.NewSetError("notFound", "the VacationResponse singleton cannot be destroyed")
+				err = base.NewSetError("singleton", "VacationResponse is a singleton and cannot be destroyed")
 			}
 			return &err
+		},
+		// Sync once per request from the final value. A no-op patch therefore
+		// leaves the state token unchanged even if several updates are sent.
+		Finalize: func(ctx context.Context) error {
+			_, err := h.syncState(ctx, accountID, final)
+			return err
 		},
 	})
 }

@@ -256,8 +256,8 @@ func TestVacationResponseSetErrors(t *testing.T) {
 	}
 	resp := decodeMap(t, raw)
 	notCreated := resp["notCreated"].(map[string]any)
-	if err, ok := notCreated["singleton"].(map[string]any); !ok || err["type"] != "alreadyExists" {
-		t.Errorf("notCreated = %v, want alreadyExists", notCreated)
+	if err, ok := notCreated["singleton"].(map[string]any); !ok || err["type"] != "singleton" {
+		t.Errorf("notCreated = %v, want singleton", notCreated)
 	}
 	notUpdated := resp["notUpdated"].(map[string]any)
 	if err, ok := notUpdated["singleton"].(map[string]any); !ok || err["type"] != "invalidProperties" {

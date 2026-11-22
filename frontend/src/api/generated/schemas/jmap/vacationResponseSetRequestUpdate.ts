@@ -49,9 +49,9 @@
  * - Blob: `copy`
  * OpenAPI spec version: 1.0.0
  */
-import type { VacationResponseUpdate } from './vacationResponseUpdate';
+import type { PatchObject } from './patchObject';
 
 /**
  * @nullable
  */
-export type VacationResponseSetRequestUpdate = {[key: string]: VacationResponseUpdate} | null;
+export type VacationResponseSetRequestUpdate = {[key: string]: PatchObject} | null;

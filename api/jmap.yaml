@@ -2720,26 +2720,7 @@ components:
           nullable: true
       additionalProperties: false
     VacationResponseUpdate:
-      type: object
-      properties:
-        isEnabled:
-          type: boolean
-        fromDate:
-          $ref: '#/components/schemas/UTCDate'
-          nullable: true
-        toDate:
-          $ref: '#/components/schemas/UTCDate'
-          nullable: true
-        subject:
-          type: string
-          nullable: true
-        textBody:
-          type: string
-          nullable: true
-        htmlBody:
-          type: string
-          nullable: true
-      additionalProperties: false
+      $ref: '#/components/schemas/PatchObject'
     VacationResponseGetRequest:
       $ref: '#/components/schemas/GetRequest'
     VacationResponseGetResponse:
