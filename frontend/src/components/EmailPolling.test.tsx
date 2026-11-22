@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getEmails } from '../api.ts';
 import { clearEmailRefreshRequest } from '../api/email-checks.ts';
+import { resetJMAPClientCache } from '../api/jmap-client.ts';
 import EmailList, { resetEmailListCache } from './EmailList.tsx';
 import Layout from './Layout.tsx';
 
@@ -49,11 +50,12 @@ describe('inbox update checks', () => {
     vi.setSystemTime(new Date('2026-11-20T12:00:00Z'));
     window.localStorage.clear();
     resetEmailListCache();
+    resetJMAPClientCache();
     clearEmailRefreshRequest();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
-    fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/.well-known/jmap') {
         return createMockResponse({
@@ -63,6 +65,16 @@ describe('inbox update checks', () => {
         });
       }
       if (url === '/api/') {
+        const request = JSON.parse(String(init?.body ?? '{}')) as { methodCalls?: string[][] };
+        if (request.methodCalls?.some((call) => call[0] === 'Mailbox/query')) {
+          return createMockResponse({
+            methodResponses: [
+              ['Mailbox/query', { accountId: 'acct_lz3-Rj7IV4X1-Vr1ujkG7tstkxwk5pgkqJ6mXbpOgTs', state: 'm1', ids: ['inbox-id'] }, 'mailboxQuery'],
+              ['Mailbox/get', { accountId: 'acct_lz3-Rj7IV4X1-Vr1ujkG7tstkxwk5pgkqJ6mXbpOgTs', state: 'm1', list: [{ id: 'inbox-id', role: 'inbox', name: 'Inbox' }], notFound: [] }, 'mailboxGet'],
+            ],
+            sessionState: '1',
+          });
+        }
         return createMockResponse({
           methodResponses: [
             ['Email/query', { accountId: 'acct_lz3-Rj7IV4X1-Vr1ujkG7tstkxwk5pgkqJ6mXbpOgTs', queryState: '1', ids: ['e1'], total: 1 }, 'query1'],
@@ -110,38 +122,38 @@ describe('inbox update checks', () => {
 
   it('checks for updates five minutes after the last check while the inbox is open', async () => {
     await mountInbox();
-    expect(apiCallCount()).toBe(1);
-
-    await flush(FIVE_MINUTES - 1);
-    expect(apiCallCount()).toBe(1);
-
-    await flush(1);
     expect(apiCallCount()).toBe(2);
 
-    await flush(FIVE_MINUTES);
+    await flush(FIVE_MINUTES - 1);
+    expect(apiCallCount()).toBe(2);
+
+    await flush(1);
     expect(apiCallCount()).toBe(3);
+
+    await flush(FIVE_MINUTES);
+    expect(apiCallCount()).toBe(4);
   });
 
   it('restarts the timer when emails are refreshed outside the inbox', async () => {
     await mountInbox();
-    expect(apiCallCount()).toBe(1);
+    expect(apiCallCount()).toBe(2);
 
     await flush(FIVE_MINUTES - 1000);
     await act(async () => {
       await getEmails();
     });
-    expect(apiCallCount()).toBe(2);
+    expect(apiCallCount()).toBe(3);
 
     await flush(FIVE_MINUTES - 1);
-    expect(apiCallCount()).toBe(2);
+    expect(apiCallCount()).toBe(3);
 
     await flush(1);
-    expect(apiCallCount()).toBe(3);
+    expect(apiCallCount()).toBe(4);
   });
 
   it('polls again when the Inbox nav item is clicked and restarts the timer', async () => {
     await mountInboxWithNav();
-    expect(apiCallCount()).toBe(1);
+    expect(apiCallCount()).toBe(2);
 
     await flush(FIVE_MINUTES - 1000);
     const inboxLink = container.querySelector('a[href="/"]')!;
@@ -149,18 +161,18 @@ describe('inbox update checks', () => {
     await act(async () => {
       inboxLink.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
-    expect(apiCallCount()).toBe(2);
+    expect(apiCallCount()).toBe(3);
 
     await flush(FIVE_MINUTES - 1);
-    expect(apiCallCount()).toBe(2);
+    expect(apiCallCount()).toBe(3);
 
     await flush(1);
-    expect(apiCallCount()).toBe(3);
+    expect(apiCallCount()).toBe(4);
   });
 
   it('stops checking once the inbox is no longer mounted', async () => {
     await mountInbox();
-    expect(apiCallCount()).toBe(1);
+    expect(apiCallCount()).toBe(2);
 
     act(() => {
       root!.unmount();
@@ -168,6 +180,6 @@ describe('inbox update checks', () => {
     root = null;
 
     await flush(FIVE_MINUTES * 3);
-    expect(apiCallCount()).toBe(1);
+    expect(apiCallCount()).toBe(2);
   });
 });

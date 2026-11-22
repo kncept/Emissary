@@ -67,7 +67,7 @@ describe('App routing', () => {
     window.localStorage.setItem(TOKEN_KEY, makeJwt({ sub: 'test@example.com', exp: 9999999999 }));
     window.localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-token');
 
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/.well-known/jmap') {
         return createMockResponse({
@@ -77,6 +77,16 @@ describe('App routing', () => {
         });
       }
       if (url === '/api/') {
+        const request = JSON.parse(String(init?.body ?? '{}')) as { methodCalls?: string[][] };
+        if (request.methodCalls?.some((call) => call[0] === 'Mailbox/query')) {
+          return createMockResponse({
+            methodResponses: [
+              ['Mailbox/query', { accountId: 'acct_lz3-Rj7IV4X1-Vr1ujkG7tstkxwk5pgkqJ6mXbpOgTs', state: 'm1', ids: ['inbox-id'] }, 'mailboxQuery'],
+              ['Mailbox/get', { accountId: 'acct_lz3-Rj7IV4X1-Vr1ujkG7tstkxwk5pgkqJ6mXbpOgTs', state: 'm1', list: [{ id: 'inbox-id', role: 'inbox', name: 'Inbox' }], notFound: [] }, 'mailboxGet'],
+            ],
+            sessionState: '1',
+          });
+        }
         return createMockResponse({
           methodResponses: [
             ['Email/query', { accountId: 'acct_lz3-Rj7IV4X1-Vr1ujkG7tstkxwk5pgkqJ6mXbpOgTs', queryState: '1', ids: ['e1'], total: 1 }, 'query1'],
@@ -95,8 +105,8 @@ describe('App routing', () => {
     await act(async () => {});
     await act(async () => {});
 
-    // Should have fetched the JMAP session, then the JMAP API
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Session, mailbox discovery, then the JMAP API call for the inbox.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock).toHaveBeenCalledWith('/.well-known/jmap', expect.anything());
     expect(fetchMock).toHaveBeenCalledWith('/api/', expect.anything());
     expect(document.body.textContent).toContain('Welcome to Emissary');

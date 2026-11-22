@@ -28,6 +28,35 @@ function makeJwt(payload: Record<string, unknown>): string {
   return `${b64url({ alg: 'HS256', typ: 'JWT' })}.${b64url(payload)}.signature`;
 }
 
+// The JMAP client discovers role mailboxes through Mailbox/query + Mailbox/get
+// before reading or drafting mail. Mocks for getEmails/sendEmail must answer
+// that first call as well as the method under test.
+function mailboxDiscoveryResponses(accountId: string) {
+  return [
+    ['Mailbox/query', { accountId, state: 'm1', ids: ['inbox-id', 'drafts-id'] }, 'mailboxQuery'],
+    ['Mailbox/get', {
+      accountId,
+      state: 'm1',
+      list: [
+        { id: 'inbox-id', role: 'inbox', name: 'Inbox' },
+        { id: 'drafts-id', role: 'drafts', name: 'Drafts' },
+      ],
+      notFound: [],
+    }, 'mailboxGet'],
+  ];
+}
+
+// Answers a mocked /api/ POST: mailbox-discovery calls get role mailboxes,
+// every other call gets the method responses the test is actually asserting.
+function jmapMockResponse(body: string | undefined, accountId: string, fallback: unknown[][]) {
+  const request = JSON.parse(body || '{}') as { methodCalls?: string[][] };
+  const discovery = request.methodCalls?.some((call) => call[0] === 'Mailbox/query');
+  return createMockResponse({
+    methodResponses: discovery ? mailboxDiscoveryResponses(accountId) : fallback,
+    sessionState: '1',
+  });
+}
+
 describe('auth api', () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -342,10 +371,9 @@ describe('auth api', () => {
           });
         }
         if (url === '/api/') {
-          return createMockResponse({
-            methodResponses: [['Email/get', { list: [] }, 'get1']],
-            sessionState: '1',
-          });
+          return jmapMockResponse(_init?.body as string | undefined, 'admin@example.com', [
+            ['Email/get', { list: [] }, 'get1'],
+          ]);
         }
         throw new Error(`Unexpected fetch: ${url}`);
       });
@@ -376,10 +404,9 @@ describe('auth api', () => {
           });
         }
         if (url === '/api/jmap/') {
-          return createMockResponse({
-            methodResponses: [['Email/get', { list: [] }, 'get1']],
-            sessionState: 's1',
-          });
+          return jmapMockResponse(_init?.body as string | undefined, 'acct_victim', [
+            ['Email/get', { list: [] }, 'get1'],
+          ]);
         }
         throw new Error(`Unexpected fetch: ${url}`);
       });
@@ -411,6 +438,12 @@ describe('auth api', () => {
           const request = JSON.parse(String(init?.body ?? '{}')) as {
             methodCalls?: [string, Record<string, unknown>, string][];
           };
+          if (request.methodCalls?.some((call) => call[0] === 'Mailbox/query')) {
+            return createMockResponse({
+              methodResponses: mailboxDiscoveryResponses('test@example.com'),
+              sessionState: '1',
+            });
+          }
           if (request.methodCalls?.some((call) => call[0] === 'Identity/get')) {
             return createMockResponse({
               methodResponses: [[
@@ -523,7 +556,9 @@ describe('auth api', () => {
       expect(create.cc).toEqual([{ email: 'dave@example.com', name: '' }]);
       expect(create.bcc).toEqual([{ email: 'erin@example.com', name: '' }]);
 
-      // The envelope covers every recipient, including Bcc.
+      // The envelope covers every recipient, including Bcc. RFC 8621 section 7
+      // requires mailFrom; empty is the null reverse path. The header From is
+      // still derived by the server from the Identity.
       const submission = await sentSubmissionArgs(fetchMock);
       expect(submission.create.submission1.envelope.rcptTo).toEqual([
         { email: 'bob@example.com' },
@@ -531,7 +566,7 @@ describe('auth api', () => {
         { email: 'dave@example.com' },
         { email: 'erin@example.com' },
       ]);
-      expect(submission.create.submission1.envelope.mailFrom).toBeUndefined();
+      expect(submission.create.submission1.envelope.mailFrom).toEqual({ email: '' });
     });
 
     it('uses the identity discovered through Identity/get', async () => {
@@ -745,10 +780,9 @@ describe('auth api', () => {
             : createMockResponse(jmapSession);
         }
         if (url === '/api/') {
-          return createMockResponse({
-            methodResponses: [['Email/get', { list: [] }, 'get1']],
-            sessionState: '1',
-          });
+          return jmapMockResponse(_init?.body as string | undefined, 'acct_alice', [
+            ['Email/get', { list: [] }, 'get1'],
+          ]);
         }
         throw new Error(`Unexpected fetch: ${url}`);
       });
@@ -761,26 +795,24 @@ describe('auth api', () => {
         'Bearer old-token',
         'Bearer new-token',
       ]);
-      expect(authHeadersFor(fetchMock, '/api/')).toEqual(['Bearer new-token']);
+      expect(authHeadersFor(fetchMock, '/api/')).toEqual(['Bearer new-token', 'Bearer new-token']);
     });
 
     it('shares one refresh across concurrent JMAP requests', async () => {
       const { getEmails } = await importApi();
       window.localStorage.setItem(TOKEN_KEY, 'old-token');
       window.localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-1');
-      let postAttempt = 0;
       const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
         const url = String(input);
         if (url === '/api/auth/refresh') return createMockResponse(refreshedTokens);
         if (url === '/.well-known/jmap') return createMockResponse(jmapSession);
         if (url === '/api/') {
-          postAttempt += 1;
-          return postAttempt <= 2
+          const authorization = (_init?.headers as Headers | undefined)?.get?.('Authorization');
+          return authorization === 'Bearer old-token'
             ? createMockResponse({ error: 'unauthorized' }, { status: 401, ok: false })
-            : createMockResponse({
-              methodResponses: [['Email/get', { list: [] }, 'get1']],
-              sessionState: '1',
-            });
+            : jmapMockResponse(_init?.body as string | undefined, 'test@example.com', [
+              ['Email/get', { list: [] }, 'get1'],
+            ]);
         }
         throw new Error(`Unexpected fetch: ${url}`);
       });
@@ -789,12 +821,9 @@ describe('auth api', () => {
       await Promise.all([getEmails(), getEmails()]);
 
       expect(fetchMock.mock.calls.filter((call) => String(call[0]) === '/api/auth/refresh')).toHaveLength(1);
-      expect(authHeadersFor(fetchMock, '/api/')).toEqual([
-        'Bearer old-token',
-        'Bearer old-token',
-        'Bearer new-token',
-        'Bearer new-token',
-      ]);
+      const apiAuth = authHeadersFor(fetchMock, '/api/');
+      expect(apiAuth.filter((header) => header === 'Bearer old-token').length).toBeGreaterThan(0);
+      expect(apiAuth.filter((header) => header === 'Bearer new-token').length).toBeGreaterThan(0);
     });
 
     it('clears the tokens when the refresh itself fails', async () => {

@@ -33,6 +33,12 @@ interface JmapMethodResponse {
 
 let sessionPromise: Promise<Session> | null = null;
 
+/** Clears cached Session and discovered mailbox ids (used by tests and logout). */
+export function resetJMAPClientCache(): void {
+  sessionPromise = null;
+  mailboxIdCache.clear();
+}
+
 /**
  * Creates a JMAP request with multiple method calls
  */
@@ -115,6 +121,60 @@ function expandURITemplate(template: string, values: Record<string, string>): st
   return template.replace(/\{([A-Za-z0-9_]+)\}/g, (_match, name: string) =>
     encodeURIComponent(values[name] ?? '')
   );
+}
+
+// Mailbox ids are server-assigned opaque ids, never the literal strings
+// "inbox"/"drafts". Discover them through Mailbox/query + Mailbox/get and cache
+// per account so masquerading never reuses another account's ids.
+const mailboxIdCache = new Map<string, Promise<string>>();
+
+/**
+ * Resolves a role mailbox through Mailbox/query and Mailbox/get in a single
+ * JMAP call. The query supplies the ids by result reference; the get returns
+ * the role so we can verify the server honoured the filter.
+ */
+async function discoverMailboxId(role: 'inbox' | 'drafts'): Promise<string> {
+  const session = await getJmapSession();
+  const accountId = await resolveAccountId(session);
+  const cacheKey = `${accountId}|${role}`;
+  const cached = mailboxIdCache.get(cacheKey);
+  if (cached) return cached;
+
+  const pending = (async () => {
+    const responses = await jmapRequest(['urn:ietf:params:jmap:mail'], [
+      {
+        method: 'Mailbox/query',
+        args: { filter: { role } },
+        id: 'mailboxQuery',
+      },
+      {
+        method: 'Mailbox/get',
+        args: {
+          '#ids': { resultOf: 'mailboxQuery', name: 'Mailbox/query', path: '/ids/*' },
+          properties: ['id', 'role'],
+        },
+        id: 'mailboxGet',
+      },
+    ]);
+
+    const getResponse = responses.get('mailboxGet');
+    if (!getResponse || getResponse.method === 'error') {
+      throw new Error(`Failed to discover the ${role} mailbox`);
+    }
+    const list = getResponse.args.list as Array<Record<string, unknown>> | undefined;
+    const mailbox = list?.find((candidate) => candidate.role === role);
+    const id = mailbox?.id as string | undefined;
+    if (!id) {
+      throw new Error(`No ${role} mailbox is available`);
+    }
+    return id;
+  })().catch((error) => {
+    mailboxIdCache.delete(cacheKey);
+    throw error;
+  });
+
+  mailboxIdCache.set(cacheKey, pending);
+  return pending;
 }
 
 async function jmapRequest(
@@ -201,12 +261,13 @@ export function parseAddressList(input: string): string[] {
 export async function getEmails(_userFilter?: string): Promise<Email[]> {
   // Any check of the inbox, wherever it comes from, restarts the update timer.
   recordEmailCheck();
+  const inboxId = await discoverMailboxId('inbox');
   const methodId = 'query1';
   const responses = await jmapRequest(['urn:ietf:params:jmap:mail'], [
     {
       method: 'Email/query',
       args: {
-        filter: { inMailbox: 'inbox' },
+        filter: { inMailbox: inboxId },
         sort: [{ property: 'receivedAt', isAscending: false }],
         collapseThreads: false,
       },
@@ -440,7 +501,9 @@ export async function deleteEmail(id: string): Promise<void> {
  * a guessed id.
  */
 async function discoverIdentityId(): Promise<string> {
-  const responses = await jmapRequest(['urn:ietf:params:jmap:mail'], [
+  // Identity/get belongs to the submission capability (RFC 8621 section 1.3),
+  // so it must be opted into with the submission URN, not mail.
+  const responses = await jmapRequest(['urn:ietf:params:jmap:submission'], [
     {
       method: 'Identity/get',
       args: {},
@@ -477,10 +540,17 @@ export async function sendEmail(data: SendEmailRequest): Promise<{ success: bool
   const cc = parseAddressList(data.cc || '');
   const bcc = parseAddressList(data.bcc || '');
 
+  // Mailbox ids and the sending identity are discovered through JMAP, never
+  // hardcoded. Both are safe to resolve in parallel.
+  const [draftsId, identityId] = await Promise.all([
+    discoverMailboxId('drafts'),
+    discoverIdentityId(),
+  ]);
+
   // The server derives the From address from the selected Identity, so no
   // From is supplied here.
   const createArgs: Record<string, unknown> = {
-    mailboxIds: { drafts: true },
+    mailboxIds: { [draftsId]: true },
     keywords: { $draft: true },
     to: to.map((email) => ({ email, name: '' })),
     subject: data.subject,
@@ -521,15 +591,18 @@ export async function sendEmail(data: SendEmailRequest): Promise<{ success: bool
   };
 
   // The envelope covers every recipient; Bcc appears only here, never in the
-  // message headers. mailFrom is never sent - the server owns the sender.
+  // message headers. RFC 8621 section 7 requires mailFrom when an envelope is
+  // present, so an empty address supplies the null reverse path. The RFC 5322
+  // From is still derived by the server from the Identity; a non-empty
+  // mailFrom would be rejected unless it matches that identity.
   const envelopeRecipients = [...to, ...cc, ...bcc];
-  const identityId = await discoverIdentityId();
   const submission: Record<string, unknown> = {
     identityId,
     emailId: `#${createId}`,
   };
   if (envelopeRecipients.length > 0) {
     submission.envelope = {
+      mailFrom: { email: '' },
       rcptTo: envelopeRecipients.map((email) => ({ email })),
     };
   }
