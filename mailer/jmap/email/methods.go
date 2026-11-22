@@ -499,6 +499,10 @@ func (h *Handler) EmailSet(ctx context.Context, accountID string, args json.RawM
 			}
 		}
 		if err := h.deps.Metadata.Save(ctx, plan.meta); err != nil {
+			if errors.Is(err, metadata.ErrVersionConflict) {
+				notUpdated[plan.id] = setErr("serverFail", "Concurrent modification: email metadata was modified by another request")
+				continue
+			}
 			slog.Error("JMAP: failed to save email metadata", "account", accountID, "id", plan.id, "err", err)
 			if plan.mailboxChanged {
 				_, _ = h.deps.Storage.MoveEmail(ctx, accountID, plan.id, plan.currentMailbox)

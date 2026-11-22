@@ -7,6 +7,7 @@ package metadata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -35,6 +36,8 @@ const (
 //     Email/receivedAt property.
 //   - Keywords use the JMAP "String[Boolean]" shape: every present key has the
 //     value true.
+//   - Version is used for optimistic locking to prevent concurrent updates from
+//     overwriting each other. It is incremented on every successful save.
 //
 // Records are keyed per user and per mail message: UserID is the owning user,
 // ID is the mail id.
@@ -43,6 +46,7 @@ type EmailMetadata struct {
 	ID         string          `json:"id" dynamodbav:"id"`
 	ReceivedAt string          `json:"receivedAt,omitempty" dynamodbav:"receivedAt,omitempty"`
 	Keywords   map[string]bool `json:"keywords,omitempty" dynamodbav:"keywords,omitempty"`
+	Version    int             `json:"version,omitempty" dynamodbav:"version,omitempty"`
 }
 
 // FormatReceivedAt formats t as an RFC 3339 UTC timestamp for the metadata
@@ -130,7 +134,7 @@ func (m EmailMetadata) IsFlagged() bool { return m.HasKeyword(KeywordFlagged) }
 // Clone returns an independent copy, so callers can patch keywords without
 // mutating a value held by a store implementation.
 func (m EmailMetadata) Clone() EmailMetadata {
-	copy := EmailMetadata{UserID: m.UserID, ID: m.ID, ReceivedAt: m.ReceivedAt, Keywords: make(map[string]bool, len(m.Keywords))}
+	copy := EmailMetadata{UserID: m.UserID, ID: m.ID, ReceivedAt: m.ReceivedAt, Version: m.Version, Keywords: make(map[string]bool, len(m.Keywords))}
 	for keyword, enabled := range m.Keywords {
 		if enabled {
 			copy.Keywords[keyword] = true
@@ -159,6 +163,10 @@ func (m EmailMetadata) Normalize(userID, mailID string) EmailMetadata {
 func sortMetadata(entries []EmailMetadata) {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
 }
+
+// ErrVersionConflict is returned when a save fails due to a concurrent
+// modification. Callers should re-read the metadata and retry the operation.
+var ErrVersionConflict = errors.New("metadata version conflict: concurrent modification")
 
 // MetadataStore stores JMAP-mappable per-email state. Records are keyed by
 // user id and mail id. Get must return "not found" as an EmptyEmailMetadata

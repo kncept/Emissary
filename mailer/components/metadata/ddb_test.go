@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -48,6 +49,14 @@ func attrString(item map[string]types.AttributeValue, name string) string {
 	return value.Value
 }
 
+func attrNumber(item map[string]types.AttributeValue, name string) string {
+	value, ok := item[name].(*types.AttributeValueMemberN)
+	if !ok {
+		return ""
+	}
+	return value.Value
+}
+
 func (f *fakeDdb) GetItem(_ context.Context, params *dynamodb.GetItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -64,7 +73,29 @@ func (f *fakeDdb) PutItem(_ context.Context, params *dynamodb.PutItemInput, _ ..
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.items[itemKey(params.Item)] = params.Item
+	key := itemKey(params.Item)
+	condition := aws.ToString(params.ConditionExpression)
+
+	// Handle conditional writes for optimistic locking
+	if condition != "" {
+		existing := f.items[key]
+		if condition == "attribute_not_exists(#id)" {
+			if existing != nil {
+				return nil, &types.ConditionalCheckFailedException{}
+			}
+		} else if strings.HasPrefix(condition, "#version = :expectedVersion") {
+			if existing == nil {
+				return nil, &types.ConditionalCheckFailedException{}
+			}
+			expectedVersion := attrNumber(params.ExpressionAttributeValues, ":expectedVersion")
+			actualVersion := attrNumber(existing, "version")
+			if expectedVersion != actualVersion {
+				return nil, &types.ConditionalCheckFailedException{}
+			}
+		}
+	}
+
+	f.items[key] = params.Item
 	return &dynamodb.PutItemOutput{}, nil
 }
 
@@ -357,5 +388,59 @@ func TestDdbMetadata_ListEmptyIsNotNil(t *testing.T) {
 func TestDdbMetadata_Name(t *testing.T) {
 	if got := newDdbTestMetadata(newFakeDdb()).Name(); got != "ddb" {
 		t.Errorf("Name() = %q, want ddb", got)
+	}
+}
+
+func TestDdbMetadata_VersionConflict(t *testing.T) {
+	client := newFakeDdb()
+	store := newDdbTestMetadata(client)
+	ctx := context.Background()
+
+	// Save initial record
+	meta := NewEmailMetadata("alice@example.com", "mail-1", KeywordSeen)
+	meta.ReceivedAt = FormatReceivedAt(metaReceivedAt)
+	if err := store.Save(ctx, meta); err != nil {
+		t.Fatalf("initial Save() error = %v", err)
+	}
+
+	// Read the record (gets version 1)
+	got, err := store.Get(ctx, "alice@example.com", "mail-1")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.Version != 1 {
+		t.Fatalf("expected version 1, got %d", got.Version)
+	}
+
+	// Simulate concurrent modification: save with version 1 again (should fail)
+	// First, directly save a new version to simulate another client
+	concurrentMeta := got.Clone()
+	concurrentMeta.Keywords[KeywordFlagged] = true
+	if err := store.Save(ctx, concurrentMeta); err != nil {
+		t.Fatalf("concurrent Save() error = %v", err)
+	}
+
+	// Now try to save the original metadata (which still has version 1)
+	// This should fail with ErrVersionConflict
+	originalMeta := got.Clone()
+	originalMeta.Keywords[KeywordAnswered] = true
+	err = store.Save(ctx, originalMeta)
+	if err == nil {
+		t.Fatal("expected ErrVersionConflict, got nil")
+	}
+	if !errors.Is(err, ErrVersionConflict) {
+		t.Fatalf("expected ErrVersionConflict, got %v", err)
+	}
+
+	// Verify the concurrent write succeeded (version is now 2)
+	got, err = store.Get(ctx, "alice@example.com", "mail-1")
+	if err != nil {
+		t.Fatalf("Get() after conflict error = %v", err)
+	}
+	if got.Version != 2 {
+		t.Errorf("expected version 2 after conflict, got %d", got.Version)
+	}
+	if !got.IsFlagged() {
+		t.Errorf("concurrent write should have added $flagged")
 	}
 }

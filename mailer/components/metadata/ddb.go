@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -102,16 +103,40 @@ func (d *DdbMetadata) Delete(ctx context.Context, userID, mailID string) error {
 }
 
 func (d *DdbMetadata) put(ctx context.Context, metadata EmailMetadata) error {
+	// Increment version for optimistic locking. Version 0 means new record.
+	nextVersion := metadata.Version + 1
+	metadata.Version = nextVersion
+
 	item, err := attributevalue.MarshalMap(metadata)
 	if err != nil {
 		return fmt.Errorf("failed to marshal: %w", err)
 	}
 
-	_, err = d.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(d.tableName),
-		Item:      item,
-	})
+	// Use optimistic locking: only succeed if the item doesn't exist (new record)
+	// or the version matches what we read.
+	var conditionExpr string
+	if metadata.Version == 1 {
+		// New record (version was 0, now 1): ensure no existing item with this key
+		conditionExpr = "attribute_not_exists(#id)"
+	} else {
+		// Existing record: ensure version matches the old version
+		conditionExpr = "#version = :expectedVersion"
+	}
+
+	input := &dynamodb.PutItemInput{
+		TableName:                 aws.String(d.tableName),
+		Item:                      item,
+		ConditionExpression:       aws.String(conditionExpr),
+		ExpressionAttributeNames:  map[string]string{"#id": "id", "#version": "version"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":expectedVersion": &types.AttributeValueMemberN{Value: strconv.Itoa(metadata.Version - 1)}},
+	}
+
+	_, err = d.client.PutItem(ctx, input)
 	if err != nil {
+		var cfe *types.ConditionalCheckFailedException
+		if errors.As(err, &cfe) {
+			return ErrVersionConflict
+		}
 		return fmt.Errorf("failed to save item: %w", err)
 	}
 	return nil
