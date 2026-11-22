@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -168,6 +169,99 @@ func TestPushSubscriptionCreateSendsVerificationAndHidesPrivateProperties(t *tes
 	}
 	if stored[0].URL != h.server.URL+"/push" || stored[0].Keys == nil || stored[0].VerificationCode != payload.Code {
 		t.Errorf("stored subscription = %+v, want private fields retained server-side", stored[0])
+	}
+}
+
+// TestPushVerificationTokenLifecycleRFC8620_7_2 walks the whole handshake: a
+// high-entropy token is delivered once, no further requests are made until the
+// client echoes it, a wrong token is rejected, and the correct token verifies
+// the subscription. Private url/keys stay out of every client-visible object.
+func TestPushVerificationTokenLifecycleRFC8620_7_2(t *testing.T) {
+	h := newPushHarness(t)
+	ctx := h.ctx("session-lifecycle")
+	created, raw := h.set(t, ctx, createArgs(h.server.URL+"/push"))
+	id := subscriptionID(t, created.Created["c1"])
+	push, payload := h.lastPush(t)
+
+	if len(payload.Code) < 32 {
+		t.Fatalf("verificationCode has only %d characters, want >= 32 for entropy", len(payload.Code))
+	}
+	if push.header.Get("Content-Type") != "application/json" || push.header.Get("TTL") != verificationTTL {
+		t.Errorf("verification headers = %v", push.header)
+	}
+	if strings.Contains(string(raw), "url") || strings.Contains(string(raw), "p256dh") {
+		t.Fatalf("create response leaked private properties: %s", raw)
+	}
+
+	// Submissions that do not supply the token must not trigger another push.
+	h.set(t, ctx, `{}`)
+	h.get(t, ctx, `{}`)
+	h.mu.Lock()
+	pushCount := len(h.pushes)
+	h.mu.Unlock()
+	if pushCount != 1 {
+		t.Fatalf("verification POSTs before verification = %d, want 1", pushCount)
+	}
+
+	wrong, _ := h.set(t, ctx, `{"update":{"`+id+`":{"verificationCode":"guess"}}}`)
+	if wrong.NotUpdated[id].Type != "invalidProperties" {
+		t.Fatalf("wrong token = %+v, want invalidProperties", wrong.NotUpdated)
+	}
+	good, _ := h.set(t, ctx, `{"update":{"`+id+`":{"verificationCode":"`+payload.Code+`"}}}`)
+	if _, ok := good.Updated[id]; !ok {
+		t.Fatalf("correct token = %+v, want verified", good.NotUpdated)
+	}
+	// Extending the lifetime does not require re-verification (RFC 8620 7.2).
+	extended, _ := h.set(t, ctx, `{"update":{"`+id+`":{"expires":"2027-06-01T00:00:00Z"}}}`)
+	if _, ok := extended.Updated[id]; !ok {
+		t.Fatalf("expires update after verification = %+v", extended.NotUpdated)
+	}
+
+	list, getRaw := h.get(t, ctx, `{}`)
+	if len(list.List) != 1 {
+		t.Fatalf("get list = %+v", list)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(list.List[0], &object); err != nil {
+		t.Fatalf("decode subscription: %v", err)
+	}
+	for _, private := range []string{"url", "keys"} {
+		if _, ok := object[private]; ok {
+			t.Errorf("/get exposed private property %s: %s", private, getRaw)
+		}
+	}
+	if got := string(object["verificationCode"]); got != `"`+payload.Code+`"` {
+		t.Errorf("/get verificationCode = %s, want %q", got, payload.Code)
+	}
+}
+
+// TestPushVerificationRejectsUnsafeRedirectRFC8620_8_6 proves the verification
+// POST does not follow a redirect that fails the same SSRF rules applied to the
+// original URL. A downgrade to http:// is rejected even in tests that allow
+// private addresses for the local TLS server.
+func TestPushVerificationRejectsUnsafeRedirectRFC8620_8_6(t *testing.T) {
+	var targetHits, redirectHits int32
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&targetHits, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	redirector := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&redirectHits, 1)
+		http.Redirect(w, r, strings.Replace(target.URL, "https://", "http://", 1)+"/stolen", http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	h := newPushHarness(t)
+	result, _ := h.set(t, h.ctx("session-redirect"), createArgs(redirector.URL+"/push"))
+	if _, ok := result.Created["c1"]; !ok {
+		t.Fatalf("create = %+v, want c1", result.NotCreated)
+	}
+	if got := atomic.LoadInt32(&redirectHits); got != 1 {
+		t.Fatalf("verification POSTs to redirector = %d, want 1", got)
+	}
+	if got := atomic.LoadInt32(&targetHits); got != 0 {
+		t.Fatalf("unsafe redirect was followed %d times, want 0", got)
 	}
 }
 

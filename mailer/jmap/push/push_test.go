@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -310,6 +312,56 @@ func TestVerifiedWebhookReceivesFilteredStateChange(t *testing.T) {
 	case got := <-posts:
 		t.Fatalf("unverified subscription received a push: %s", got.body)
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestWebhookRejectsUnsafeRedirectRFC8620_8_6 proves delivery revalidates
+// redirect targets with the same SSRF policy as the original URL. A webhook
+// that bounces to a blocked host must not reach it.
+func TestWebhookRejectsUnsafeRedirectRFC8620_8_6(t *testing.T) {
+	var targetHits, redirectHits int32
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&targetHits, 1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+	redirector := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&redirectHits, 1)
+		http.Redirect(w, r, target.URL+"/stolen", http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	store := storage.NewMemoryStorage()
+	state := newMemoryState()
+	hub := newTestHub(state, store)
+	hub.SetHTTPClient(redirector.Client())
+	hub.validateURL = func(_ context.Context, value string) error {
+		if strings.HasPrefix(value, target.URL) {
+			return errors.New("blocked redirect target")
+		}
+		return nil
+	}
+	ctx := pushContext("sid-redirect")
+	credential := pushsubscription.CredentialID(ctx)
+	if err := store.SavePushSubscriptions(ctx, credential, []storage.PushSubscription{{
+		ID: "sub-redirect", URL: redirector.URL, Verified: true, Types: []string{TypeEmail},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.Refresh(ctx, "alice@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	hub.Remember(ctx, "alice@example.com")
+
+	state.set(base.StateEmail, "email-redirect")
+	if err := hub.Refresh(ctx, "alice@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(&redirectHits); got != 1 {
+		t.Fatalf("webhook POSTs to redirector = %d, want 1", got)
+	}
+	if got := atomic.LoadInt32(&targetHits); got != 0 {
+		t.Fatalf("unsafe redirect was followed %d times, want 0", got)
 	}
 }
 
