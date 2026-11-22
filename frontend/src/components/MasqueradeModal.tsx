@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { autocompleteUsers } from '../api';
 
 interface MasqueradeModalProps {
@@ -22,6 +22,7 @@ export default function MasqueradeModal({ open, onClose, onSelect }: MasqueradeM
   const latestQuery = useRef('');
   const cache = useRef<CacheEntry[]>([]);
   const requestSeq = useRef(0);
+  const closeButton = useRef<HTMLButtonElement>(null);
 
   const clearDebounce = () => {
     if (debounceTimer.current !== null) {
@@ -147,23 +148,53 @@ export default function MasqueradeModal({ open, onClose, onSelect }: MasqueradeM
       pendingQuery.current = null;
       latestQuery.current = '';
       inFlight.current = false;
+      return;
     }
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButton.current?.focus();
     return () => {
       clearDebounce();
+      previousFocus?.focus();
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [open, onClose]);
 
   if (!open) return null;
 
   const trimmed = query.trim();
   const showEmpty = !loading && !error && hasSearched && trimmed.length >= 3 && results.length === 0;
 
+  const handleOverlayClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget) onClose();
+  };
+
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Masquerade">
-      <div className="modal-card">
+    <div
+      className="modal-overlay"
+      role="presentation"
+      onClick={handleOverlayClick}
+    >
+      <div className="modal-card" role="dialog" aria-modal="true" aria-label="Masquerade">
         <div className="modal-header">
           <h3>Masquerade</h3>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
+          <button
+            ref={closeButton}
+            type="button"
+            className="icon-btn"
+            onClick={onClose}
+            aria-label="Close"
+          >
             ✕
           </button>
         </div>
