@@ -1089,6 +1089,95 @@ func TestSendEmailWithCreationReference(t *testing.T) {
 	}
 }
 
+// TestSubmissionFilesMessageInSentMailbox covers the SPA send flow end to end:
+// a successful submission leaves a message in Sent and the source draft is
+// destroyed by the implicit Email/set, so Drafts is empty afterwards.
+func TestSubmissionFilesMessageInSentMailbox(t *testing.T) {
+	h, store, capture := newHandlerForTest(t, "secret")
+	_, token, _ := login(t, h, "bob@example.com", "anything")
+
+	resp := jmapRequest(t, h, token,
+		[]string{"urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"},
+		[]JmapMethodCall{
+			{"Email/set", map[string]interface{}{
+				"accountId": "bob@example.com",
+				"create": map[string]interface{}{
+					"create1": map[string]interface{}{
+						"mailboxIds": map[string]bool{"drafts": true},
+						"keywords":   map[string]bool{"$draft": true},
+						"to":         []map[string]string{{"email": "dave@example.com", "name": ""}},
+						"subject":    "sent copy test",
+						"textBody":   []map[string]interface{}{{"partId": "text1", "type": "text/plain"}},
+						"bodyValues": map[string]interface{}{"text1": map[string]interface{}{"value": "body"}},
+					},
+				},
+			}, "emailCreate"},
+			{"EmailSubmission/set", map[string]interface{}{
+				"accountId": "bob@example.com",
+				"create": map[string]interface{}{
+					"submission1": map[string]interface{}{
+						"identityId": "primary",
+						"emailId":    "#create1",
+					},
+				},
+				"onSuccessDestroyEmail": []string{"#submission1"},
+			}, "submissionCreate"},
+		}, map[string]string{})
+	if len(capture.Sent) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(capture.Sent))
+	}
+	for _, raw := range resp["methodResponses"].([]interface{}) {
+		call := raw.([]interface{})
+		result := call[1].(map[string]interface{})
+		for _, key := range []string{"notCreated", "notUpdated", "notDestroyed"} {
+			if problems, _ := result[key].(map[string]interface{}); len(problems) != 0 {
+				t.Fatalf("%s returned %s: %v", call[0], key, problems)
+			}
+		}
+	}
+
+	sent, err := store.ListEmails(context.Background(), "bob@example.com", "sent")
+	if err != nil {
+		t.Fatalf("ListEmails(sent): %v", err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("Sent mailbox has %d emails, want 1", len(sent))
+	}
+	if sent[0].Email.Subject != "sent copy test" {
+		t.Errorf("sent subject = %q, want %q", sent[0].Email.Subject, "sent copy test")
+	}
+	drafts, err := store.ListEmails(context.Background(), "bob@example.com", "drafts")
+	if err != nil {
+		t.Fatalf("ListEmails(drafts): %v", err)
+	}
+	if len(drafts) != 0 {
+		t.Fatalf("Drafts mailbox has %d emails, want 0", len(drafts))
+	}
+
+	afterResp := jmapRequest(t, h, token, []string{"urn:ietf:params:jmap:mail"}, []JmapMethodCall{
+		{"Email/get", map[string]interface{}{
+			"accountId": "bob@example.com",
+			"ids":       []string{sent[0].Ref.ID},
+			"properties": []string{
+				"id", "subject", "mailboxIds", "keywords",
+			},
+		}, "get1"},
+	})
+	afterList, _ := firstResult(t, afterResp)["list"].([]interface{})
+	if len(afterList) != 1 {
+		t.Fatalf("Email/get sent copy list = %v, want one email", afterList)
+	}
+	afterEmail, _ := afterList[0].(map[string]interface{})
+	mailboxIDs, _ := afterEmail["mailboxIds"].(map[string]interface{})
+	if mailboxIDs["sent"] != true {
+		t.Errorf("sent copy mailboxIds = %v, want sent", mailboxIDs)
+	}
+	keywords, _ := afterEmail["keywords"].(map[string]interface{})
+	if keywords["$draft"] == true {
+		t.Errorf("sent copy keywords = %v, want no $draft", keywords)
+	}
+}
+
 // TestJMAPResultReference exercises RFC 8620 result references end to end.
 // Core/echo returns its arguments unchanged, so the second call can reference
 // the ids array from the first response without a separate round trip.

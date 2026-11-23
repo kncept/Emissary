@@ -641,11 +641,9 @@ export async function sendEmail(data: SendEmailRequest): Promise<{ success: bool
       method: 'EmailSubmission/set',
       args: {
         create: { [submissionId]: submission },
-        onSuccessUpdateEmail: {
-          [`#${submissionId}`]: {
-            'keywords/$draft': null,
-          },
-        },
+        // The server files a copy in Sent after a successful submission; the
+        // source draft is no longer needed and would otherwise stay in Drafts.
+        onSuccessDestroyEmail: [`#${submissionId}`],
       },
       id: 'submissionCreate',
     },

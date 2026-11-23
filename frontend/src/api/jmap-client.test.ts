@@ -281,8 +281,7 @@ describe('JMAP client send flow', () => {
       mailFrom: { email: '' },
       rcptTo: [{ email: 'bob@example.com' }],
     });
-    expect((submissionArgs.onSuccessUpdateEmail as Record<string, unknown>)['#submission1'])
-      .toEqual({ 'keywords/$draft': null });
+    expect(submissionArgs.onSuccessDestroyEmail).toEqual(['#submission1']);
   });
 
   it('keeps the submission response when an implicit Email/set shares its id', async () => {
@@ -291,7 +290,7 @@ describe('JMAP client send flow', () => {
         return methodResponses([
           ['Email/set', { accountId: ACCOUNT, created: { create1: { id: 'email-new' } }, notCreated: {} }, 'emailCreate'],
           ['EmailSubmission/set', { accountId: ACCOUNT, created: { submission1: { id: 'sub-new' } }, notCreated: {} }, 'submissionCreate'],
-          ['Email/set', { accountId: ACCOUNT, updated: { 'email-new': {} }, notUpdated: {} }, 'submissionCreate'],
+          ['Email/set', { accountId: ACCOUNT, destroyed: ['email-new'], notDestroyed: {} }, 'submissionCreate'],
         ]);
       }
       return defaultAnswer(body);
@@ -313,7 +312,7 @@ describe('JMAP client send flow', () => {
             created: {},
             notCreated: { submission1: { type: 'forbidden', description: 'Not allowed' } },
           }, 'submissionCreate'],
-          ['Email/set', { accountId: ACCOUNT, updated: {}, notUpdated: {} }, 'submissionCreate'],
+          ['Email/set', { accountId: ACCOUNT, destroyed: [], notDestroyed: {} }, 'submissionCreate'],
         ]);
       }
       return defaultAnswer(body);

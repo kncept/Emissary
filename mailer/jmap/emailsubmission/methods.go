@@ -515,10 +515,25 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 		}
 		slog.Info("JMAP: email submitted", "account", accountID, "email_id", submission.EmailID)
 
-		// A session draft has served its purpose once the message is sent.
+		// Every successful submission leaves a copy in the account's Sent
+		// mailbox. This is a distinct Email id so the implicit Email/set below
+		// may update or destroy the source draft without removing the sent copy.
+		if sentID, err := h.fileInSent(ctx, accountID, message); err != nil {
+			// The message has already left the server. Failing the method here
+			// would encourage the client to send it a second time.
+			slog.Warn("JMAP: could not file sent email", "account", accountID,
+				"email_id", submission.EmailID, "err", err)
+		} else {
+			slog.Info("JMAP: filed sent email", "account", accountID, "sent_id", sentID)
+		}
+
+		// A session scratch draft has served its purpose once the message is
+		// sent. Stored drafts are left alone: onSuccessUpdateEmail and
+		// onSuccessDestroyEmail decide what happens to them, and deleting their
+		// metadata here would discard keywords the client did not ask to clear.
 		// Deletion is deferred until after the implicit Email/set below so
-		// onSuccessUpdateEmail/onSuccessDestroyEmail can still address it.
-		if sessionID != "" {
+		// those patches can still address the draft.
+		if fromDraft && sessionID != "" {
 			draftsToDelete = append(draftsToDelete, submission.EmailID)
 		}
 		successful[submission.EmailID] = submission.EmailID

@@ -199,7 +199,7 @@ The `blobId` is an RFC 8620 `Id` (URL-safe), so it can be interpolated into the 
 
 ### Send Email
 
-`Email/set.create` stores the email in `drafts` (under `_storage/<sid>/drafts/` when a JWT `sid` exists, so the flow works with `STORAGE=s3` in Lambda); `EmailSubmission/set.create` submits it, accepting the session-relative draft id as `emailId`. A creation-id reference lets both calls share one batch (see [Creation-id references](#creation-id-references)).
+`Email/set.create` stores the email in the account's `drafts` mailbox; `EmailSubmission/set.create` submits it, accepting that email id as `emailId`. A creation-id reference lets both calls share one batch (see [Creation-id references](#creation-id-references)). On success the server files a copy of the message in the account's `sent` mailbox with a new email id.
 
 **Locked From address.** The RFC 5322 `From` header comes from the selected Identity (the submission's `identityId`), not from the client-supplied draft header. By default that is the caller's own account; a caller with `EmissaryUserManagement` acting on another account (masquerade) is limited to an Identity owned by that account. An Identity address that is not a valid email address (no `@`) is rejected with `invalidProperties`.
 
@@ -209,7 +209,7 @@ The `blobId` is an RFC 8620 `Id` (URL-safe), so it can be interpolated into the 
 
 **Thread headers.** The draft's `inReplyTo` and `references` are carried into the delivered message as `In-Reply-To` and `References`. The message gets a `Message-ID` at `Email/set` create time; the sender reuses that id instead of generating a new one, so the stored and delivered copies agree. When masquerading, Reply-To must match From (defaulting to From); a conflicting Reply-To is rejected with `invalidProperties`.
 
-**Draft cleanup.** The session draft and its metadata (keywords and `receivedAt`) are deleted after `EmailSubmission/set` sends successfully. `onSuccessUpdateEmail` and `onSuccessDestroyEmail` are accepted for JMAP compatibility but the server performs the cleanup itself.
+**Draft cleanup.** After a successful `EmailSubmission/set`, the web UI uses `onSuccessDestroyEmail` to remove the source draft; `onSuccessUpdateEmail` is also supported for JMAP clients. Session scratch drafts (legacy, per-JWT `sid`) are deleted by the server regardless. Neither path affects the copy filed in `sent`.
 
 ### Reply and Forward (web UI)
 
