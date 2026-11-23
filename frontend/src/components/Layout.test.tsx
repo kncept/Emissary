@@ -50,6 +50,17 @@ describe('mobile navigation', () => {
     container.remove();
   });
 
+  it('shows a left mailbox panel with drafts and sent folders', () => {
+    mount();
+    const sidebar = container.querySelector('nav.mailbox-sidebar');
+    expect(sidebar).not.toBeNull();
+
+    const hrefs = Array.from(sidebar!.querySelectorAll('.mailbox-link'))
+      .map((link) => link.getAttribute('href'));
+    expect(hrefs).toEqual(['/', '/drafts', '/sent', '/archive', '/junk', '/trash']);
+    expect(sidebar!.querySelector('.mailbox-link.active')?.getAttribute('href')).toBe('/');
+  });
+
   it('applies the .open class required by the CSS when toggled', () => {
     mount();
     expect(nav().classList.contains('open')).toBe(false);

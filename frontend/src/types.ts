@@ -1,3 +1,6 @@
+/** JMAP role mailboxes exposed by the backend's default account setup. */
+export type MailboxRole = 'inbox' | 'drafts' | 'sent' | 'archive' | 'junk' | 'trash';
+
 export interface Email {
   id: string;
   from: string;

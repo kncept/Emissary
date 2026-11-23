@@ -1,8 +1,10 @@
-// Inbox polling is driven by the last time emails were actually checked, not
-// by when the inbox was mounted. Every call that checks emails (getEmails,
+// Mailbox polling is driven by the last time emails were actually checked, not
+// by when a folder was mounted. Every call that checks emails (getEmails,
 // including the polling check itself) reports here so subscribers can restart
 // their timer. This keeps a manual refresh or a refresh from another view from
 // being followed by a redundant poll five minutes later.
+
+import type { MailboxRole } from '../types.ts';
 
 export const EMAIL_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -30,46 +32,55 @@ export function onEmailCheck(listener: EmailCheckListener): () => void {
   };
 }
 
-// Navigating to the inbox while already there does not remount the view, so
-// the nav needs an explicit way to ask the mounted inbox to check again.
-type EmailRefreshRequestListener = () => void;
+// Navigating to the folder you are already in does not remount the view, so
+// the sidebar needs an explicit way to ask that mounted folder to check again.
+// Requests are scoped by role: refreshing Sent must not refetch the Inbox.
+type EmailRefreshRequestListener = (role: MailboxRole) => void;
 
-const refreshListeners = new Set<EmailRefreshRequestListener>();
-let refreshPending = false;
+interface RefreshSubscription {
+  role: MailboxRole;
+  listener: EmailRefreshRequestListener;
+}
 
-export function requestEmailRefresh(): void {
-  if (refreshListeners.size === 0) {
-    // The inbox is not mounted (e.g. the user clicked Inbox from the email
-    // view); remember the request so it can be honoured on mount.
-    refreshPending = true;
-  }
-  for (const listener of [...refreshListeners]) {
-    listener();
+const refreshListeners = new Set<RefreshSubscription>();
+const pendingRefreshes = new Set<MailboxRole>();
+
+export function requestEmailRefresh(role: MailboxRole = 'inbox'): void {
+  const subscriptions = [...refreshListeners].filter((entry) => entry.role === role);
+  // Only remember the request when no mounted folder can handle it now;
+  // otherwise a refresh would be replayed on the next mount.
+  if (subscriptions.length === 0) pendingRefreshes.add(role);
+  for (const subscription of subscriptions) {
+    subscription.listener(role);
   }
 }
 
-// Read a pending refresh request without consuming it. Lets a mounting inbox
+// Read a pending refresh request without consuming it. Lets a mounting folder
 // initialize its loading state before the effect consumes the request.
-export function hasEmailRefreshRequest(): boolean {
-  return refreshPending;
+export function hasEmailRefreshRequest(role: MailboxRole = 'inbox'): boolean {
+  return pendingRefreshes.has(role);
 }
 
 // Consume a pending refresh request. Returns true once for each request that
-// has not yet been handled by a mounted inbox.
-export function consumeEmailRefreshRequest(): boolean {
-  if (!refreshPending) return false;
-  refreshPending = false;
+// has not yet been handled by a mounted folder.
+export function consumeEmailRefreshRequest(role: MailboxRole = 'inbox'): boolean {
+  if (!pendingRefreshes.delete(role)) return false;
   return true;
 }
 
-// Clear any pending refresh request (used by tests between independent mounts).
-export function clearEmailRefreshRequest(): void {
-  refreshPending = false;
+// Clear pending requests (all folders, or one) between independent test mounts.
+export function clearEmailRefreshRequest(role?: MailboxRole): void {
+  if (role) pendingRefreshes.delete(role);
+  else pendingRefreshes.clear();
 }
 
-export function onEmailRefreshRequest(listener: EmailRefreshRequestListener): () => void {
-  refreshListeners.add(listener);
+export function onEmailRefreshRequest(
+  listener: EmailRefreshRequestListener,
+  role: MailboxRole = 'inbox',
+): () => void {
+  const subscription: RefreshSubscription = { role, listener };
+  refreshListeners.add(subscription);
   return () => {
-    refreshListeners.delete(listener);
+    refreshListeners.delete(subscription);
   };
 }

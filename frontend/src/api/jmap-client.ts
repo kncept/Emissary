@@ -8,7 +8,7 @@ import type {
   VacationResponseUpdate,
 } from './generated/schemas/jmap';
 import { htmlToText } from '../html.ts';
-import type { SendEmailRequest } from '../types.ts';
+import type { MailboxRole, SendEmailRequest } from '../types.ts';
 import { authenticatedFetch, getSessionIdentity } from './auth-fetch.ts';
 import { recordEmailCheck } from './email-checks.ts';
 
@@ -134,9 +134,9 @@ function expandURITemplate(template: string, values: Record<string, string>): st
   );
 }
 
-// Mailbox ids are server-assigned opaque ids, never the literal strings
-// "inbox"/"drafts". Discover them through Mailbox/query + Mailbox/get and cache
-// per account and session identity so masquerading never reuses another account's ids.
+// Mailbox ids are server-assigned opaque ids, never the literal role names.
+// Discover them through Mailbox/query + Mailbox/get and cache per account and
+// session identity so masquerading never reuses another account's ids.
 const mailboxIdCache = new Map<string, Promise<string>>();
 
 /**
@@ -144,7 +144,7 @@ const mailboxIdCache = new Map<string, Promise<string>>();
  * JMAP call. The query supplies the ids by result reference; the get returns
  * the role so we can verify the server honoured the filter.
  */
-async function discoverMailboxId(role: 'inbox' | 'drafts'): Promise<string> {
+async function discoverMailboxId(role: MailboxRole): Promise<string> {
   const session = await getJmapSession();
   const accountId = await resolveAccountId(session);
   const identity = getSessionIdentity() || 'anonymous';
@@ -270,16 +270,17 @@ export function parseAddressList(input: string): string[] {
     .filter((part) => part.length > 0);
 }
 
-export async function getEmails(_userFilter?: string): Promise<Email[]> {
-  // Any check of the inbox, wherever it comes from, restarts the update timer.
+/** Lists the messages in one role mailbox (Inbox by default). */
+export async function getEmails(role: MailboxRole = 'inbox'): Promise<Email[]> {
+  // Any check of a mailbox, wherever it comes from, restarts the update timer.
   recordEmailCheck();
-  const inboxId = await discoverMailboxId('inbox');
+  const mailboxId = await discoverMailboxId(role);
   const methodId = 'query1';
   const responses = await jmapRequest(['urn:ietf:params:jmap:mail'], [
     {
       method: 'Email/query',
       args: {
-        filter: { inMailbox: inboxId },
+        filter: { inMailbox: mailboxId },
         sort: [{ property: 'receivedAt', isAscending: false }],
         collapseThreads: false,
       },

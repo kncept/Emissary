@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { getEmail, getRawEmail, markRead } from '../api.ts';
+import type { MailboxRole } from '../types.ts';
 import EmailView from './EmailView.tsx';
 
 const emailID = 'users/alice@example.com/inbox/e1.eml';
@@ -189,5 +190,56 @@ describe('EmailView raw MIME actions', () => {
     await settle();
 
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Failed to load raw email MIME');
+  });
+});
+
+describe('EmailView back navigation', () => {
+  let container: HTMLDivElement;
+  let root: Root | null = null;
+
+  const mountFrom = (role: MailboxRole) => {
+    act(() => {
+      root!.render(
+        <MemoryRouter initialEntries={[{
+          pathname: `/email/${encodeURIComponent(emailID)}`,
+          state: { mailboxRole: role },
+        }]}>
+          <Routes>
+            <Route path="/email/:id" element={<EmailView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => { root?.unmount(); });
+    root = null;
+    container.remove();
+  });
+
+  it('returns to Sent for a message opened from the Sent folder', async () => {
+    mountFrom('sent');
+    await act(async () => {});
+
+    const back = Array.from(container.querySelectorAll('a'))
+      .find((link) => link.textContent === 'Back');
+    expect(back?.getAttribute('href')).toBe('/sent');
+  });
+
+  it('returns to the Inbox when no folder is recorded', async () => {
+    mountFrom('inbox');
+    await act(async () => {});
+
+    const back = Array.from(container.querySelectorAll('a'))
+      .find((link) => link.textContent === 'Back');
+    expect(back?.getAttribute('href')).toBe('/');
   });
 });

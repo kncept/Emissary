@@ -12,6 +12,7 @@ import Support from './components/Support';
 import ReceiverSupport from './components/ReceiverSupport';
 import Layout from './components/Layout';
 import ErrorBoundary from './components/ErrorBoundary';
+import { MAILBOXES } from './mailboxes.ts';
 import './App.css';
 
 // Remount the boundary on navigation so a failure on one screen never follows
@@ -81,6 +82,13 @@ function App() {
                 <RouteBoundary>
                   <Routes>
                     <Route path="/" element={<EmailList />} />
+                    {MAILBOXES.filter((mailbox) => mailbox.role !== 'inbox').map((mailbox) => (
+                      <Route
+                        key={mailbox.role}
+                        path={mailbox.path}
+                        element={<EmailList role={mailbox.role} />}
+                      />
+                    ))}
                     <Route path="/email/:id" element={<EmailView />} />
                     <Route path="/compose" element={<Compose currentUser={auth.username} />} />
                     <Route path="/compose/:id" element={<Compose mode="reply" currentUser={auth.username} />} />

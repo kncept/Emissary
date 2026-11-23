@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { parseISO, format } from 'date-fns';
 import { getEmail, getRawEmail, markRead, markFlagged, deleteEmail } from '../api.ts';
 import { requestEmailRefresh } from '../api/email-checks.ts';
-import type { Email } from '../types.ts';
+import { isMailboxRole, mailboxLabel, mailboxPath } from '../mailboxes.ts';
+import type { Email, MailboxRole } from '../types.ts';
 import ConfirmDialog from './ConfirmDialog.tsx';
 import { createEmailHtmlDocument, MAILTO_MESSAGE_TYPE } from '../sanitize.ts';
 import { parseMailtoUrl, mailtoToComposeQuery } from '../mailto.ts';
@@ -28,6 +29,12 @@ function downloadRawMime(raw: string, id: string): void {
 export default function EmailView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  // Links from a folder carry its role so Back and refresh target that folder
+  // instead of always returning to the Inbox.
+  const stateRole = (location.state as { mailboxRole?: unknown } | null)?.mailboxRole;
+  const mailboxRole: MailboxRole = isMailboxRole(stateRole) ? stateRole : 'inbox';
+  const backPath = mailboxPath(mailboxRole);
   const [email, setEmail] = useState<Email | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -125,7 +132,7 @@ export default function EmailView() {
     try {
       await markRead(email.id, read);
       setEmail({ ...email, read });
-      requestEmailRefresh();
+      requestEmailRefresh(mailboxRole);
     } catch {
       // Error handling
     }
@@ -136,7 +143,7 @@ export default function EmailView() {
     try {
       await markFlagged(email.id, flagged);
       setEmail({ ...email, flagged });
-      requestEmailRefresh();
+      requestEmailRefresh(mailboxRole);
     } catch {
       // Error handling
     }
@@ -147,8 +154,8 @@ export default function EmailView() {
     setDeleting(true);
     try {
       await deleteEmail(email.id);
-      requestEmailRefresh();
-      navigate('/');
+      requestEmailRefresh(mailboxRole);
+      navigate(backPath);
     } catch {
       setError('Failed to delete email');
       setConfirmDelete(false);
@@ -203,8 +210,8 @@ export default function EmailView() {
     return (
       <div className="email-view-error">
         <p>{error || 'Email not found'}</p>
-        <Link to="/" className="btn btn-secondary">
-          Back to Inbox
+        <Link to={backPath} className="btn btn-secondary">
+          Back to {mailboxLabel(mailboxRole)}
         </Link>
       </div>
     );
@@ -265,7 +272,7 @@ export default function EmailView() {
           <button className="btn btn-danger" onClick={() => setConfirmDelete(true)}>
             Delete
           </button>
-          <Link to="/" className="btn btn-secondary">
+          <Link to={backPath} className="btn btn-secondary">
             Back
           </Link>
         </div>

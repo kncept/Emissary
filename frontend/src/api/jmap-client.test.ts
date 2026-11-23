@@ -211,6 +211,49 @@ describe('JMAP client request envelope', () => {
     const inbox = apiCalls()[1].body!;
     expect(callNamed('Email/query', inbox)[1].filter).toEqual({ inMailbox: 'mb-inbox' });
   });
+
+  it('discovers and queries a non-inbox role mailbox', async () => {
+    answer = (body) => {
+      const methods = body?.methodCalls.map((call) => call[0]) ?? [];
+      if (methods.includes('Mailbox/query')) {
+        return methodResponses([
+          ['Mailbox/query', { accountId: ACCOUNT, state: 'm1', ids: ['mb-sent'] }, 'mailboxQuery'],
+          ['Mailbox/get', {
+            accountId: ACCOUNT,
+            state: 'm1',
+            list: [{ id: 'mb-sent', name: 'Sent', role: 'sent' }],
+            notFound: [],
+          }, 'mailboxGet'],
+        ]);
+      }
+      return methodResponses([
+        ['Email/query', { accountId: ACCOUNT, queryState: '1', ids: ['s1'], total: 1 }, 'query1'],
+        ['Email/get', {
+          accountId: ACCOUNT,
+          state: '1',
+          list: [{
+            id: 's1',
+            from: [{ email: ACCOUNT }],
+            to: [{ email: 'bob@example.com' }],
+            subject: 'Sent item',
+            preview: 'Hi Bob',
+            receivedAt: '2026-11-20T00:00:00Z',
+            keywords: {},
+          }],
+          notFound: [],
+        }, 'get1'],
+      ]);
+    };
+
+    const { getEmails } = await importClient();
+    const emails = await getEmails('sent');
+    expect(emails.map((email) => email.subject)).toEqual(['Sent item']);
+
+    const discovery = apiCalls()[0].body!;
+    expect(callNamed('Mailbox/query', discovery)[1].filter).toEqual({ role: 'sent' });
+    const query = apiCalls()[1].body!;
+    expect(callNamed('Email/query', query)[1].filter).toEqual({ inMailbox: 'mb-sent' });
+  });
 });
 
 describe('JMAP client send flow', () => {

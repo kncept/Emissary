@@ -9,7 +9,16 @@ import { resetEmailListCache } from '../email-list-cache.ts';
 import EmailList from './EmailList.tsx';
 
 vi.mock('../api.ts', () => ({
-  getEmails: vi.fn(async () => [{
+  getEmails: vi.fn(async (role?: string) => [role === 'sent' ? {
+    id: 's1',
+    from: 'me@example.com',
+    to: 'bob@example.com',
+    subject: 'Sent item',
+    body: 'Body',
+    timestamp: '2026-11-11T00:00:00Z',
+    read: true,
+    flagged: false,
+  } : {
     id: 'e1',
     from: 'alice@example.com',
     to: 'bob@example.com',
@@ -89,6 +98,19 @@ describe('inbox read and flag actions', () => {
 
     expect(row().classList.contains('unread')).toBe(true);
     expect(container.textContent).toContain('Failed to update read status');
+  });
+
+  it('loads the requested mailbox role instead of always loading the inbox', async () => {
+    act(() => {
+      root!.render(<MemoryRouter><EmailList role="sent" /></MemoryRouter>);
+    });
+    await act(async () => {});
+
+    const { getEmails } = await import('../api.ts');
+    expect(getEmails).toHaveBeenCalledWith('sent');
+    expect(container.textContent).toContain('Sent (1)');
+    expect(container.textContent).toContain('Sent item');
+    expect(container.textContent).toContain('bob@example.com');
   });
 });
 

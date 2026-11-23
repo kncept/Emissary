@@ -10,7 +10,8 @@ import {
   onEmailRefreshRequest,
 } from '../api/email-checks.ts';
 import { getCachedEmails, setCachedEmails } from '../email-list-cache.ts';
-import type { Email } from '../types.ts';
+import { mailboxDefinition } from '../mailboxes.ts';
+import type { Email, MailboxRole } from '../types.ts';
 import ConfirmDialog from './ConfirmDialog.tsx';
 
 type Density = 'dense' | 'comfortable' | 'spacious';
@@ -29,15 +30,28 @@ function getInitialDensity(): Density {
   return 'comfortable';
 }
 
-export default function EmailList() {
-  const [emails, setEmails] = useState<Email[]>(getCachedEmails() ?? []);
-  const [loading, setLoading] = useState(getCachedEmails() === null || hasEmailRefreshRequest());
+export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
+  const mailbox = mailboxDefinition(role);
+  const [emails, setEmails] = useState<Email[]>(getCachedEmails(role) ?? []);
+  const [loading, setLoading] = useState(
+    getCachedEmails(role) === null || hasEmailRefreshRequest(role),
+  );
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [density, setDensity] = useState<Density>(getInitialDensity);
   const checkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // React Router may reuse this component when moving between folder routes.
+  // Reset to the new folder's cached list during render, before its effect runs.
+  const [loadedRole, setLoadedRole] = useState(role);
+  if (loadedRole !== role) {
+    setLoadedRole(role);
+    setEmails(getCachedEmails(role) ?? []);
+    setLoading(getCachedEmails(role) === null || hasEmailRefreshRequest(role));
+    setError('');
+  }
 
   const handleDensityChange = (newDensity: Density) => {
     setDensity(newDensity);
@@ -52,22 +66,22 @@ export default function EmailList() {
     try {
       // The JMAP client selects the account (including admin masquerade)
       // through accountId; there is no separate user filter.
-      const data = await getEmails();
+      const data = await getEmails(role);
       setEmails(data);
-      setCachedEmails(data);
+      setCachedEmails(data, role);
       setError('');
     } catch {
-      // A failed background check keeps the current inbox visible; it will be
+      // A failed background check keeps the current folder visible; it will be
       // retried on the next timer. Initial/full refreshes show the error.
       if (!background) setError('Failed to load emails');
     } finally {
       if (!background) setLoading(false);
     }
-  }, []);
+  }, [role]);
 
   useEffect(() => {
     // getEmails reports every check, so this also restarts the timer when a
-    // refresh comes from outside the inbox (e.g. after sending a message).
+    // refresh comes from outside the mailbox (e.g. after sending a message).
     const scheduleNextCheck = () => {
       if (checkTimer.current !== null) clearTimeout(checkTimer.current);
       checkTimer.current = setTimeout(() => {
@@ -80,13 +94,13 @@ export default function EmailList() {
     const unsubscribeRefreshRequest = onEmailRefreshRequest(() => {
       setLoading(true);
       void loadEmails();
-    });
+    }, role);
 
-    // Fetch on first mount, or when an explicit Inbox refresh was requested
-    // while the inbox was unmounted. Otherwise (e.g. Back from an email)
+    // Fetch on first mount, or when an explicit refresh was requested for this
+    // folder while it was unmounted. Otherwise (e.g. Back from an email)
     // restore the cached list without a fetch; the polling timer keeps it fresh.
-    const refreshRequested = consumeEmailRefreshRequest();
-    if (getCachedEmails() === null || refreshRequested) {
+    const refreshRequested = consumeEmailRefreshRequest(role);
+    if (getCachedEmails(role) === null || refreshRequested) {
       // A local async wrapper keeps the effect free of synchronous state
       // updates; loadEmails only updates state after its await.
       const initialize = async () => {
@@ -103,10 +117,10 @@ export default function EmailList() {
         checkTimer.current = null;
       }
     };
-  }, [loadEmails]);
+  }, [loadEmails, role]);
 
   const commitEmails = (next: Email[]) => {
-    setCachedEmails(next);
+    setCachedEmails(next, role);
     setEmails(next);
   };
 
@@ -115,7 +129,7 @@ export default function EmailList() {
     setDeleting(true);
     try {
       await deleteEmail(deleteId);
-      const next = (getCachedEmails() ?? emails).filter((email) => email.id !== deleteId);
+      const next = (getCachedEmails(role) ?? emails).filter((email) => email.id !== deleteId);
       commitEmails(next);
       setDeleteId(null);
     } catch {
@@ -127,7 +141,7 @@ export default function EmailList() {
   };
 
   const updateEmail = (id: string, changes: Partial<Email>) => {
-    const next = (getCachedEmails() ?? emails).map((email) =>
+    const next = (getCachedEmails(role) ?? emails).map((email) =>
       email.id === id ? { ...email, ...changes } : email,
     );
     commitEmails(next);
@@ -175,6 +189,11 @@ export default function EmailList() {
       .slice(0, 2);
   };
 
+  // Sent and draft messages are identified by their recipient, not by the
+  // sender (which is the current user or not yet set on a draft).
+  const displayName = (email: Email) =>
+    (role === 'sent' || role === 'drafts' ? email.to || email.from : email.from) || '(no recipient)';
+
   // Only show a full-page spinner when there is nothing to display. During a
   // refresh of an already-loaded inbox, keep the current emails visible and
   // show a small spinner in the header instead; the list is replaced only once
@@ -194,7 +213,7 @@ export default function EmailList() {
   return (
     <div className="email-list">
       <div className="email-list-header">
-        <h2>Inbox ({emails.length})</h2>
+        <h2>{mailbox.label} ({emails.length})</h2>
         <div className="header-actions">
           {loading && emails.length > 0 && <div className="spinner small" aria-label="Refreshing" />}
           <div className="density-selector" role="group" aria-label="Display density">
@@ -236,10 +255,12 @@ export default function EmailList() {
       )}
       {emails.length === 0 ? (
         <div className="empty-state">
-          <p>No emails yet</p>
-          <Link to="/compose" className="btn btn-secondary">
-            Send your first email
-          </Link>
+          <p>{mailbox.emptyMessage}</p>
+          {mailbox.emptyAction && (
+            <Link to="/compose" className="btn btn-secondary">
+              {mailbox.emptyAction}
+            </Link>
+          )}
         </div>
       ) : density === 'spacious' ? (
         <ul className="email-list-items" role="list">
@@ -248,11 +269,15 @@ export default function EmailList() {
               key={email.id}
               className={`email-item ${email.read ? 'read' : 'unread'} ${email.flagged ? 'flagged' : ''}`}
             >
-              <Link to={`/email/${encodeURIComponent(email.id)}`} className="email-link">
+              <Link
+                to={`/email/${encodeURIComponent(email.id)}`}
+                state={{ mailboxRole: role }}
+                className="email-link"
+              >
                 <div className="email-sender">
-                  <span className="sender-avatar">{getInitials(email.from)}</span>
+                  <span className="sender-avatar">{getInitials(displayName(email))}</span>
                   <div className="sender-info">
-                    <span className="sender-name">{email.from}</span>
+                    <span className="sender-name">{displayName(email)}</span>
                     <span className="email-subject">{email.subject || '(No subject)'}</span>
                   </div>
                 </div>
@@ -310,7 +335,11 @@ export default function EmailList() {
               className={`email-row ${email.read ? 'read' : 'unread'} ${email.flagged ? 'flagged' : ''}`}
               role="listitem"
             >
-              <Link to={`/email/${encodeURIComponent(email.id)}`} className="email-row-link">
+              <Link
+                to={`/email/${encodeURIComponent(email.id)}`}
+                state={{ mailboxRole: role }}
+                className="email-row-link"
+              >
                 <div className="email-col checkbox-col">
                   <input type="checkbox" className="row-checkbox" aria-label="Select email" />
                 </div>
@@ -355,8 +384,8 @@ export default function EmailList() {
                   </div>
                 )}
                 <div className="email-col sender-col">
-                  <span className="sender-avatar">{getInitials(email.from)}</span>
-                  <span className="sender-name">{email.from}</span>
+                  <span className="sender-avatar">{getInitials(displayName(email))}</span>
+                  <span className="sender-name">{displayName(email)}</span>
                   {density === 'dense' && (
                     <span className="dense-subject">{email.subject || '(No subject)'}</span>
                   )}

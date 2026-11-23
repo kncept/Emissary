@@ -3,8 +3,8 @@ import { useState } from 'react';
 import MasqueradeModal from './MasqueradeModal';
 import MaskIcon from './MaskIcon';
 import VacationSettings from './VacationSettings.tsx';
+import MailboxSidebar from './MailboxSidebar.tsx';
 import { MASQUERADE_AS_KEY } from '../api/jmap-client';
-import { requestEmailRefresh } from '../api/email-checks.ts';
 import {
   clearMasquerade as stopMasquerade,
   setMasqueradeTarget as startMasquerade,
@@ -41,7 +41,6 @@ export default function Layout({
     icon: string;
     onClick?: () => void;
   }> = [
-    { path: '/', label: 'Inbox', icon: '📥' },
     { path: '/compose', label: 'Compose', icon: '✏️' },
     { label: 'Vacation', icon: '🏖️', onClick: () => setVacationOpen(true) },
     { path: '/settings', label: 'Settings', icon: '⚙️' },
@@ -61,13 +60,7 @@ export default function Layout({
     setVacationOpen(false);
   };
 
-  const handleNavClick = (path: string) => {
-    setMobileMenuOpen(false);
-    // A click on Inbox is an explicit refresh, even when already on "/".
-    // From another route the inbox has not mounted yet, so there is no
-    // subscriber and its normal mount load handles the refresh instead.
-    if (path === '/') requestEmailRefresh();
-  };
+  const handleNavClick = () => setMobileMenuOpen(false);
 
   return (
     <div className="app-layout">
@@ -85,7 +78,7 @@ export default function Layout({
                     <Link
                       to={item.path}
                       className={location.pathname === item.path ? 'active' : ''}
-                      onClick={() => handleNavClick(item.path!)}
+                      onClick={handleNavClick}
                     >
                       <span className="nav-icon">{item.icon}</span>
                       <span className="nav-label">{item.label}</span>
@@ -147,7 +140,10 @@ export default function Layout({
           </button>
         </div>
       </header>
-      <main className="app-main">{children}</main>
+      <div className="app-body">
+        <MailboxSidebar />
+        <main className="app-main">{children}</main>
+      </div>
       {mobileMenuOpen && (
         <div className="mobile-overlay" onClick={() => setMobileMenuOpen(false)} />
       )}
