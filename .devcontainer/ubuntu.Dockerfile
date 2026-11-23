@@ -3,7 +3,8 @@ FROM docker.io/ubuntu:26.04
 # DEBUGGING: docker build -f .devcontainer/ubuntu.Dockerfile -t ubuntu-dev . && docker run -it ubuntu-dev bash
 ARG USERNAME=ubuntu
 ARG NAME=emissary
-# TARGETARCH is provided automatically by BuildKit (amd64, arm64, ...)
+# TARGETARCH is provided automatically by BuildKit (amd64, arm64, ...), but
+# devcontainer builds may use the legacy builder where it is unset.
 ARG TARGETARCH
 
 # Locale stuff
@@ -20,11 +21,27 @@ RUN apt-get update && \
     apt-get -y install sudo wget curl vim git unzip net-tools libatomic1 && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Go
-ARG GO_SRC_FILE=go1.27.1.linux-${TARGETARCH}.tar.gz
-RUN \
-    curl -OL https://go.dev/dl/${GO_SRC_FILE} && \
-    tar -C /usr/local -xf ${GO_SRC_FILE}
+# Install Go. Prefer an explicit GO_SRC_FILE override, otherwise derive the
+# Go archive name from TARGETARCH (BuildKit) or dpkg (legacy builder) — both
+# use the same amd64/arm64 names as the Go downloads.
+ARG GO_VERSION=1.27.1
+ARG GO_SRC_FILE
+RUN set -eu; \
+    if [ -z "${GO_SRC_FILE:-}" ]; then \
+        arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+        case "$arch" in \
+            x86_64) arch=amd64 ;; \
+            aarch64) arch=arm64 ;; \
+            amd64|arm64) ;; \
+            *) echo "Unsupported Go architecture: $arch" >&2; exit 1 ;; \
+        esac; \
+        GO_SRC_FILE="go${GO_VERSION}.linux-${arch}.tar.gz"; \
+    fi; \
+    echo "Downloading ${GO_SRC_FILE}"; \
+    curl -fsSLO "https://go.dev/dl/${GO_SRC_FILE}" && \
+    tar -C /usr/local -xzf "${GO_SRC_FILE}" && \
+    rm "${GO_SRC_FILE}" && \
+    /usr/local/go/bin/go version
 ENV PATH="${PATH}:/usr/local/go/bin"
 ENV GOPRIVATE=*.kncept.com
 

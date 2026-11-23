@@ -27,7 +27,9 @@ export USER_MANAGER=s3
 ./run.sh deploy
 ```
 
-The keys above are full-length dummy values — replace them with real credentials (or use `AWS_PROFILE`/an IAM role). `DOMAIN=kncept.com` is the receiving domain; the CDK deployment for it is reachable at `https://mail.kncept.com`, while this local run listens on `http://localhost:8080`.
+You may need to configure the USERNAME and PASSWORD env var in order to have a bootstrap user to set up receiving email accounts from.
+
+The keys above are full-length dummy values — replace them with real credentials (or use `AWS_PROFILE`/an IAM role). `DOMAIN=YOURDOMAIN.com` is the receiving domain; the CDK deployment for it is reachable at `https://mail.YOURDOMAIN.com`, while this local run listens on `http://localhost:8080`.
 
 `STORAGE=s3` and `METADATA=ddb` select the requested backends. `RECEIVER=s3` and `USER_MANAGER=s3` are also part of the minimum: the bucket and `TABLE_PREFIX` would otherwise configure those components for both S3 and DDB, and startup refuses to guess. `SENDER=aws-ses` is inferred from the AWS credentials, and `SESSION=ddb` from `TABLE_PREFIX` (set `SESSION=memory` if you only want the metadata table). The `kncept-com-metadata` and `kncept-com-sessions` tables must already exist — Emissary does not create DynamoDB tables at startup. `run.sh` generates and prints an admin password and JWT secret when unset; set `PASSWORD` and `JWT_SECRET` yourself to keep them stable across restarts.
 
