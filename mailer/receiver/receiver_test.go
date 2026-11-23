@@ -339,6 +339,82 @@ func TestProcessMessageSendsBounceThroughSender(t *testing.T) {
 	}
 }
 
+// fakeS3EventWithSESID is a test implementation of InboundRawEmailEvent that carries
+// the SES message ID (the S3 object key for staged objects).
+type fakeS3EventWithSESID struct {
+	raw           []byte
+	completed     bool
+	sesMessageID  string
+}
+
+func (e *fakeS3EventWithSESID) RawEmail(_ context.Context) ([]byte, error) {
+	return e.raw, nil
+}
+
+func (e *fakeS3EventWithSESID) OnComplete(_ context.Context) error {
+	e.completed = true
+	return nil
+}
+
+// SESMessageID returns the SES message ID for bounce purposes.
+func (e *fakeS3EventWithSESID) SESMessageID() string {
+	return e.sesMessageID
+}
+
+// TestProcessEventUsesSESMessageIDForBounce verifies that when an inbound event
+// carries an SES message ID (the S3 staging key), that ID is passed to SendBounce
+// as the OriginalMessageId instead of a content hash. This is the regression test
+// for I-H5: the bounce path must pass the real SES message ID so SES can correlate
+// the bounce with the original delivery.
+func TestProcessEventUsesSESMessageIDForBounce(t *testing.T) {
+	const sesMessageID = "01000192a3b4c5d6"
+	raw := []byte(receivedHeader("unknown@example.com") +
+		"From: sender@example.com\r\nTo: unknown@example.com\r\nSubject: hi\r\n\r\nbody\r\n")
+	mailSender := sender.NewInMemoryRecording()
+	r, err := NewReceiver(ReceiverConfig{
+		Domain:      "example.com",
+		UserManager: rejectingUserManager{invalid: "unknown@example.com"},
+		Sender:      mailSender,
+		Storage:     storage.NewMemoryStorage(),
+	})
+	if err != nil {
+		t.Fatalf("NewReceiver() error = %v", err)
+	}
+
+	// Create an event that carries the SES message ID
+	event := &fakeS3EventWithSESID{raw: raw, sesMessageID: sesMessageID}
+	if err := r.ProcessEvent(context.Background(), event); err != nil {
+		t.Fatalf("ProcessEvent() error = %v", err)
+	}
+
+	if len(mailSender.Bounces) != 1 {
+		t.Fatalf("bounces = %+v, want one bounce through the sender", mailSender.Bounces)
+	}
+	bounce := mailSender.Bounces[0]
+
+	// THIS ASSERTION SHOULD FAIL BEFORE THE FIX:
+	// Currently ProcessEvent generates a content hash as the key and passes it to sendBounce.
+	// The fix should make it use the SES message ID from the event.
+	if bounce.OriginalMessageID != sesMessageID {
+		t.Errorf("bounce OriginalMessageID = %q, want SES message ID %q", bounce.OriginalMessageID, sesMessageID)
+	}
+	if bounce.BounceSender != "mailer-daemon@example.com" {
+		t.Errorf("bounce sender = %q, want mailer-daemon@example.com", bounce.BounceSender)
+	}
+	if bounce.Recipient != "unknown@example.com" {
+		t.Errorf("bounce recipient = %q, want unknown@example.com", bounce.Recipient)
+	}
+	if bounce.BounceType != "UserUnknown" {
+		t.Errorf("bounce type = %q, want UserUnknown", bounce.BounceType)
+	}
+	if bounce.OriginalMessage == nil || bounce.OriginalMessage.Subject != "hi" {
+		t.Errorf("bounce original = %+v, want the original message", bounce.OriginalMessage)
+	}
+	if !event.completed {
+		t.Error("OnComplete was not called")
+	}
+}
+
 func TestNewReceiverRequiresStorage(t *testing.T) {
 	_, err := NewReceiver(ReceiverConfig{
 		Domain:      "example.com",
