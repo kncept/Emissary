@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { formatDistanceToNow, parseISO } from 'date-fns';
-import { getEmails, deleteEmail, markRead, markFlagged } from '../api.ts';
+import {
+  getEmails,
+  deleteEmail,
+  deleteEmails,
+  moveEmailsToTrash,
+  markRead,
+  markFlagged,
+} from '../api.ts';
 import {
   EMAIL_CHECK_INTERVAL_MS,
   consumeEmailRefreshRequest,
@@ -9,7 +16,11 @@ import {
   onEmailCheck,
   onEmailRefreshRequest,
 } from '../api/email-checks.ts';
-import { getCachedEmails, setCachedEmails } from '../email-list-cache.ts';
+import {
+  getCachedEmails,
+  setCachedEmails,
+  invalidateEmailListCache,
+} from '../email-list-cache.ts';
 import { mailboxDefinition } from '../mailboxes.ts';
 import type { Email, MailboxRole } from '../types.ts';
 import ConfirmDialog from './ConfirmDialog.tsx';
@@ -42,6 +53,8 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
   const [deleting, setDeleting] = useState(false);
   const [density, setDensity] = useState<Density>(getInitialDensity);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const checkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // React Router may reuse this component when moving between folder routes.
@@ -53,6 +66,8 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
     setLoading(getCachedEmails(role) === null || hasEmailRefreshRequest(role));
     setError('');
     setSelectedIds(new Set());
+    setBulkConfirmOpen(false);
+    setBulkBusy(false);
   }
 
   const handleDensityChange = (newDensity: Density) => {
@@ -194,6 +209,33 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
     }
   };
 
+  const handleBulkAction = async () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    setBulkBusy(true);
+    setActionError('');
+    try {
+      if (role === 'trash') {
+        await deleteEmails(ids);
+      } else {
+        await moveEmailsToTrash(ids);
+        // Trash may have been visited earlier; its cached list is now stale.
+        invalidateEmailListCache('trash');
+      }
+      const next = (getCachedEmails(role) ?? emails).filter(
+        (email) => !selectedIds.has(email.id),
+      );
+      commitEmails(next);
+      setSelectedIds(new Set());
+      setBulkConfirmOpen(false);
+    } catch {
+      setActionError(role === 'trash' ? 'Failed to delete emails' : 'Failed to move emails to trash');
+      setBulkConfirmOpen(false);
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   const formatDate = (dateStr: string) => {
     try {
       const date = parseISO(dateStr);
@@ -216,6 +258,9 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
   // sender (which is the current user or not yet set on a draft).
   const displayName = (email: Email) =>
     (role === 'sent' || role === 'drafts' ? email.to || email.from : email.from) || '(no recipient)';
+
+  const selectedCount = selectedIds.size;
+  const bulkLabel = role === 'trash' ? 'Delete permanently' : 'Move to trash';
 
   // Only show a full-page spinner when there is nothing to display. During a
   // refresh of an already-loaded inbox, keep the current emails visible and
@@ -276,16 +321,29 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
       {actionError && (
         <div className="error-message" role="alert">{actionError}</div>
       )}
-      {selectedIds.size > 0 && (
+      {selectedCount > 0 && (
         <div className="selection-bar" role="status">
-          <span>{selectedIds.size} selected</span>
-          <button
-            type="button"
-            className="btn btn-secondary btn-small"
-            onClick={() => setSelectedIds(new Set())}
-          >
-            Clear selection
-          </button>
+          <span>{selectedCount} selected</span>
+          <div className="selection-actions">
+            <button
+              type="button"
+              className="btn btn-secondary btn-small"
+              onClick={() => setBulkConfirmOpen(true)}
+            >
+              <span aria-hidden="true">🗑️</span>
+              {bulkLabel}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-small"
+              onClick={() => {
+                setSelectedIds(new Set());
+                setBulkConfirmOpen(false);
+              }}
+            >
+              Clear selection
+            </button>
+          </div>
         </div>
       )}
       {emails.length === 0 ? (
@@ -440,6 +498,20 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
         busy={deleting}
         onConfirm={handleDelete}
         onCancel={() => setDeleteId(null)}
+      />
+      <ConfirmDialog
+        open={bulkConfirmOpen}
+        title={bulkLabel}
+        message={
+          role === 'trash'
+            ? `Permanently delete ${selectedCount} ${selectedCount === 1 ? 'email' : 'emails'}? This cannot be undone.`
+            : `Move ${selectedCount} ${selectedCount === 1 ? 'email' : 'emails'} to Trash?`
+        }
+        confirmLabel={role === 'trash' ? 'Delete' : 'Move'}
+        busyLabel={role === 'trash' ? 'Deleting…' : 'Moving…'}
+        busy={bulkBusy}
+        onConfirm={handleBulkAction}
+        onCancel={() => setBulkConfirmOpen(false)}
       />
     </div>
   );

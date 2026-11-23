@@ -14,6 +14,12 @@ export function setCachedEmails(emails: Email[], role: MailboxRole = 'inbox'): v
   cachedEmails.set(role, emails);
 }
 
+// Drop one folder's cached list so the next mount fetches fresh data (used
+// after moving messages into that folder from elsewhere).
+export function invalidateEmailListCache(role: MailboxRole): void {
+  cachedEmails.delete(role);
+}
+
 // Reset every folder (or just one) between independent mounts in tests.
 export function resetEmailListCache(role?: MailboxRole): void {
   if (role) cachedEmails.delete(role);

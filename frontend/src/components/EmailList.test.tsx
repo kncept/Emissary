@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { getEmails, markFlagged, markRead } from '../api.ts';
+import { deleteEmails, getEmails, markFlagged, markRead, moveEmailsToTrash } from '../api.ts';
 import { clearEmailRefreshRequest } from '../api/email-checks.ts';
-import type { Email } from '../types.ts';
+import type { Email, MailboxRole } from '../types.ts';
 import { resetEmailListCache } from '../email-list-cache.ts';
 import EmailList from './EmailList.tsx';
 
@@ -29,6 +29,8 @@ vi.mock('../api.ts', () => ({
     flagged: false,
   }]),
   deleteEmail: vi.fn(async () => {}),
+  deleteEmails: vi.fn(async () => {}),
+  moveEmailsToTrash: vi.fn(async () => {}),
   markRead: vi.fn(async () => {}),
   markFlagged: vi.fn(async () => {}),
 }));
@@ -272,5 +274,98 @@ describe('mailbox selection and message open zone', () => {
     await clickCheckbox(checkbox);
     expect(checkbox.checked).toBe(true);
     expect(container.textContent).not.toContain('Message opened');
+  });
+});
+
+describe('bulk trash actions', () => {
+  let container: HTMLDivElement;
+  let root: Root | null = null;
+
+  const rows: Email[] = [{
+    id: 'e1', from: 'alice@example.com', to: 'bob@example.com', subject: 'Hello',
+    body: 'Body', timestamp: '2026-11-11T00:00:00Z', read: false, flagged: false,
+  }];
+
+  const mount = async (role: MailboxRole = 'inbox') => {
+    vi.mocked(getEmails).mockResolvedValueOnce(rows);
+    act(() => {
+      root!.render(<MemoryRouter><EmailList role={role} /></MemoryRouter>);
+    });
+    await act(async () => {});
+  };
+
+  const click = async (element: Element) => {
+    await act(async () => {
+      element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  };
+
+  const findButton = (label: string) =>
+    Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes(label))!;
+
+  const selectFirst = async () => {
+    const checkbox = container.querySelector('input.row-checkbox') as HTMLInputElement;
+    await act(async () => { checkbox.click(); });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetEmailListCache();
+    clearEmailRefreshRequest();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => { root?.unmount(); });
+    root = null;
+    container.remove();
+  });
+
+  it('moves selected messages to trash after confirmation', async () => {
+    await mount();
+    await selectFirst();
+
+    const action = findButton('Move to trash');
+    expect(action.textContent).toContain('🗑️');
+    await click(action);
+
+    const dialog = container.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('Move 1 email to Trash?');
+    await click(Array.from(dialog.querySelectorAll('button')).find((button) => button.textContent === 'Move')!);
+
+    expect(moveEmailsToTrash).toHaveBeenCalledWith(['e1']);
+    expect(container.textContent).not.toContain('1 selected');
+  });
+
+  it('permanently deletes selected messages in Trash after confirmation', async () => {
+    await mount('trash');
+    await selectFirst();
+
+    const action = findButton('Delete permanently');
+    expect(action.textContent).toContain('🗑️');
+    await click(action);
+
+    const dialog = container.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('Permanently delete 1 email? This cannot be undone.');
+    await click(Array.from(dialog.querySelectorAll('button')).find((button) => button.textContent === 'Delete')!);
+
+    expect(deleteEmails).toHaveBeenCalledWith(['e1']);
+    expect(container.textContent).not.toContain('1 selected');
+  });
+
+  it('keeps the selection and reports an error when the bulk action fails', async () => {
+    vi.mocked(moveEmailsToTrash).mockRejectedValueOnce(new Error('network error'));
+    await mount();
+    await selectFirst();
+
+    await click(findButton('Move to trash'));
+    const dialog = container.querySelector('[role="dialog"]')!;
+    await click(Array.from(dialog.querySelectorAll('button')).find((button) => button.textContent === 'Move')!);
+
+    expect(container.textContent).toContain('Failed to move emails to trash');
+    expect(container.textContent).toContain('1 selected');
   });
 });

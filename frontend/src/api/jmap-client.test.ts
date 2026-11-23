@@ -212,6 +212,55 @@ describe('JMAP client request envelope', () => {
     expect(callNamed('Email/query', inbox)[1].filter).toEqual({ inMailbox: 'mb-inbox' });
   });
 
+  it('moves selected emails to the discovered trash mailbox in one Email/set update', async () => {
+    answer = (body) => {
+      const methods = body?.methodCalls.map((call) => call[0]) ?? [];
+      if (methods.includes('Mailbox/query')) {
+        return methodResponses([
+          ['Mailbox/query', { accountId: ACCOUNT, state: 'm1', ids: ['mb-trash'] }, 'mailboxQuery'],
+          ['Mailbox/get', {
+            accountId: ACCOUNT,
+            state: 'm1',
+            list: [{ id: 'mb-trash', name: 'Trash', role: 'trash' }],
+            notFound: [],
+          }, 'mailboxGet'],
+        ]);
+      }
+      return methodResponses([
+        ['Email/set', {
+          accountId: ACCOUNT,
+          updated: { e1: {}, e2: {} },
+          notUpdated: {},
+        }, 'set1'],
+      ]);
+    };
+
+    const { moveEmailsToTrash } = await importClient();
+    await moveEmailsToTrash(['e1', 'e2']);
+
+    expect(callNamed('Mailbox/query', apiCalls()[0].body!)[1].filter).toEqual({ role: 'trash' });
+    const setArgs = callNamed('Email/set', apiCalls()[1].body!)[1];
+    expect(setArgs.update).toEqual({
+      e1: { mailboxIds: { 'mb-trash': true } },
+      e2: { mailboxIds: { 'mb-trash': true } },
+    });
+  });
+
+  it('destroys several emails in a single Email/set call', async () => {
+    answer = () => methodResponses([
+      ['Email/set', {
+        accountId: ACCOUNT,
+        destroyed: ['e1', 'e2'],
+        notDestroyed: {},
+      }, 'set1'],
+    ]);
+
+    const { deleteEmails } = await importClient();
+    await deleteEmails(['e1', 'e2']);
+
+    expect(callNamed('Email/set', apiCalls()[0].body!)[1].destroy).toEqual(['e1', 'e2']);
+  });
+
   it('discovers and queries a non-inbox role mailbox', async () => {
     answer = (body) => {
       const methods = body?.methodCalls.map((call) => call[0]) ?? [];

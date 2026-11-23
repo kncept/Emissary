@@ -485,11 +485,17 @@ export async function markFlagged(id: string, flagged: boolean): Promise<void> {
 }
 
 export async function deleteEmail(id: string): Promise<void> {
+  await deleteEmails([id]);
+}
+
+/** Permanently destroys several emails in a single JMAP Email/set call. */
+export async function deleteEmails(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
   const responses = await jmapRequest(['urn:ietf:params:jmap:mail'], [
     {
       method: 'Email/set',
       args: {
-        destroy: [id],
+        destroy: ids,
       },
       id: 'set1',
     },
@@ -500,9 +506,46 @@ export async function deleteEmail(id: string): Promise<void> {
     throw new Error('Failed to delete email');
   }
 
-  const notDestroyed = setResponse.args.notDestroyed as Record<string, { type: string }> | undefined;
-  if (notDestroyed && notDestroyed[id]) {
-    throw new Error(`Failed to delete email: ${notDestroyed[id].type}`);
+  const notDestroyed = setResponse.args.notDestroyed as
+    | Record<string, Parameters<typeof setErrorText>[0]>
+    | undefined;
+  const failed = ids.find((id) => notDestroyed?.[id]);
+  if (failed) {
+    throw new Error(setErrorText(notDestroyed![failed]));
+  }
+}
+
+/**
+ * Moves emails to the Trash role mailbox. The server allows exactly one
+ * mailbox per email, so replacing mailboxIds moves each message and keeps its
+ * JMAP id. The trash mailbox id is discovered through JMAP, never hardcoded.
+ */
+export async function moveEmailsToTrash(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const trashId = await discoverMailboxId('trash');
+  const update = Object.fromEntries(
+    ids.map((id) => [id, { mailboxIds: { [trashId]: true } }]),
+  );
+
+  const responses = await jmapRequest(['urn:ietf:params:jmap:mail'], [
+    {
+      method: 'Email/set',
+      args: { update },
+      id: 'set1',
+    },
+  ]);
+
+  const setResponse = responses.get('set1');
+  if (!setResponse || setResponse.method === 'error') {
+    throw new Error('Failed to move emails to trash');
+  }
+
+  const notUpdated = setResponse.args.notUpdated as
+    | Record<string, Parameters<typeof setErrorText>[0]>
+    | undefined;
+  const failed = ids.find((id) => notUpdated?.[id]);
+  if (failed) {
+    throw new Error(setErrorText(notUpdated![failed]));
   }
 }
 
