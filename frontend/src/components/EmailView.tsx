@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { parseISO, format } from 'date-fns';
 import { getEmail, getRawEmail, markRead, markFlagged, deleteEmail } from '../api.ts';
+import { requestEmailRefresh } from '../api/email-checks.ts';
 import type { Email } from '../types.ts';
 import ConfirmDialog from './ConfirmDialog.tsx';
 
@@ -111,6 +112,7 @@ export default function EmailView() {
     try {
       await markRead(email.id, read);
       setEmail({ ...email, read });
+      requestEmailRefresh();
     } catch {
       // Error handling
     }
@@ -121,6 +123,7 @@ export default function EmailView() {
     try {
       await markFlagged(email.id, flagged);
       setEmail({ ...email, flagged });
+      requestEmailRefresh();
     } catch {
       // Error handling
     }
@@ -131,6 +134,7 @@ export default function EmailView() {
     setDeleting(true);
     try {
       await deleteEmail(email.id);
+      requestEmailRefresh();
       navigate('/');
     } catch {
       setError('Failed to delete email');
