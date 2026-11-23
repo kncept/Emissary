@@ -41,6 +41,7 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [density, setDensity] = useState<Density>(getInitialDensity);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const checkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // React Router may reuse this component when moving between folder routes.
@@ -51,6 +52,7 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
     setEmails(getCachedEmails(role) ?? []);
     setLoading(getCachedEmails(role) === null || hasEmailRefreshRequest(role));
     setError('');
+    setSelectedIds(new Set());
   }
 
   const handleDensityChange = (newDensity: Density) => {
@@ -62,6 +64,15 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
     }
   };
 
+  const toggleSelected = (id: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   const loadEmails = useCallback(async (background = false) => {
     try {
       // The JMAP client selects the account (including admin masquerade)
@@ -69,6 +80,12 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
       const data = await getEmails(role);
       setEmails(data);
       setCachedEmails(data, role);
+      // Keep only selections that are still visible after a refresh.
+      setSelectedIds((current) => {
+        const visibleIds = new Set(data.map((email) => email.id));
+        const next = new Set([...current].filter((id) => visibleIds.has(id)));
+        return next.size === current.size ? current : next;
+      });
       setError('');
     } catch {
       // A failed background check keeps the current folder visible; it will be
@@ -131,6 +148,12 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
       await deleteEmail(deleteId);
       const next = (getCachedEmails(role) ?? emails).filter((email) => email.id !== deleteId);
       commitEmails(next);
+      setSelectedIds((current) => {
+        if (!current.has(deleteId)) return current;
+        const updated = new Set(current);
+        updated.delete(deleteId);
+        return updated;
+      });
       setDeleteId(null);
     } catch {
       setActionError('Failed to delete email');
@@ -253,6 +276,18 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
       {actionError && (
         <div className="error-message" role="alert">{actionError}</div>
       )}
+      {selectedIds.size > 0 && (
+        <div className="selection-bar" role="status">
+          <span>{selectedIds.size} selected</span>
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            onClick={() => setSelectedIds(new Set())}
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
       {emails.length === 0 ? (
         <div className="empty-state">
           <p>{mailbox.emptyMessage}</p>
@@ -269,6 +304,15 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
               key={email.id}
               className={`email-item ${email.read ? 'read' : 'unread'} ${email.flagged ? 'flagged' : ''}`}
             >
+              <div className="email-select-col">
+                <input
+                  type="checkbox"
+                  className="row-checkbox"
+                  checked={selectedIds.has(email.id)}
+                  onChange={() => toggleSelected(email.id)}
+                  aria-label={`Select ${displayName(email)}`}
+                />
+              </div>
               <Link
                 to={`/email/${encodeURIComponent(email.id)}`}
                 state={{ mailboxRole: role }}
@@ -292,33 +336,21 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
               <div className="email-actions">
                 <button
                   className="icon-btn"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    void handleToggleRead(email);
-                  }}
+                  onClick={() => void handleToggleRead(email)}
                   aria-label={email.read ? 'Mark as unread' : 'Mark as read'}
                 >
                   {email.read ? '📭' : '📬'}
                 </button>
                 <button
                   className="icon-btn"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    void handleToggleFlagged(email);
-                  }}
+                  onClick={() => void handleToggleFlagged(email)}
                   aria-label={email.flagged ? 'Remove flag' : 'Flag'}
                 >
                   {email.flagged ? '🚩' : '🏳️'}
                 </button>
                 <button
                   className="icon-btn"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setDeleteId(email.id);
-                  }}
+                  onClick={() => setDeleteId(email.id)}
                   aria-label="Delete email"
                 >
                   🗑️
@@ -335,54 +367,49 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
               className={`email-row ${email.read ? 'read' : 'unread'} ${email.flagged ? 'flagged' : ''}`}
               role="listitem"
             >
+              <div className="email-col checkbox-col">
+                <input
+                  type="checkbox"
+                  className="row-checkbox"
+                  checked={selectedIds.has(email.id)}
+                  onChange={() => toggleSelected(email.id)}
+                  aria-label={`Select ${displayName(email)}`}
+                />
+              </div>
+              <div className="email-col star-col">
+                <button
+                  className="icon-btn star-btn"
+                  onClick={() => void handleToggleFlagged(email)}
+                  aria-label={email.flagged ? 'Remove star' : 'Add star'}
+                  aria-pressed={email.flagged}
+                >
+                  {email.flagged ? '★' : '☆'}
+                </button>
+              </div>
+              {(density === 'dense' || density === 'comfortable') && (
+                <div className="email-col left-actions-col">
+                  <button
+                    className="icon-btn"
+                    onClick={() => void handleToggleRead(email)}
+                    aria-label={email.read ? 'Mark as unread' : 'Mark as read'}
+                  >
+                    {email.read ? '📭' : '📬'}
+                  </button>
+                  <button
+                    className="icon-btn"
+                    onClick={() => setDeleteId(email.id)}
+                    aria-label="Delete email"
+                  >
+                    🗑️
+                  </button>
+                </div>
+              )}
+              {/* Only the avatar and the content to its right open the message. */}
               <Link
                 to={`/email/${encodeURIComponent(email.id)}`}
                 state={{ mailboxRole: role }}
                 className="email-row-link"
               >
-                <div className="email-col checkbox-col">
-                  <input type="checkbox" className="row-checkbox" aria-label="Select email" />
-                </div>
-                <div className="email-col star-col">
-                  <button
-                    className="icon-btn star-btn"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      void handleToggleFlagged(email);
-                    }}
-                    aria-label={email.flagged ? 'Remove star' : 'Add star'}
-                    aria-pressed={email.flagged}
-                  >
-                    {email.flagged ? '★' : '☆'}
-                  </button>
-                </div>
-                {(density === 'dense' || density === 'comfortable') && (
-                  <div className="email-col left-actions-col">
-                    <button
-                      className="icon-btn"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        void handleToggleRead(email);
-                      }}
-                      aria-label={email.read ? 'Mark as unread' : 'Mark as read'}
-                    >
-                      {email.read ? '📭' : '📬'}
-                    </button>
-                    <button
-                      className="icon-btn"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setDeleteId(email.id);
-                      }}
-                      aria-label="Delete email"
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                )}
                 <div className="email-col sender-col">
                   <span className="sender-avatar">{getInitials(displayName(email))}</span>
                   <span className="sender-name">{displayName(email)}</span>

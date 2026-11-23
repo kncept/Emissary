@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
-import { markFlagged, markRead } from '../api.ts';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { getEmails, markFlagged, markRead } from '../api.ts';
 import { clearEmailRefreshRequest } from '../api/email-checks.ts';
 import type { Email } from '../types.ts';
 import { resetEmailListCache } from '../email-list-cache.ts';
@@ -179,5 +179,98 @@ describe('inbox caching and refresh', () => {
     await act(async () => { resolveRefresh!([cachedEmail]); });
 
     expect(container.textContent).toContain('alice@example.com');
+  });
+});
+
+describe('mailbox selection and message open zone', () => {
+  let container: HTMLDivElement;
+  let root: Root | null = null;
+
+  const rows: Email[] = [
+    {
+      id: 'e1', from: 'alice@example.com', to: 'bob@example.com', subject: 'Hello',
+      body: 'Body', timestamp: '2026-11-11T00:00:00Z', read: false, flagged: false,
+    },
+    {
+      id: 'e2', from: 'carol@example.com', to: 'bob@example.com', subject: 'Second',
+      body: 'Body', timestamp: '2026-11-11T00:00:00Z', read: true, flagged: false,
+    },
+  ];
+
+  const mount = async () => {
+    act(() => {
+      root!.render(
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<EmailList />} />
+            <Route path="/email/:id" element={<div>Message opened</div>} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+    await act(async () => {});
+  };
+
+  const clickCheckbox = async (checkbox: HTMLInputElement) => {
+    await act(async () => { checkbox.click(); });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetEmailListCache();
+    clearEmailRefreshRequest();
+    vi.mocked(getEmails).mockResolvedValueOnce(rows);
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => { root?.unmount(); });
+    root = null;
+    container.remove();
+    localStorage.removeItem('emissary.emailList.density');
+  });
+
+  it('selects several rows independently without opening the message', async () => {
+    await mount();
+    const boxes = Array.from(container.querySelectorAll('input.row-checkbox')) as HTMLInputElement[];
+    expect(boxes).toHaveLength(2);
+    // The checkbox is a sibling of the open link, never nested inside it.
+    expect(boxes[0].closest('a')).toBeNull();
+
+    await clickCheckbox(boxes[0]);
+    await clickCheckbox(boxes[1]);
+
+    expect(boxes[0].checked).toBe(true);
+    expect(boxes[1].checked).toBe(true);
+    expect(container.textContent).toContain('2 selected');
+    expect(container.textContent).not.toContain('Message opened');
+
+    await clickCheckbox(boxes[0]);
+    expect(boxes[0].checked).toBe(false);
+    expect(boxes[1].checked).toBe(true);
+    expect(container.textContent).toContain('1 selected');
+  });
+
+  it('opens the message from the avatar/content zone', async () => {
+    await mount();
+    const avatar = container.querySelector('.email-row .sender-avatar')!;
+    await act(async () => {
+      avatar.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+    expect(container.textContent).toContain('Message opened');
+  });
+
+  it('keeps the checkbox outside the open link in spacious view too', async () => {
+    localStorage.setItem('emissary.emailList.density', 'spacious');
+    await mount();
+    const checkbox = container.querySelector('.email-item input.row-checkbox') as HTMLInputElement;
+    expect(checkbox).not.toBeNull();
+    expect(checkbox.closest('a')).toBeNull();
+
+    await clickCheckbox(checkbox);
+    expect(checkbox.checked).toBe(true);
+    expect(container.textContent).not.toContain('Message opened');
   });
 });

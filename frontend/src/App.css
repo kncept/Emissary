@@ -421,6 +421,20 @@ input, textarea {
   gap: 0.75rem;
 }
 
+.selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.25);
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
 /* Density Selector */
 .density-selector {
   display: inline-flex;
@@ -923,11 +937,23 @@ input, textarea {
 }
 
 .email-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    "select link"
+    "actions actions";
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   margin-bottom: 0.5rem;
   transition: box-shadow var(--transition);
+}
+
+.email-select-col {
+  grid-area: select;
+  display: flex;
+  align-items: flex-start;
+  padding: 1.25rem 0.25rem 0 0.75rem;
 }
 
 .email-item:hover {
@@ -943,8 +969,10 @@ input, textarea {
 }
 
 .email-link {
+  grid-area: link;
   display: block;
-  padding: 1rem;
+  min-width: 0;
+  padding: 1rem 1rem 0.5rem 0.5rem;
   text-decoration: none;
   color: inherit;
 }
@@ -1009,6 +1037,7 @@ input, textarea {
 }
 
 .email-actions {
+  grid-area: actions;
   display: flex;
   gap: 0.5rem;
   padding: 0 1rem 1rem;
@@ -1064,7 +1093,8 @@ input, textarea {
     font-size: 0.75rem;
   }
 
-  .actions-col {
+  .actions-col,
+  .left-actions-col {
     display: none;
   }
 
