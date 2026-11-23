@@ -58,7 +58,13 @@ function createJmapRequest(
 function parseJmapResponse(response: JmapResponse): Map<string, JmapMethodResponse> {
   const result = new Map<string, JmapMethodResponse>();
   for (const [method, args, id] of response.methodResponses) {
-    result.set(id, { method, args: args as Record<string, unknown>, id });
+    // A method may emit more than one response with the same client id. For
+    // example EmailSubmission/set is followed by an implicit Email/set with
+    // the same id. The first response is the one for the method call; keep it
+    // so the implicit response cannot mask a submission error.
+    if (!result.has(id)) {
+      result.set(id, { method, args: args as Record<string, unknown>, id });
+    }
   }
   return result;
 }
@@ -527,6 +533,17 @@ async function discoverIdentityId(): Promise<string> {
   return identity.id;
 }
 
+// Surface the server's SetError description as well as its type. A bare
+// "serverFail" tells the user nothing about which storage step failed.
+function setErrorText(err: { type: string; description?: string; properties?: string[] }): string {
+  const parts = [err.description];
+  if (err.properties?.length) {
+    parts.push(`properties: ${err.properties.join(', ')}`);
+  }
+  const detail = parts.filter(Boolean).join(' ');
+  return detail ? `${err.type} (${detail})` : err.type;
+}
+
 export async function sendEmail(data: SendEmailRequest): Promise<{ success: boolean; message?: string }> {
   const createId = 'create1';
   const submissionId = 'submission1';
@@ -534,7 +551,6 @@ export async function sendEmail(data: SendEmailRequest): Promise<{ success: bool
   // Plain messages are sent as text/plain only. HTML messages include a plain
   // alternative so clients without HTML support still have a readable body.
   const plainText = isHtml ? htmlToText(data.body) : data.body;
-  const textSize = new TextEncoder().encode(plainText).length;
 
   const to = parseAddressList(data.to);
   const cc = parseAddressList(data.cc || '');
@@ -554,7 +570,9 @@ export async function sendEmail(data: SendEmailRequest): Promise<{ success: bool
     keywords: { $draft: true },
     to: to.map((email) => ({ email, name: '' })),
     subject: data.subject,
-    textBody: [{ partId: 'text1', type: 'text/plain', size: textSize }],
+    // `size` is server-set on EmailBodyPart; sending it makes Email/set
+    // reject the create with invalidProperties (RFC 8621 section 4.6).
+    textBody: [{ partId: 'text1', type: 'text/plain' }],
     bodyValues: {
       text1: { value: plainText, isEncodingProblem: false, isTruncated: false },
     },
@@ -577,7 +595,6 @@ export async function sendEmail(data: SendEmailRequest): Promise<{ success: bool
     createArgs.htmlBody = [{
       partId: 'html1',
       type: 'text/html',
-      size: new TextEncoder().encode(data.body).length,
     }];
     (createArgs.bodyValues as Record<string, unknown>).html1 = {
       value: data.body,
@@ -632,9 +649,9 @@ export async function sendEmail(data: SendEmailRequest): Promise<{ success: bool
     throw new Error('Failed to create email for sending');
   }
 
-  const notCreated = emailCreateResponse.args.notCreated as Record<string, { type: string }> | undefined;
+  const notCreated = emailCreateResponse.args.notCreated as Record<string, Parameters<typeof setErrorText>[0]> | undefined;
   if (notCreated && notCreated[createId]) {
-    throw new Error(`Failed to create email: ${notCreated[createId].type}`);
+    throw new Error(`Failed to create email: ${setErrorText(notCreated[createId])}`);
   }
 
   const submissionResponse = responses.get('submissionCreate');
@@ -642,9 +659,9 @@ export async function sendEmail(data: SendEmailRequest): Promise<{ success: bool
     throw new Error('Failed to send email (submission error)');
   }
 
-  const submissionNotCreated = submissionResponse.args.notCreated as Record<string, { type: string }> | undefined;
+  const submissionNotCreated = submissionResponse.args.notCreated as Record<string, Parameters<typeof setErrorText>[0]> | undefined;
   if (submissionNotCreated && submissionNotCreated[submissionId]) {
-    throw new Error(`Failed to send email: ${submissionNotCreated[submissionId].type}`);
+    throw new Error(`Failed to send email: ${setErrorText(submissionNotCreated[submissionId])}`);
   }
 
   return { success: true, message: 'Email sent' };

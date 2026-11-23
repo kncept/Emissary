@@ -236,6 +236,25 @@ func creationReference(s string) (string, bool) {
 	return "", false
 }
 
+// dropReusedCreationIDs removes stale mappings for creation ids that this call
+// creates itself. Creation ids are scoped to one request: if a client reuses
+// "submission1" in a later request, "#submission1" in that call's
+// onSuccessUpdateEmail must refer to the submission being created now, not to
+// the one left in the session map by an earlier send.
+func dropReusedCreationIDs(call Invocation, createdIDs map[string]string) {
+	raw, ok := call.Arguments["create"]
+	if !ok {
+		return
+	}
+	var creates map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &creates); err != nil {
+		return
+	}
+	for creationID := range creates {
+		delete(createdIDs, creationID)
+	}
+}
+
 // resolveCallCreationIDs applies creation-id resolution to a method call's
 // arguments. Using UseNumber preserves JSON number representations exactly.
 func resolveCallCreationIDs(args map[string]json.RawMessage, createdIDs map[string]string) (map[string]json.RawMessage, error) {
@@ -373,6 +392,11 @@ func (d *Dispatcher) DispatchRequest(ctx context.Context, defaultAccountID strin
 			continue
 		}
 		call.Arguments = resolvedArgs
+
+		// A creation id used by this call supersedes any id from a previous
+		// request still held in the session map. Drop it before resolution so
+		// a repeated "#submission1" is not rewritten to the earlier submission.
+		dropReusedCreationIDs(call, createdIDs)
 
 		// Resolve JMAP creation references (e.g. "#create1") in the call's
 		// arguments using the ids created by earlier calls in this batch (or

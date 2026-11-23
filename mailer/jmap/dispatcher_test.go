@@ -170,6 +170,47 @@ func TestDispatchRequestResolvesCreationReferences(t *testing.T) {
 	}
 }
 
+// TestDispatchRequestReusedCreationIDIgnoresStaleSessionID covers a second
+// send in the same session: the client reuses "submission1", so the reference
+// in onSuccessUpdateEmail must stay "#submission1" instead of resolving to the
+// submission created by the earlier request.
+func TestDispatchRequestReusedCreationIDIgnoresStaleSessionID(t *testing.T) {
+	handler := &stubMethodHandler{}
+	dispatcher := NewDispatcher(handler, nil)
+
+	req := &Request{
+		Using:      allUsing,
+		CreatedIDs: map[string]string{"submission1": "stale-submission-id"},
+		MethodCalls: []Invocation{{
+			Name:     "EmailSubmission/set",
+			ClientID: "c1",
+			Arguments: map[string]json.RawMessage{
+				"accountId": json.RawMessage(`"alice@example.com"`),
+				"create": json.RawMessage(
+					`{"submission1":{"identityId":"id1","emailId":"email1"}}`),
+				"onSuccessUpdateEmail": json.RawMessage(
+					`{"#submission1":{"keywords/$draft":null}}`),
+			},
+		}},
+	}
+	claims := &auth.Claims{Subject: "alice@example.com"}
+	resp, err := dispatcher.DispatchRequest(context.Background(), "alice@example.com", claims, req)
+	if err != nil {
+		t.Fatalf("DispatchRequest() error = %v", err)
+	}
+
+	updates := string(handler.submissionSetArgs["onSuccessUpdateEmail"])
+	if strings.Contains(updates, "stale-submission-id") {
+		t.Errorf("onSuccessUpdateEmail used stale id: %s", updates)
+	}
+	if !strings.Contains(updates, `"#submission1"`) {
+		t.Errorf("onSuccessUpdateEmail lost the current call's creation reference: %s", updates)
+	}
+	if got := resp.CreatedIDs["submission1"]; got != "real-email-id" {
+		t.Errorf("createdIds[submission1] = %q, want the newly created id", got)
+	}
+}
+
 func TestDispatchRequestCreatedIDsOnlyWhenRequested(t *testing.T) {
 	handler := &stubMethodHandler{}
 	dispatcher := NewDispatcher(handler, nil)

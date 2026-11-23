@@ -113,22 +113,31 @@ func (d *DdbMetadata) put(ctx context.Context, metadata EmailMetadata) error {
 	}
 
 	// Use optimistic locking: only succeed if the item doesn't exist (new record)
-	// or the version matches what we read.
+	// or the version matches what we read. DynamoDB rejects expressions whose
+	// attribute-name/value maps contain tokens the expression does not use, so
+	// each branch must declare only the tokens it references.
 	var conditionExpr string
+	var names map[string]string
+	var values map[string]types.AttributeValue
 	if metadata.Version == 1 {
 		// New record (version was 0, now 1): ensure no existing item with this key
 		conditionExpr = "attribute_not_exists(#id)"
+		names = map[string]string{"#id": "id"}
 	} else {
 		// Existing record: ensure version matches the old version
 		conditionExpr = "#version = :expectedVersion"
+		names = map[string]string{"#version": "version"}
+		values = map[string]types.AttributeValue{
+			":expectedVersion": &types.AttributeValueMemberN{Value: strconv.Itoa(metadata.Version - 1)},
+		}
 	}
 
 	input := &dynamodb.PutItemInput{
 		TableName:                 aws.String(d.tableName),
 		Item:                      item,
 		ConditionExpression:       aws.String(conditionExpr),
-		ExpressionAttributeNames:  map[string]string{"#id": "id", "#version": "version"},
-		ExpressionAttributeValues: map[string]types.AttributeValue{":expectedVersion": &types.AttributeValueMemberN{Value: strconv.Itoa(metadata.Version - 1)}},
+		ExpressionAttributeNames:  names,
+		ExpressionAttributeValues: values,
 	}
 
 	_, err = d.client.PutItem(ctx, input)

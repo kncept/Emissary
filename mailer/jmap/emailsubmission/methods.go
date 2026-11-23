@@ -79,7 +79,7 @@ func (h *Handler) EmailSubmissionSet(ctx context.Context, accountID string, args
 // and, when onSuccessUpdateEmail/onSuccessDestroyEmail were supplied, the
 // implicit Email/set response. Both share the caller's method call id.
 func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID string, args json.RawMessage) (json.RawMessage, json.RawMessage, error) {
-	slog.Debug("JMAP: submitting email", "account", accountID)
+	slog.Info("JMAP: submitting email", "account", accountID)
 	// RFC 8621 section 7.5 keys onSuccessUpdateEmail by EmailSubmission id
 	// and onSuccessDestroyEmail by the same ids.
 	var rawArgs struct {
@@ -611,7 +611,8 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 		for submissionID, patch := range rawArgs.OnSuccessUpdateEmail {
 			emailID, ok := successful[submissionID]
 			if !ok {
-				slog.Debug("JMAP: onSuccessUpdateEmail references an unknown submission", "id", submissionID)
+				slog.Warn("JMAP: onSuccessUpdateEmail references an unknown submission",
+					"id", submissionID, "not_created", notCreated)
 				continue
 			}
 			updates[emailID] = patch
@@ -623,7 +624,8 @@ func (h *Handler) EmailSubmissionSetWithImplicit(ctx context.Context, accountID 
 		for _, submissionID := range rawArgs.OnSuccessDestroyEmail {
 			emailID, ok := successful[submissionID]
 			if !ok {
-				slog.Debug("JMAP: onSuccessDestroyEmail references an unknown submission", "id", submissionID)
+				slog.Warn("JMAP: onSuccessDestroyEmail references an unknown submission",
+					"id", submissionID, "not_created", notCreated)
 				continue
 			}
 			destroys = append(destroys, emailID)

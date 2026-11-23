@@ -3,6 +3,7 @@ package metadata
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -28,6 +29,7 @@ type fakeDdb struct {
 
 	gets        []map[string]types.AttributeValue
 	deletes     []map[string]types.AttributeValue
+	putInputs   []*dynamodb.PutItemInput
 	queryInputs []*dynamodb.QueryInput
 }
 
@@ -75,6 +77,21 @@ func (f *fakeDdb) PutItem(_ context.Context, params *dynamodb.PutItemInput, _ ..
 
 	key := itemKey(params.Item)
 	condition := aws.ToString(params.ConditionExpression)
+	snapshot := *params
+	f.putInputs = append(f.putInputs, &snapshot)
+
+	// Real DynamoDB rejects tokens that the expression does not reference.
+	// Enforce that here so an unused :expectedVersion or #version cannot pass.
+	for token := range params.ExpressionAttributeNames {
+		if !strings.Contains(condition, token) {
+			return nil, fmt.Errorf("ValidationException: unused ExpressionAttributeName %s", token)
+		}
+	}
+	for token := range params.ExpressionAttributeValues {
+		if !strings.Contains(condition, token) {
+			return nil, fmt.Errorf("ValidationException: unused ExpressionAttributeValue %s", token)
+		}
+	}
 
 	// Handle conditional writes for optimistic locking
 	if condition != "" {
@@ -196,6 +213,45 @@ func TestDdbMetadata_SaveUsesCompositeKey(t *testing.T) {
 	}
 	if got := attrString(item, "userId"); got != meta.UserID {
 		t.Errorf("sort key userId = %q, want the user id %q", got, meta.UserID)
+	}
+}
+
+func TestDdbMetadata_SaveConditionUsesOnlyReferencedTokens(t *testing.T) {
+	client := newFakeDdb()
+	store := newDdbTestMetadata(client)
+	ctx := context.Background()
+
+	meta := NewEmailMetadata("alice@example.com", "mail-1", KeywordSeen)
+	if err := store.Save(ctx, meta); err != nil {
+		t.Fatalf("Save(new) error = %v", err)
+	}
+	meta.Version = 1
+	if err := store.Save(ctx, meta); err != nil {
+		t.Fatalf("Save(existing) error = %v", err)
+	}
+
+	if len(client.putInputs) != 2 {
+		t.Fatalf("PutItem calls = %d, want 2", len(client.putInputs))
+	}
+	newPut := client.putInputs[0]
+	if got := aws.ToString(newPut.ConditionExpression); got != "attribute_not_exists(#id)" {
+		t.Errorf("new ConditionExpression = %q", got)
+	}
+	if !reflect.DeepEqual(newPut.ExpressionAttributeNames, map[string]string{"#id": "id"}) {
+		t.Errorf("new ExpressionAttributeNames = %v", newPut.ExpressionAttributeNames)
+	}
+	if len(newPut.ExpressionAttributeValues) != 0 {
+		t.Errorf("new ExpressionAttributeValues = %v, want none", newPut.ExpressionAttributeValues)
+	}
+	updatePut := client.putInputs[1]
+	if got := aws.ToString(updatePut.ConditionExpression); got != "#version = :expectedVersion" {
+		t.Errorf("update ConditionExpression = %q", got)
+	}
+	if !reflect.DeepEqual(updatePut.ExpressionAttributeNames, map[string]string{"#version": "version"}) {
+		t.Errorf("update ExpressionAttributeNames = %v", updatePut.ExpressionAttributeNames)
+	}
+	if attrNumber(updatePut.ExpressionAttributeValues, ":expectedVersion") != "1" {
+		t.Errorf("update :expectedVersion = %v, want 1", updatePut.ExpressionAttributeValues)
 	}
 }
 

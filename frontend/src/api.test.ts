@@ -511,7 +511,7 @@ describe('auth api', () => {
       });
 
       const create = await sentCreateArgs(fetchMock);
-      expect(create.textBody).toEqual([{ partId: 'text1', type: 'text/plain', size: 18 }]);
+      expect(create.textBody).toEqual([{ partId: 'text1', type: 'text/plain' }]);
       expect(create.bodyValues.text1.value).toBe('Hello <b>world</b>');
       expect(create.htmlBody).toBeUndefined();
       expect(create.bodyValues.html1).toBeUndefined();
@@ -529,7 +529,7 @@ describe('auth api', () => {
       });
 
       const create = await sentCreateArgs(fetchMock);
-      expect(create.htmlBody).toEqual([{ partId: 'html1', type: 'text/html', size: 25 }]);
+      expect(create.htmlBody).toEqual([{ partId: 'html1', type: 'text/html' }]);
       expect(create.bodyValues.html1.value).toBe('<p>Hello <b>world</b></p>');
       expect(create.bodyValues.text1.value).toBe('Hello world');
     });

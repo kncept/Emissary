@@ -560,8 +560,12 @@ async function emailClientStack(
     authType: lambda.FunctionUrlAuthType.NONE,
     invokeMode: lambda.InvokeMode.RESPONSE_STREAM,
   })
+  // Only the REST-proxy Lambda advertises the streaming URL in the JMAP
+  // Session. Do NOT set it on streamFn: the URL is an attribute of the
+  // Function URL, which targets streamFn, so that would make the function
+  // depend on itself and CloudFormation would reject the changeset as a
+  // circular dependency.
   fn.addEnvironment('JMAP_EVENTSOURCE_URL', streamFunctionUrl.url)
-  streamFn.addEnvironment('JMAP_EVENTSOURCE_URL', streamFunctionUrl.url)
 
   const restApi = new apigateway.LambdaRestApi(stack, 'emissary-restapi', {
     restApiName: `emissary-${emissaryDomain.replaceAll(".", "-")}`,

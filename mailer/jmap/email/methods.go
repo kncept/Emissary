@@ -188,6 +188,8 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 				return fail(base.InvalidProperties("Invalid create object", "invalidProperties"))
 			}
 			if properties := validateEmailCreate(raw); len(properties) > 0 {
+				slog.Info("JMAP: rejected Email/create properties",
+					"account", accountID, "create_id", createID, "properties", properties)
 				return fail(base.InvalidProperties("Conflicting or unsupported create properties", properties...))
 			}
 			subject, _ := createMap["subject"].(string)
@@ -331,6 +333,8 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 			// registration fails, roll the email back and report the storage
 			// failure rather than leaving a message whose blob cannot resolve.
 			if _, err := storage.RegisterEmailBlobs(ctx, h.deps.Storage, accountID, rawBytes); err != nil {
+				slog.Error("JMAP: failed to register created email blob",
+					"account", accountID, "create_id", createID, "id", newID, "err", err)
 				if cleanupErr := h.deps.Storage.DeleteEmail(ctx, accountID, newID); cleanupErr != nil {
 					slog.Error("JMAP: failed to roll back email after blob registration error", "id", newID, "err", cleanupErr)
 				}
@@ -345,6 +349,8 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 				}
 			}
 			if err := h.deps.Metadata.Save(ctx, meta); err != nil {
+				slog.Error("JMAP: failed to save created email metadata",
+					"account", accountID, "create_id", createID, "id", newID, "err", err)
 				if cleanupErr := h.deps.Storage.DeleteEmail(ctx, accountID, newID); cleanupErr != nil {
 					slog.Error("JMAP: failed to roll back created email after metadata error", "id", newID, "err", cleanupErr)
 				}

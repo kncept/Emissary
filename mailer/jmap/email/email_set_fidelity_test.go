@@ -42,6 +42,7 @@ func TestEmailCreateConflictValidation(t *testing.T) {
 		{"bodyStructure conflicts with textBody", `{"bodyStructure":{"type":"text/plain"},"textBody":[{"type":"text/plain"}]}`, []string{"bodyStructure", "textBody"}},
 		{"textBody requires one text/plain part", `{"textBody":[{"type":"text/html"}]}`, []string{"textBody"}},
 		{"partId and blobId conflict", `{"textBody":[{"partId":"1","blobId":"b","type":"text/plain"}]}`, []string{"textBody"}},
+		{"server-set part size rejected", `{"textBody":[{"partId":"1","type":"text/plain","size":3}],"bodyValues":{"1":{"value":"abc","isEncodingProblem":false,"isTruncated":false}}}`, []string{"textBody"}},
 		{"partId requires bodyValues", `{"textBody":[{"partId":"1","type":"text/plain"}]}`, []string{"textBody"}},
 		{"bodyValues flags must be false", `{"bodyValues":{"1":{"value":"x","isTruncated":true}}}`, []string{"bodyValues"}},
 		{"body part headers cannot duplicate From", `{"from":[{"email":"x@example.com"}],"textBody":[{"type":"text/plain","headers":[{"name":"From","value":"x"}]}]}`, []string{"from", "textBody"}},

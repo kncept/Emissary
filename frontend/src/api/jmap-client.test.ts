@@ -227,6 +227,8 @@ describe('JMAP client send flow', () => {
     const emailArgs = callNamed('Email/set', body)[1];
     const create = emailArgs.create as Record<string, Record<string, unknown>>;
     expect(create.create1.mailboxIds).toEqual({ 'mb-drafts': true });
+    // `size` is server-set on EmailBodyPart; sending it gets invalidProperties.
+    expect(create.create1.textBody).toEqual([{ partId: 'text1', type: 'text/plain' }]);
 
     const submissionArgs = callNamed('EmailSubmission/set', body)[1];
     const submissions = submissionArgs.create as Record<string, Record<string, unknown>>;
@@ -238,6 +240,46 @@ describe('JMAP client send flow', () => {
     });
     expect((submissionArgs.onSuccessUpdateEmail as Record<string, unknown>)['#submission1'])
       .toEqual({ 'keywords/$draft': null });
+  });
+
+  it('keeps the submission response when an implicit Email/set shares its id', async () => {
+    answer = (body) => {
+      if (body?.methodCalls.some((call) => call[0] === 'EmailSubmission/set')) {
+        return methodResponses([
+          ['Email/set', { accountId: ACCOUNT, created: { create1: { id: 'email-new' } }, notCreated: {} }, 'emailCreate'],
+          ['EmailSubmission/set', { accountId: ACCOUNT, created: { submission1: { id: 'sub-new' } }, notCreated: {} }, 'submissionCreate'],
+          ['Email/set', { accountId: ACCOUNT, updated: { 'email-new': {} }, notUpdated: {} }, 'submissionCreate'],
+        ]);
+      }
+      return defaultAnswer(body);
+    };
+
+    const { sendEmail } = await importClient();
+    await expect(sendEmail({
+      to: 'bob@example.com', subject: 'Hi', body: 'Hello', format: 'plain',
+    })).resolves.toEqual({ success: true, message: 'Email sent' });
+  });
+
+  it('does not let an implicit Email/set mask a submission error', async () => {
+    answer = (body) => {
+      if (body?.methodCalls.some((call) => call[0] === 'EmailSubmission/set')) {
+        return methodResponses([
+          ['Email/set', { accountId: ACCOUNT, created: { create1: { id: 'email-new' } }, notCreated: {} }, 'emailCreate'],
+          ['EmailSubmission/set', {
+            accountId: ACCOUNT,
+            created: {},
+            notCreated: { submission1: { type: 'forbidden', description: 'Not allowed' } },
+          }, 'submissionCreate'],
+          ['Email/set', { accountId: ACCOUNT, updated: {}, notUpdated: {} }, 'submissionCreate'],
+        ]);
+      }
+      return defaultAnswer(body);
+    };
+
+    const { sendEmail } = await importClient();
+    await expect(sendEmail({
+      to: 'bob@example.com', subject: 'Hi', body: 'Hello', format: 'plain',
+    })).rejects.toThrow('Failed to send email: forbidden');
   });
 
   it('opts Identity/get into the submission capability', async () => {
