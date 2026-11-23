@@ -5,7 +5,8 @@ import { MemoryRouter } from 'react-router-dom';
 import { markFlagged, markRead } from '../api.ts';
 import { clearEmailRefreshRequest } from '../api/email-checks.ts';
 import type { Email } from '../types.ts';
-import EmailList, { resetEmailListCache } from './EmailList.tsx';
+import { resetEmailListCache } from '../email-list-cache.ts';
+import EmailList from './EmailList.tsx';
 
 vi.mock('../api.ts', () => ({
   getEmails: vi.fn(async () => [{

@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getEmails } from '../api.ts';
 import { clearEmailRefreshRequest } from '../api/email-checks.ts';
 import { resetJMAPClientCache } from '../api/jmap-client.ts';
-import EmailList, { resetEmailListCache } from './EmailList.tsx';
+import { resetEmailListCache } from '../email-list-cache.ts';
+import EmailList from './EmailList.tsx';
 import Layout from './Layout.tsx';
 
 const FIVE_MINUTES = 5 * 60 * 1000;

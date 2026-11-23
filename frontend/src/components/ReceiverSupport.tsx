@@ -45,9 +45,6 @@ export default function ReceiverSupport() {
   // can fail (for example missing ses:ListIdentities), but that must never
   // discard a successful rules response.
   const load = async () => {
-    setLoading(true);
-    setError('');
-    setMessage('');
     const failures: string[] = [];
     try {
       const rulesData = await getSupportReceiverRules();
@@ -66,7 +63,12 @@ export default function ReceiverSupport() {
   };
 
   useEffect(() => {
-    void load();
+    // Keep the initial fetch behind a local async wrapper so the effect does
+    // not synchronously update state; load only updates state after awaits.
+    const initialize = async () => {
+      await load();
+    };
+    void initialize();
   }, []);
 
   const onSave = async () => {
@@ -171,7 +173,11 @@ export default function ReceiverSupport() {
           <button className="btn btn-secondary" onClick={() => navigate('/support')} disabled={saving || deleting}>
             Cancel
           </button>
-          <button className="btn btn-secondary" onClick={() => void load()} disabled={loading || saving || deleting}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => { setLoading(true); setError(''); setMessage(''); void load(); }}
+            disabled={loading || saving || deleting}
+          >
             {loading ? 'Loading…' : 'Reload'}
           </button>
           <button className="btn btn-primary" onClick={() => void onSave()} disabled={loading || saving || deleting}>

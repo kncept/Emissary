@@ -13,7 +13,13 @@ const MASQUERADE_AS_KEY = 'masquerade_as';
 export default function Settings({ auth, onLogout }: SettingsProps) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [masqueradeAs, setMasqueradeAs] = useState<string | null>(null);
+  const [masqueradeAs] = useState<string | null>(() => {
+    try {
+      return window.localStorage.getItem(MASQUERADE_AS_KEY);
+    } catch {
+      return null;
+    }
+  });
   const [loggingOut, setLoggingOut] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
   const [passwordBusy, setPasswordBusy] = useState(false);
@@ -39,8 +45,18 @@ export default function Settings({ auth, onLogout }: SettingsProps) {
     };
   }, []);
 
-  useEffect(() => {
-    // Reset messages and close the form when the session changes.
+  // Reset messages and close the form when the session changes. Doing this
+  // during render avoids a synchronous state update inside an effect.
+  const sessionKey = [
+    auth.authenticated,
+    auth.username,
+    auth.email,
+    auth.systemManager,
+    auth.emissaryUserManagement,
+  ].join('|');
+  const [previousSessionKey, setPreviousSessionKey] = useState(sessionKey);
+  if (previousSessionKey !== sessionKey) {
+    setPreviousSessionKey(sessionKey);
     setError(null);
     setSuccess(null);
     setChangingPassword(false);
@@ -48,15 +64,7 @@ export default function Settings({ auth, onLogout }: SettingsProps) {
     setCurrentPassword('');
     setNewPassword('');
     setConfirmPassword('');
-  }, [auth]);
-
-  useEffect(() => {
-    try {
-      setMasqueradeAs(window.localStorage.getItem(MASQUERADE_AS_KEY));
-    } catch {
-      setMasqueradeAs(null);
-    }
-  }, []);
+  }
 
   const handleLogout = async () => {
     setError(null);

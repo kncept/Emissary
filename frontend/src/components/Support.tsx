@@ -23,15 +23,13 @@ export default function Support() {
   const [selected, setSelected] = useState<ConfigurationDetail | null>(null);
   const [bucket, setBucket] = useState<BucketRootResponse | null>(null);
   const [loadingConfigurations, setLoadingConfigurations] = useState(true);
-  const [loadingBucket, setLoadingBucket] = useState(false);
+  const [loadingBucket, setLoadingBucket] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
   const loadConfigurations = async () => {
     try {
-      setLoadingConfigurations(true);
-      setError('');
       const data = await getSupportConfigurations();
       setConfigurations(data.configurations || []);
     } catch (e) {
@@ -43,8 +41,6 @@ export default function Support() {
 
   const loadBucket = async () => {
     try {
-      setLoadingBucket(true);
-      setError('');
       setBucket(await getSupportBucketRoot());
     } catch (e) {
       setBucket(null);
@@ -55,9 +51,25 @@ export default function Support() {
   };
 
   useEffect(() => {
-    void loadConfigurations();
-    void loadBucket();
+    // Keep the initial fetches behind a local async wrapper so the effect does
+    // not synchronously update state. Both loaders only update after awaits.
+    const initialize = async () => {
+      await Promise.all([loadConfigurations(), loadBucket()]);
+    };
+    void initialize();
   }, []);
+
+  const refreshConfigurations = () => {
+    setError('');
+    setLoadingConfigurations(true);
+    void loadConfigurations();
+  };
+
+  const refreshBucket = () => {
+    setError('');
+    setLoadingBucket(true);
+    void loadBucket();
+  };
 
   const openConfiguration = async (name: string) => {
     try {
@@ -76,6 +88,7 @@ export default function Support() {
     try {
       const result = await processSupportEmail(id);
       setMessage(result.message || `Processed ${result.id}`);
+      setLoadingBucket(true);
       await loadBucket();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to process email');
@@ -88,7 +101,7 @@ export default function Support() {
     <div className="support-page">
       <div className="email-list-header">
         <h2>Support</h2>
-        <button className="btn btn-secondary" onClick={() => { void loadConfigurations(); void loadBucket(); }}>
+        <button className="btn btn-secondary" onClick={() => { refreshConfigurations(); refreshBucket(); }}>
           Refresh
         </button>
       </div>
@@ -163,7 +176,7 @@ export default function Support() {
       <section className="settings-section">
         <div className="email-list-header" style={{ marginBottom: '0.75rem' }}>
           <h3 style={{ margin: 0 }}>Bucket root</h3>
-          <button className="btn btn-secondary" onClick={() => void loadBucket()} disabled={loadingBucket}>
+          <button className="btn btn-secondary" onClick={refreshBucket} disabled={loadingBucket}>
             {loadingBucket ? 'Loading…' : 'Reload'}
           </button>
         </div>

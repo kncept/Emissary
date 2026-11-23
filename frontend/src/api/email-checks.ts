@@ -48,6 +48,12 @@ export function requestEmailRefresh(): void {
   }
 }
 
+// Read a pending refresh request without consuming it. Lets a mounting inbox
+// initialize its loading state before the effect consumes the request.
+export function hasEmailRefreshRequest(): boolean {
+  return refreshPending;
+}
+
 // Consume a pending refresh request. Returns true once for each request that
 // has not yet been handled by a mounted inbox.
 export function consumeEmailRefreshRequest(): boolean {

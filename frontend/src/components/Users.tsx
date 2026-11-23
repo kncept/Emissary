@@ -54,8 +54,6 @@ export default function Users({ currentUser }: { currentUser?: string }) {
 
   const load = async (cursor?: string, append = false) => {
     try {
-      setLoading(!append);
-      setError('');
       const data = await getUsers(cursor);
       setUsers((prev) => (append ? [...prev, ...(data.users || [])] : data.users || []));
       setNextCursor(data.nextCursor || undefined);
@@ -67,8 +65,19 @@ export default function Users({ currentUser }: { currentUser?: string }) {
   };
 
   useEffect(() => {
-    void load();
+    // Keep the initial fetch behind a local async wrapper so the effect does
+    // not synchronously update state; load only updates state after awaits.
+    const initialize = async () => {
+      await load();
+    };
+    void initialize();
   }, []);
+
+  const refresh = async () => {
+    setLoading(true);
+    setError('');
+    await load();
+  };
 
   const onCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,7 +102,7 @@ export default function Users({ currentUser }: { currentUser?: string }) {
       setCreateUserManager(false);
       setCreateRules('');
       setMessage('User created');
-      await load();
+      await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create user');
     } finally {
@@ -133,7 +142,7 @@ export default function Users({ currentUser }: { currentUser?: string }) {
       await updateUser(editing.email, update);
       setEditing(null);
       setMessage('User updated');
-      await load();
+      await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update user');
     } finally {
@@ -150,7 +159,7 @@ export default function Users({ currentUser }: { currentUser?: string }) {
       await deleteUser(deleteTarget);
       setMessage('User deleted');
       setDeleteTarget(null);
-      await load();
+      await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete user');
       setDeleteTarget(null);

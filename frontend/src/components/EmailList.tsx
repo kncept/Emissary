@@ -5,25 +5,17 @@ import { getEmails, deleteEmail, markRead, markFlagged } from '../api.ts';
 import {
   EMAIL_CHECK_INTERVAL_MS,
   consumeEmailRefreshRequest,
+  hasEmailRefreshRequest,
   onEmailCheck,
   onEmailRefreshRequest,
 } from '../api/email-checks.ts';
+import { getCachedEmails, setCachedEmails } from '../email-list-cache.ts';
 import type { Email } from '../types.ts';
 import ConfirmDialog from './ConfirmDialog.tsx';
 
 type Density = 'dense' | 'comfortable' | 'spacious';
 
 const DENSITY_KEY = 'emissary.emailList.density';
-
-// Module-level cache that survives navigation away from the inbox (e.g. to
-// view an email) and back. Going back restores the last list response without
-// refetching, like a stack.
-let cachedEmails: Email[] | null = null;
-
-// Reset the cache between independent mounts in tests.
-export function resetEmailListCache(): void {
-  cachedEmails = null;
-}
 
 function getInitialDensity(): Density {
   try {
@@ -38,8 +30,8 @@ function getInitialDensity(): Density {
 }
 
 export default function EmailList() {
-  const [emails, setEmails] = useState<Email[]>(cachedEmails ?? []);
-  const [loading, setLoading] = useState(cachedEmails === null);
+  const [emails, setEmails] = useState<Email[]>(getCachedEmails() ?? []);
+  const [loading, setLoading] = useState(getCachedEmails() === null || hasEmailRefreshRequest());
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -58,12 +50,11 @@ export default function EmailList() {
 
   const loadEmails = useCallback(async (background = false) => {
     try {
-      if (!background) setLoading(true);
       // The JMAP client selects the account (including admin masquerade)
       // through accountId; there is no separate user filter.
       const data = await getEmails();
       setEmails(data);
-      cachedEmails = data;
+      setCachedEmails(data);
       setError('');
     } catch {
       // A failed background check keeps the current inbox visible; it will be
@@ -87,6 +78,7 @@ export default function EmailList() {
 
     const unsubscribe = onEmailCheck(scheduleNextCheck);
     const unsubscribeRefreshRequest = onEmailRefreshRequest(() => {
+      setLoading(true);
       void loadEmails();
     });
 
@@ -94,8 +86,13 @@ export default function EmailList() {
     // while the inbox was unmounted. Otherwise (e.g. Back from an email)
     // restore the cached list without a fetch; the polling timer keeps it fresh.
     const refreshRequested = consumeEmailRefreshRequest();
-    if (cachedEmails === null || refreshRequested) {
-      void loadEmails();
+    if (getCachedEmails() === null || refreshRequested) {
+      // A local async wrapper keeps the effect free of synchronous state
+      // updates; loadEmails only updates state after its await.
+      const initialize = async () => {
+        await loadEmails();
+      };
+      void initialize();
     }
 
     return () => {
@@ -109,7 +106,7 @@ export default function EmailList() {
   }, [loadEmails]);
 
   const commitEmails = (next: Email[]) => {
-    cachedEmails = next;
+    setCachedEmails(next);
     setEmails(next);
   };
 
@@ -118,7 +115,7 @@ export default function EmailList() {
     setDeleting(true);
     try {
       await deleteEmail(deleteId);
-      const next = (cachedEmails ?? emails).filter((email) => email.id !== deleteId);
+      const next = (getCachedEmails() ?? emails).filter((email) => email.id !== deleteId);
       commitEmails(next);
       setDeleteId(null);
     } catch {
@@ -130,7 +127,7 @@ export default function EmailList() {
   };
 
   const updateEmail = (id: string, changes: Partial<Email>) => {
-    const next = (cachedEmails ?? emails).map((email) =>
+    const next = (getCachedEmails() ?? emails).map((email) =>
       email.id === id ? { ...email, ...changes } : email,
     );
     commitEmails(next);

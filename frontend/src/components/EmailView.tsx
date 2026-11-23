@@ -55,10 +55,46 @@ export default function EmailView() {
     }
   })();
 
+  // A route change to another message resets the view during render, so the
+  // effect below can stay focused on the asynchronous fetch.
+  const [loadedEmailID, setLoadedEmailID] = useState(emailID);
+  if (loadedEmailID !== emailID) {
+    setLoadedEmailID(emailID);
+    setEmail(null);
+    setLoading(true);
+    setError('');
+    setShowRaw(false);
+    setRawCache(null);
+    setRawError('');
+  }
+
   useEffect(() => {
-    if (emailID) {
-      loadEmail();
-    }
+    if (!emailID) return;
+    let active = true;
+    const loadEmail = async () => {
+      try {
+        const data = await getEmail(emailID);
+        if (!active) return;
+        setEmail(data);
+        // Mark as read if unread
+        if (data && !data.read) {
+          try {
+            await markRead(data.id, true);
+            if (active) setEmail({ ...data, read: true });
+          } catch {
+            // Ignore mark-read errors, email still displayed
+          }
+        }
+      } catch {
+        if (active) setError('Failed to load email');
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    void loadEmail();
+    return () => {
+      active = false;
+    };
   }, [emailID]);
 
   useEffect(() => {
@@ -70,33 +106,12 @@ export default function EmailView() {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [showRaw]);
 
-  const loadEmail = async () => {
-    try {
-      setLoading(true);
-      const data = await getEmail(emailID);
-      setEmail(data);
-      // Mark as read if unread
-      if (data && !data.read) {
-        try {
-          await markRead(data.id, true);
-          setEmail({ ...data, read: true });
-        } catch {
-          // Ignore mark-read errors, email still displayed
-        }
-      }
-    } catch (err) {
-      setError('Failed to load email');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleMarkRead = async (read: boolean) => {
     if (!email) return;
     try {
       await markRead(email.id, read);
       setEmail({ ...email, read });
-    } catch (err) {
+    } catch {
       // Error handling
     }
   };
@@ -106,7 +121,7 @@ export default function EmailView() {
     try {
       await markFlagged(email.id, flagged);
       setEmail({ ...email, flagged });
-    } catch (err) {
+    } catch {
       // Error handling
     }
   };

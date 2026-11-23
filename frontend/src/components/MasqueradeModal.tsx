@@ -15,6 +15,20 @@ export default function MasqueradeModal({ open, onClose, onSelect }: MasqueradeM
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [hasSearched, setHasSearched] = useState(false);
+  const [wasOpen, setWasOpen] = useState(open);
+
+  // Clear the form when the modal closes. Adjusting state during render avoids
+  // a synchronous state update inside the focus-management effect below.
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (!open) {
+      setQuery('');
+      setResults([]);
+      setLoading(false);
+      setError('');
+      setHasSearched(false);
+    }
+  }
 
   const debounceTimer = useRef<number | null>(null);
   const inFlight = useRef(false);
@@ -138,22 +152,14 @@ export default function MasqueradeModal({ open, onClose, onSelect }: MasqueradeM
   };
 
   useEffect(() => {
-    if (!open) {
-      clearDebounce();
-      setQuery('');
-      setResults([]);
-      setLoading(false);
-      setError('');
-      setHasSearched(false);
-      pendingQuery.current = null;
-      latestQuery.current = '';
-      inFlight.current = false;
-      return;
-    }
+    if (!open) return;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeButton.current?.focus();
     return () => {
       clearDebounce();
+      pendingQuery.current = null;
+      latestQuery.current = '';
+      inFlight.current = false;
       previousFocus?.focus();
     };
   }, [open]);
