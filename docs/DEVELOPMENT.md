@@ -9,8 +9,8 @@ How to build, run and extend Emissary locally. The wire contract is in [API.md](
 - Node.js 24 + npm (frontend and CDK)
 - An AWS account and credentials only when deploying or running against S3, SES, DynamoDB or Secrets Manager (see
   [DEPLOYMENT.md](DEPLOYMENT.md#prerequisites)); the local run needs none.
-- `git`, `curl`, `python3`, `npm` and `node` for the optional external conformance gate
-  ([TESTING.md](TESTING.md#external-jmap-conformance-suite-manual-gate)).
+- `git`, `curl`, Go, `npm` and `node` for the external conformance gate run by CI and the release workflow
+  ([TESTING.md](TESTING.md#external-jmap-conformance-suite)).
 
 ## No `npx`
 
@@ -93,9 +93,9 @@ The full testing strategy — layers, test doubles, conventions and the invarian
   (see [DESIGN.md](DESIGN.md#frontend-ui-conventions)).
 - `npm run test` in [`frontend/`](../frontend/) — vitest (`*.test.{ts,tsx}`). The shared setup makes any surviving native browser dialog throw.
 
-CI (`.github/workflows/ci.yml`) runs `./run.sh test` and the separate generated-code-freshness check (`./run.sh check:generated`) on every push
-and pull request. Tagging `v*` triggers the release workflow, which runs `./run.sh build` and uploads the `.build/frontend` binary as an artifact
-without running tests ([TESTING.md](TESTING.md#running)).
+CI (`.github/workflows/ci.yml`) runs `./run.sh test` and `./run.sh spectest` on every push and pull request, plus the separate generated-code-freshness
+check (`./run.sh check:generated`). Tagging `v*` triggers the release workflow, which runs the same tests before `./run.sh build` and uploads the
+binaries and checksums ([TESTING.md](TESTING.md#running)).
 
 ## Run locally
 

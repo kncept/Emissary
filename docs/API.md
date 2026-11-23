@@ -6,7 +6,7 @@ All endpoints are served by `cmd/frontend` on the same origin and port as the we
 
 > Emissary implements **RFC 8620 (JMAP Core) and RFC 8621 (JMAP Mail)** for the capabilities `urn:ietf:params:jmap:core`, `urn:ietf:params:jmap:mail`, `urn:ietf:params:jmap:submission` and `urn:ietf:params:jmap:vacationresponse`, within the advertised per-account limits. Push supports webhook subscriptions and EventSource in `closeafter=state` and `closeafter=no` modes (the latter through a dedicated streaming Function URL).
 
-"100% compliant" means every applicable MUST in RFC 8620 §§1–8 and RFC 8621 §§1–10 is implemented and tested; every SHOULD is implemented or documented as a profile choice; every advertised method, argument, property and SetError is reachable; [`api/jmap.yaml`](../api/jmap.yaml), Session capabilities, runtime capabilities and generated schemas are checked for agreement; and the external conformance suite's required tests and end-to-end client use cases pass. The manual gate is described in [TESTING.md](TESTING.md#external-jmap-conformance-suite-manual-gate).
+"100% compliant" means every applicable MUST in RFC 8620 §§1–8 and RFC 8621 §§1–10 is implemented and tested; every SHOULD is implemented or documented as a profile choice; every advertised method, argument, property and SetError is reachable; [`api/jmap.yaml`](../api/jmap.yaml), Session capabilities, runtime capabilities and generated schemas are checked for agreement; and the external conformance suite's required tests and end-to-end client use cases pass. The suite runs locally and in CI and the release workflow; see [TESTING.md](TESTING.md#external-jmap-conformance-suite).
 
 ## Generated API artifacts
 

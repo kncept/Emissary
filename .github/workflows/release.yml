@@ -13,7 +13,7 @@ env:
 
 jobs:
   test:
-    name: Test (Go + TypeScript)
+    name: Test (Go + TypeScript + JMAP conformance)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -36,6 +36,22 @@ jobs:
 
       - name: Run tests
         run: ./run.sh test
+
+      # Block the release build on the same conformance gate used by CI and
+      # local development; keep the report for debugging failed releases.
+      - name: Run JMAP conformance suite
+        env:
+          SPECTEST_REPORT: ${{ github.workspace }}/spectest-report.json
+        run: ./run.sh spectest
+
+      - name: Upload JMAP conformance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spectest-report
+          path: spectest-report.json
+          retention-days: 7
+          if-no-files-found: ignore
 
   build:
     name: Build binaries (linux/amd64)

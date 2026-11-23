@@ -178,15 +178,23 @@ test() {
 SPECTEST_SUITE_URL="https://github.com/jmapio/jmap-test-suite.git"
 SPECTEST_SUITE_COMMIT="0f2c117dc5f3621bfa50cb0b8b4d4ac87a4154be"
 
+# Arg-driven helpers for JSON payloads, suite config and report summaries.
+spectest_tool() {
+	(
+		cd mailer
+		go run -buildvcs=false ./cmd/tools "$@"
+	)
+}
+
 spectest_login() {
 	local username="$1"
 	local password="$2"
 	local base_url="$3"
 	local body
-	body=$(python3 -c 'import json,sys; print(json.dumps({"username":sys.argv[1],"password":sys.argv[2]}))' "$username" "$password")
+	body=$(spectest_tool spectest login-body "$username" "$password")
 	curl -fsS -X POST "$base_url/api/auth/login" \
 		-H 'Content-Type: application/json' --data-binary "$body" |
-		python3 -c 'import json,sys; print(json.load(sys.stdin)["accessToken"])'
+		spectest_tool spectest login-token
 }
 
 spectest_create_user() {
@@ -196,8 +204,7 @@ spectest_create_user() {
 	local admin="$4"
 	local base_url="$5"
 	local body
-	body=$(python3 -c 'import json,sys; print(json.dumps({"email":sys.argv[1],"password":sys.argv[2],"enabled":True,"userManager":sys.argv[3]=="true","systemManager":sys.argv[4]=="true"}))' \
-		"$email" "$password" "$manager" "$manager")
+	body=$(spectest_tool spectest user-body "$email" "$password" "$manager")
 	curl -fsS -X POST "$base_url/api/user/" \
 		-H "Authorization: Bearer $admin" -H 'Content-Type: application/json' \
 		--data-binary "$body" >/dev/null
@@ -227,8 +234,8 @@ spectest() {
 		}
 		trap cleanup EXIT
 
-		if ! command -v python3 >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
-			echo "spectest requires python3 and curl" >&2
+		if ! command -v go >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+			echo "spectest requires go and curl" >&2
 			return 1
 		fi
 		if [[ ! -f "$patch_file" ]]; then
@@ -303,39 +310,15 @@ spectest() {
 		primary_token=$(spectest_login "$username" "$password" "$base_url")
 		secondary_token=$(spectest_login "$secondary_username" "$secondary_password" "$base_url")
 
-		python3 - "$config_file" "$base_url" "$username" "$primary_token" \
-			"$secondary_username" "$secondary_token" <<'PY'
-import json, sys
-path, base, username, token, secondary_username, secondary_token = sys.argv[1:]
-config = {
-    "sessionUrl": base + "/.well-known/jmap",
-    "serverInfo": "Emissary local conformance",
-    "users": {
-        "primary": {"username": username, "password": token},
-        "secondary": {"username": secondary_username, "password": secondary_token},
-    },
-    "authMethod": "bearer",
-    "timeout": 30000,
-    "verbose": False,
-}
-with open(path, "w") as out:
-    json.dump(config, out, indent=2)
-PY
+		spectest_tool spectest write-config "$config_file" "$base_url" "$username" "$primary_token" \
+			"$secondary_username" "$secondary_token"
 
 		echo ""
 		echo "=== Running conformance suite ==="
 		node "$suite_dir/dist/cli.js" -c "$config_file" -f -o "$report_file" --fail-only
 
 		echo ""
-		python3 - "$report_file" <<'PY'
-import json, sys
-summary = json.load(open(sys.argv[1]))["summary"]
-print(
-    f"JMAP conformance: {summary['passed']} passed, {summary['failed']} failed, "
-    f"{summary['skipped']} skipped "
-    f"(required: {summary['requiredPassed']} passed, {summary['requiredFailed']} failed)"
-)
-PY
+		spectest_tool spectest report-summary "$report_file"
 		echo "Report: $report_file"
 	)
 }

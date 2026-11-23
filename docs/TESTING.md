@@ -141,18 +141,20 @@ this table in sync when renaming tests. Links point to the suite where each inva
   [DEVELOPMENT.md](DEVELOPMENT.md#no-npx)).
 - `./run.sh check:generated` — regenerates API code and fails if the committed trees (`api/*/generated/`, `frontend/src/api/generated/`) would
   change; run it after editing a spec or bumping a generator ([API.md](API.md#generated-api-artifacts)).
-- CI (`.github/workflows/ci.yml`) runs both `./run.sh test` and `./run.sh check:generated` as separate jobs on every push to any branch and on
-  every pull request. The release workflow (`release.yml`) only builds and uploads binaries on `v*` tags, so branch/PR CI is the gate that
-  actually validated a commit.
+- CI (`.github/workflows/ci.yml`) runs `./run.sh test` and `./run.sh spectest` in its test job, plus `./run.sh check:generated` in a separate
+  job, on every push to any branch and on every pull request. The release workflow (`.github/workflows/release.yml`) runs `./run.sh test` and
+  `./run.sh spectest` on `v*` tags before building binaries, so both workflows validate a commit. Both upload the conformance report as a
+  workflow artifact.
 
-### External JMAP conformance suite (manual gate)
+### External JMAP conformance suite
 
-`./run.sh spectest` is the documented manual conformance gate, linked from the [conformance claim in API.md](API.md#jmap-conformance-claim). It
-clones `jmapio/jmap-test-suite` pinned to a specific commit, applies the advertised-profile adaptations in
+`./run.sh spectest` is the conformance gate, linked from the [conformance claim in API.md](API.md#jmap-conformance-claim). It runs locally and in
+both CI and the release workflow. It clones `jmapio/jmap-test-suite` pinned to a specific commit, applies the advertised-profile adaptations in
 [`jmap-test-suite.patch`](../scripts/spectest/jmap-test-suite.patch), builds a throwaway local server with bearer auth and two real users, runs
 the suite's `core`, `binary`, `push`, `email`, `mailbox`, `thread`, `identity`, `submission`, `vacation` and `search-snippet` categories, and
-writes a report to `${SPECTEST_REPORT}` (default `${TMPDIR}/emissary-spectest/report.json`). It needs `git`, `curl`, `python3`, `npm` and `node`
-on the PATH and network access for the initial clone. Credentials are generated per run unless supplied via `SPECTEST_USERNAME`,
+writes a report to `${SPECTEST_REPORT}` (default `${TMPDIR}/emissary-spectest/report.json`). Its JSON, config and report helpers live in
+[`mailer/cmd/tools`](../mailer/cmd/tools) and are invoked with `go run`. It needs `git`, `curl`, Go, `npm` and `node` on the PATH and network access
+for the initial clone. Credentials are generated per run unless supplied via `SPECTEST_USERNAME`,
 `SPECTEST_PASSWORD`, `SPECTEST_JWT_SECRET`, `SPECTEST_SECONDARY_USERNAME` or `SPECTEST_SECONDARY_PASSWORD`; the script embeds none.
 
 The gate passes only when every **required** test passes. Any skip is a consequence of the limits advertised in Session (for example

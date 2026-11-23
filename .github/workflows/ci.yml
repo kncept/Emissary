@@ -36,7 +36,7 @@ jobs:
         run: ./run.sh check:generated
 
   test:
-    name: Test (Go + TypeScript)
+    name: Test (Go + TypeScript + JMAP conformance)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -57,3 +57,20 @@ jobs:
 
       - name: Run tests
         run: ./run.sh test
+
+      # The same local conformance gate documented in docs/TESTING.md. It
+      # builds a throwaway server, fetches the pinned suite and fails on any
+      # required-test failure.
+      - name: Run JMAP conformance suite
+        env:
+          SPECTEST_REPORT: ${{ github.workspace }}/spectest-report.json
+        run: ./run.sh spectest
+
+      - name: Upload JMAP conformance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spectest-report
+          path: spectest-report.json
+          retention-days: 7
+          if-no-files-found: ignore
