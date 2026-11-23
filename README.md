@@ -8,6 +8,29 @@ outbound mail goes through SES or directly to recipient MX hosts (`SENDER=mta`).
 Emissary provides a lightweight way to read and send mail from an AWS SES S3 setup: SES stores each raw message, a
 consumer delivers a copy into per-user mailboxes, and one Go binary serves the React client and API. See [Architecture](docs/ARCHITECTURE.md#inbound-mail-flow) and [S3](docs/S3.md#bucket-layout).
 
+## Deployment Quickstart
+
+You will need a valid AWS account, and a route-53 zone that includes the configured DOMAIN.
+For S3 mail storage with DynamoDB metadata, this is the smallest practical set of variables to start the app:
+
+```bash
+export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+export AWS_REGION=ap-southeast-2
+export DOMAIN=YOURDOMAIN.com
+export TABLE_PREFIX=emissary
+export STORAGE=s3
+export METADATA=ddb
+export RECEIVER=s3
+export USER_MANAGER=s3
+
+./run.sh deploy
+```
+
+The keys above are full-length dummy values — replace them with real credentials (or use `AWS_PROFILE`/an IAM role). `DOMAIN=kncept.com` is the receiving domain; the CDK deployment for it is reachable at `https://mail.kncept.com`, while this local run listens on `http://localhost:8080`.
+
+`STORAGE=s3` and `METADATA=ddb` select the requested backends. `RECEIVER=s3` and `USER_MANAGER=s3` are also part of the minimum: the bucket and `TABLE_PREFIX` would otherwise configure those components for both S3 and DDB, and startup refuses to guess. `SENDER=aws-ses` is inferred from the AWS credentials, and `SESSION=ddb` from `TABLE_PREFIX` (set `SESSION=memory` if you only want the metadata table). The `kncept-com-metadata` and `kncept-com-sessions` tables must already exist — Emissary does not create DynamoDB tables at startup. `run.sh` generates and prints an admin password and JWT secret when unset; set `PASSWORD` and `JWT_SECRET` yourself to keep them stable across restarts.
+
 ## Documentation
 
 - [Design](docs/DESIGN.md) — goals, concepts and technology choices
