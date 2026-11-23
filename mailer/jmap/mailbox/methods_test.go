@@ -131,6 +131,8 @@ type mailboxSetResponse struct {
 	Destroyed    []string                   `json:"destroyed"`
 	NotCreated   map[string]base.SetError   `json:"notCreated"`
 	NotDestroyed map[string]base.SetError   `json:"notDestroyed"`
+	OldState     string                     `json:"oldState"`
+	NewState     string                     `json:"newState"`
 }
 
 func callMailboxSet(t *testing.T, h *Handler, ctx context.Context, args string) mailboxSetResponse {
@@ -276,4 +278,90 @@ func TestMailboxChangesReturnsUpdatedPropertiesField(t *testing.T) {
 	if string(value) != "null" {
 		t.Errorf("updatedProperties = %s, want null (RFC 8621 section 2.2 permits null)", value)
 	}
+}
+
+// TestMailboxSet_AdvancesCachedState_RFC8621_2_5 reproduces the batch case
+// that the external conformance suite found: a cached mailbox snapshot from an
+// earlier method call must not make a /set report a stale newState or hide the
+// change from Mailbox/changes (RFC 8620 sections 5.2 and 5.3).
+func TestMailboxSet_AdvancesCachedState_RFC8621_2_5(t *testing.T) {
+	h, _, background := newMailboxTest(t)
+
+	// Each JMAP request gets its own request cache. Prime it the way an
+	// earlier Mailbox/get in the same batch would before each /set.
+	request := func() context.Context {
+		ctx := base.WithRequestCache(background)
+		if _, err := h.MailboxGet(ctx, mailboxTestAccount, json.RawMessage(`{"ids":[]}`)); err != nil {
+			t.Fatalf("MailboxGet() error = %v", err)
+		}
+		return ctx
+	}
+	state := func(raw []byte) string {
+		var response struct {
+			State string `json:"state"`
+		}
+		if err := json.Unmarshal(raw, &response); err != nil {
+			t.Fatalf("unmarshal state response: %v (raw %s)", err, raw)
+		}
+		if response.State == "" {
+			t.Fatalf("response has no state: %s", raw)
+		}
+		return response.State
+	}
+
+	before := state(mustMailboxGet(t, h, request()))
+	created := callMailboxSet(t, h, request(), `{"create":{"c1":{"name":"Before Rename"}}}`)
+	if created.OldState != before {
+		t.Errorf("oldState = %q, want %q", created.OldState, before)
+	}
+	if created.NewState == created.OldState {
+		t.Fatalf("create returned newState == oldState %q", created.NewState)
+	}
+	var createdObject struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created.Created["c1"], &createdObject); err != nil {
+		t.Fatalf("unmarshal created mailbox: %v", err)
+	}
+	if createdObject.ID == "" {
+		t.Fatalf("created mailbox has no id: %s", created.Created["c1"])
+	}
+
+	updated := callMailboxSet(t, h, request(), `{"update":{"`+createdObject.ID+`":{"name":"After Rename"}}}`)
+	if updated.OldState != created.NewState {
+		t.Errorf("update oldState = %q, want create newState %q", updated.OldState, created.NewState)
+	}
+	if updated.NewState == updated.OldState {
+		t.Fatalf("update returned newState == oldState %q", updated.NewState)
+	}
+
+	raw, err := h.MailboxChanges(base.WithRequestCache(background), mailboxTestAccount,
+		json.RawMessage(`{"sinceState":"`+created.NewState+`"}`))
+	if err != nil {
+		t.Fatalf("MailboxChanges() error = %v", err)
+	}
+	var changes struct {
+		Updated []string `json:"updated"`
+	}
+	if err := json.Unmarshal(raw, &changes); err != nil {
+		t.Fatalf("unmarshal MailboxChanges response: %v (raw %s)", err, raw)
+	}
+	found := false
+	for _, id := range changes.Updated {
+		if id == createdObject.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("updated = %v, want %q", changes.Updated, createdObject.ID)
+	}
+}
+
+func mustMailboxGet(t *testing.T, h *Handler, ctx context.Context) []byte {
+	t.Helper()
+	raw, err := h.MailboxGet(ctx, mailboxTestAccount, json.RawMessage(`{"ids":[]}`))
+	if err != nil {
+		t.Fatalf("MailboxGet() error = %v", err)
+	}
+	return raw
 }

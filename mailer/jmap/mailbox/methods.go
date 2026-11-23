@@ -84,6 +84,15 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 		State: func(ctx context.Context) (string, error) {
 			return h.syncMailboxState(ctx, accountID, h.getMailboxes(ctx, accountID))
 		},
+		// A /get or /query earlier in the same batch may have cached the
+		// mailbox list. Discard that snapshot before HandleSet reads newState,
+		// so the tracker diffs the post-mutation data and advances the state
+		// (RFC 8620 section 5.3, RFC 8621 section 2.2). Without this, newState
+		// repeats oldState and Mailbox/changes reports no update.
+		Finalize: func(ctx context.Context) error {
+			base.InvalidateCache(ctx, mailboxListCacheKey{accountID: accountID})
+			return nil
+		},
 		Create: func(ctx context.Context, cid string, raw json.RawMessage) (json.RawMessage, *base.SetError, error) {
 			fail := func(setErr base.SetError) (json.RawMessage, *base.SetError, error) {
 				return nil, &setErr, nil

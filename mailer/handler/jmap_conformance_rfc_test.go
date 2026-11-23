@@ -318,3 +318,81 @@ func TestSearchSnippet_EmptyResultNullNotFound_RFC8621_5(t *testing.T) {
 		t.Errorf("list = %v, want empty array", result["list"])
 	}
 }
+
+// TestMailboxSet_StateAdvancesAfterCachedRead_RFC8621_2_5 pins the conformance
+// failures mailbox/set-state-changes and mailbox/changes-after-rename. A cached
+// mailbox snapshot must not make /set return a stale newState, and the
+// subsequent rename must appear in Mailbox/changes from the create's newState.
+func TestMailboxSet_StateAdvancesAfterCachedRead_RFC8621_2_5(t *testing.T) {
+	h, token, accountID := conformanceHandler(t, false)
+	using := []string{"urn:ietf:params:jmap:mail"}
+
+	state := func() string {
+		resp := jmapRequest(t, h, token, using, []JmapMethodCall{
+			{"Mailbox/get", map[string]any{"accountId": accountID, "ids": []string{}}, "get"},
+		})
+		value, _ := jmapMethodResult(t, resp, "Mailbox/get")["state"].(string)
+		if value == "" {
+			t.Fatalf("Mailbox/get has no state: %v", resp)
+		}
+		return value
+	}
+
+	before := state()
+	createResp := jmapRequest(t, h, token, using, []JmapMethodCall{
+		{"Mailbox/set", map[string]any{
+			"accountId": accountID,
+			"create": map[string]any{
+				"c1": map[string]any{"name": "Before Rename", "parentId": nil},
+			},
+		}, "create"},
+	})
+	createResult := jmapMethodResult(t, createResp, "Mailbox/set")
+	createOld, _ := createResult["oldState"].(string)
+	createNew, _ := createResult["newState"].(string)
+	if createOld != before {
+		t.Errorf("create oldState = %q, want Mailbox/get state %q", createOld, before)
+	}
+	if createNew == createOld {
+		t.Fatalf("create returned newState == oldState %q", createNew)
+	}
+	created, _ := createResult["created"].(map[string]any)
+	entry, _ := created["c1"].(map[string]any)
+	mailboxID, _ := entry["id"].(string)
+	if mailboxID == "" {
+		t.Fatalf("Mailbox/set created = %v, want c1 with an id", created)
+	}
+
+	updateResp := jmapRequest(t, h, token, using, []JmapMethodCall{
+		{"Mailbox/set", map[string]any{
+			"accountId": accountID,
+			"update": map[string]any{
+				mailboxID: map[string]any{"name": "After Rename"},
+			},
+		}, "update"},
+	})
+	updateResult := jmapMethodResult(t, updateResp, "Mailbox/set")
+	updateOld, _ := updateResult["oldState"].(string)
+	updateNew, _ := updateResult["newState"].(string)
+	if updateOld != createNew {
+		t.Errorf("update oldState = %q, want create newState %q", updateOld, createNew)
+	}
+	if updateNew == updateOld {
+		t.Fatalf("update returned newState == oldState %q", updateNew)
+	}
+
+	changesResp := jmapRequest(t, h, token, using, []JmapMethodCall{
+		{"Mailbox/changes", map[string]any{"accountId": accountID, "sinceState": createNew}, "changes"},
+	})
+	changes := jmapMethodResult(t, changesResp, "Mailbox/changes")
+	updated, _ := changes["updated"].([]any)
+	found := false
+	for _, id := range updated {
+		if id == mailboxID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Mailbox/changes updated = %v, want %q", updated, mailboxID)
+	}
+}

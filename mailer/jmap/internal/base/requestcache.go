@@ -25,6 +25,21 @@ type cachedValue[T any] struct {
 	err   error
 }
 
+// InvalidateCache drops the cached value for key so a later Cached call within
+// the same request reloads it. A /set method must do this after mutating data
+// that an earlier method call already cached: otherwise its newState would be
+// derived from the pre-mutation snapshot and /changes would miss the update.
+// Without WithRequestCache there is nothing to invalidate.
+func InvalidateCache(ctx context.Context, key any) {
+	cache, _ := ctx.Value(requestCacheKey{}).(*requestCache)
+	if cache == nil {
+		return
+	}
+	cache.mu.Lock()
+	delete(cache.values, key)
+	cache.mu.Unlock()
+}
+
 // Cached returns the value produced by load for key on the first call within
 // this request. Without WithRequestCache it simply calls load, which keeps the
 // helper safe for callers outside the JMAP dispatcher (for example push timers).
