@@ -4,16 +4,10 @@
 // Mailto links are marked for in-app handling via postMessage.
 
 import DOMPurify from 'dompurify';
-import { JSDOM } from 'jsdom';
 
-// Create a DOMPurify instance for Node.js (JSDOM) environment
-const window = new JSDOM('').window;
-const purify = DOMPurify(window);
-
-// Type helpers for JSDOM elements
-interface HTMLElementWithAttributes extends HTMLElement {
-  attributes: NamedNodeMap;
-}
+// Bind DOMPurify to the browser (or the jsdom window used by tests). Importing
+// jsdom here would pull Node-only code into the client bundle.
+const purify = DOMPurify();
 
 // Allowed tags for email content - conservative set for safe rendering
 const ALLOWED_TAGS = [
@@ -74,9 +68,8 @@ export function sanitizeEmailHtml(html: string): string {
   // First pass: DOMPurify to remove dangerous content
   let sanitized = purify.sanitize(html, PURIFY_CONFIG);
 
-  // Second pass: Parse with JSDOM to rewrite links
-  const dom = new JSDOM(sanitized);
-  const document = dom.window.document;
+  // Second pass: parse with the browser's DOMParser to rewrite links
+  const document = new DOMParser().parseFromString(sanitized, 'text/html');
 
   // Rewrite all <a> tags to open in new tab
   const anchors = document.querySelectorAll('a[href]');
@@ -112,7 +105,7 @@ export function sanitizeEmailHtml(html: string): string {
   // Remove any remaining event handler attributes that might have slipped through
   const elements = document.querySelectorAll('*');
   for (let i = 0; i < elements.length; i++) {
-    const el = elements[i] as HTMLElementWithAttributes;
+    const el = elements[i];
     const attrs = Array.from(el.attributes);
     attrs.forEach((attr: Attr) => {
       if (attr.name.startsWith('on') && attr.name.toLowerCase() !== 'onload') {
