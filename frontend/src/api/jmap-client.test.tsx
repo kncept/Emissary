@@ -2,7 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getEmails } from '../api.ts';
+import { getEmails, login, logout } from '../api.ts';
 import { resetJMAPClientCache } from '../api/jmap-client.ts';
 
 const jmapEmailA = {
@@ -61,8 +61,8 @@ describe('JMAP client cache identity binding (F-C1)', () => {
       if (url === '/api/auth/login') {
         const body = JSON.parse(String(init?.body ?? '{}')) as { username: string; password: string };
         if (body.username === 'usera@example.com') {
-          // Return token for user A
-          const payload = { sub: 'usera@example.com', systemManager: false, emissaryUserManagement: false };
+          // Return token for user A with sid
+          const payload = { sub: 'usera@example.com', sid: 'session-a', systemManager: false, emissaryUserManagement: false };
           const token = `header.${btoa(JSON.stringify(payload))}.signature`;
           return createMockResponse({
             accessToken: token,
@@ -72,8 +72,8 @@ describe('JMAP client cache identity binding (F-C1)', () => {
           });
         }
         if (body.username === 'userb@example.com') {
-          // Return token for user B
-          const payload = { sub: 'userb@example.com', systemManager: false, emissaryUserManagement: false };
+          // Return token for user B with different sid
+          const payload = { sub: 'userb@example.com', sid: 'session-b', systemManager: false, emissaryUserManagement: false };
           const token = `header.${btoa(JSON.stringify(payload))}.signature`;
           return createMockResponse({
             accessToken: token,
@@ -90,21 +90,23 @@ describe('JMAP client cache identity binding (F-C1)', () => {
       if (url === '/.well-known/jmap') {
         // Return different sessions based on the Authorization header
         const authHeader = init?.headers && new Headers(init.headers).get('Authorization');
-        if (authHeader?.includes('usera@example.com')) {
-          return createMockResponse({
-            username: 'usera@example.com',
-            apiUrl: '/api/',
-            primaryAccounts: { 'urn:ietf:params:jmap:mail': 'acct_user_a' },
-          });
+        const token = authHeader?.replace('Bearer ', '');
+        let username = 'usera@example.com';
+        if (token) {
+          try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            username = payload.sub || 'usera@example.com';
+          } catch {
+            // ignore
+          }
         }
-        if (authHeader?.includes('userb@example.com')) {
+        if (username === 'userb@example.com') {
           return createMockResponse({
             username: 'userb@example.com',
             apiUrl: '/api/',
             primaryAccounts: { 'urn:ietf:params:jmap:mail': 'acct_user_b' },
           });
         }
-        // Default fallback
         return createMockResponse({
           username: 'usera@example.com',
           apiUrl: '/api/',
@@ -124,7 +126,17 @@ describe('JMAP client cache identity binding (F-C1)', () => {
         }
         // Return emails based on the current account
         const authHeader = init?.headers && new Headers(init.headers).get('Authorization');
-        if (authHeader?.includes('userb@example.com')) {
+        const token = authHeader?.replace('Bearer ', '');
+        let username = 'usera@example.com';
+        if (token) {
+          try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            username = payload.sub || 'usera@example.com';
+          } catch {
+            // ignore
+          }
+        }
+        if (username === 'userb@example.com') {
           return createMockResponse({
             methodResponses: [
               ['Email/query', { accountId: 'acct_user_b', queryState: '1', ids: ['e2'], total: 1 }, 'query1'],
@@ -156,56 +168,30 @@ describe('JMAP client cache identity binding (F-C1)', () => {
     vi.useRealTimers();
   });
 
-  const mountInbox = async () => {
-    act(() => {
-      root!.render(
-        <MemoryRouter>
-          <Routes>
-            <Route path="/" element={<div data-testid="inbox">Inbox</div>} />
-          </Routes>
-        </MemoryRouter>,
-      );
-    });
-    await flush();
-  };
-
   it('uses User B account after logout/login as different user', async () => {
-    // Step 1: Login as User A
-    const loginResponseA = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: 'usera@example.com', password: 'password' }),
-    });
-    const tokensA = await loginResponseA.json();
-    window.localStorage.setItem('emissary_token', tokensA.accessToken);
-    window.localStorage.setItem('emissary_refresh_token', tokensA.refreshToken);
+    // Step 1: Login as User A using the real login function
+    const resultA = await login('usera@example.com', 'password');
+    expect(resultA.token).toBeDefined();
+    expect(resultA.username).toBe('usera@example.com');
 
     // Step 2: Fetch emails as User A (this populates the JMAP cache with User A's session)
     const emailsA = await getEmails();
     expect(emailsA).toHaveLength(1);
     expect(emailsA[0].subject).toBe('Email for User A');
 
-    // Step 3: Logout
-    await fetch('/api/auth/logout', { method: 'POST' });
-    window.localStorage.removeItem('emissary_token');
-    window.localStorage.removeItem('emissary_refresh_token');
+    // Step 3: Logout using the real logout function
+    await logout();
 
-    // Step 4: Login as User B
-    const loginResponseB = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: 'userb@example.com', password: 'password' }),
-    });
-    const tokensB = await loginResponseB.json();
-    window.localStorage.setItem('emissary_token', tokensB.accessToken);
-    window.localStorage.setItem('emissary_refresh_token', tokensB.refreshToken);
+    // Step 4: Login as User B using the real login function
+    const resultB = await login('userb@example.com', 'password');
+    expect(resultB.token).toBeDefined();
+    expect(resultB.username).toBe('userb@example.com');
 
     // Step 5: Fetch emails as User B - this should use User B's account, not User A's cached session
     const emailsB = await getEmails();
     
-    // THIS ASSERTION SHOULD FAIL BEFORE THE FIX:
-    // The JMAP client cache is keyed only by accountId, not by token sub+sid
-    // So it will still use User A's cached session and return User A's emails
+    // THIS ASSERTION SHOULD PASS AFTER THE FIX:
+    // The JMAP client cache is now keyed by token sub+sid
     expect(emailsB).toHaveLength(1);
     expect(emailsB[0].subject).toBe('Email for User B');
   });

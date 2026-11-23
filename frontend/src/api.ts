@@ -7,6 +7,7 @@ import {
   getToken,
   setTokens,
 } from './api/auth-fetch.ts';
+import { resetJMAPClientCache } from './api/jmap-client.ts';
 import type {
   BucketRootResponse,
   ConfigurationDetail,
@@ -270,6 +271,10 @@ export async function login(username: string, password: string): Promise<LoginRe
   const tokens = response.data as TokenResponse;
   setTokens(tokens.accessToken, tokens.refreshToken);
 
+  // Invalidate JMAP client cache on new login so the new session's
+  // JMAP session and mailbox ids are fetched fresh.
+  resetJMAPClientCache();
+
   // A masquerade target left over from a previous session would be used as
   // the accountId for the first JMAP email requests after navigating home.
   // Clear it before the app can make any of those requests.
@@ -307,6 +312,7 @@ export async function logout(): Promise<void> {
     }
   } finally {
     clearToken();
+    resetJMAPClientCache();
   }
 }
 

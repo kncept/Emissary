@@ -9,7 +9,7 @@ import type {
 } from './generated/schemas/jmap';
 import { htmlToText } from '../html.ts';
 import type { SendEmailRequest } from '../types.ts';
-import { authenticatedFetch } from './auth-fetch.ts';
+import { authenticatedFetch, getSessionIdentity } from './auth-fetch.ts';
 import { recordEmailCheck } from './email-checks.ts';
 
 const SESSION_URL = '/.well-known/jmap';
@@ -31,11 +31,12 @@ interface JmapMethodResponse {
   id: string;
 }
 
-let sessionPromise: Promise<Session> | null = null;
+// Session cache keyed by session identity (sub|sid) to isolate different users/sessions.
+const sessionCache = new Map<string, Promise<Session>>();
 
 /** Clears cached Session and discovered mailbox ids (used by tests and logout). */
 export function resetJMAPClientCache(): void {
-  sessionPromise = null;
+  sessionCache.clear();
   mailboxIdCache.clear();
 }
 
@@ -81,13 +82,17 @@ async function fetchJmapSession(): Promise<Session> {
 }
 
 async function getJmapSession(): Promise<Session> {
-  if (!sessionPromise) {
-    sessionPromise = fetchJmapSession().catch((error) => {
-      sessionPromise = null;
+  const identity = getSessionIdentity();
+  const cacheKey = identity || 'anonymous';
+  let promise = sessionCache.get(cacheKey);
+  if (!promise) {
+    promise = fetchJmapSession().catch((error) => {
+      sessionCache.delete(cacheKey);
       throw error;
     });
+    sessionCache.set(cacheKey, promise);
   }
-  return sessionPromise;
+  return promise;
 }
 
 async function getAccountId(session: Session): Promise<string> {
@@ -131,7 +136,7 @@ function expandURITemplate(template: string, values: Record<string, string>): st
 
 // Mailbox ids are server-assigned opaque ids, never the literal strings
 // "inbox"/"drafts". Discover them through Mailbox/query + Mailbox/get and cache
-// per account so masquerading never reuses another account's ids.
+// per account and session identity so masquerading never reuses another account's ids.
 const mailboxIdCache = new Map<string, Promise<string>>();
 
 /**
@@ -142,7 +147,8 @@ const mailboxIdCache = new Map<string, Promise<string>>();
 async function discoverMailboxId(role: 'inbox' | 'drafts'): Promise<string> {
   const session = await getJmapSession();
   const accountId = await resolveAccountId(session);
-  const cacheKey = `${accountId}|${role}`;
+  const identity = getSessionIdentity() || 'anonymous';
+  const cacheKey = `${identity}|${accountId}|${role}`;
   const cached = mailboxIdCache.get(cacheKey);
   if (cached) return cached;
 

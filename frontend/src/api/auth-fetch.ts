@@ -18,6 +18,25 @@ export function clearTokens(): void {
   window.localStorage.removeItem(REFRESH_TOKEN_KEY);
 }
 
+/**
+ * Extracts the session identity from the current access token.
+ * Returns a string key combining the JWT `sub` (username) and `sid` (session id).
+ * This is used to scope JMAP caches to the current user session.
+ */
+export function getSessionIdentity(): string | null {
+  const token = getToken();
+  if (!token) return null;
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    const sub = payload.sub || '';
+    const sid = payload.sid || '';
+    if (!sub) return null;
+    return `${sub}|${sid}`;
+  } catch {
+    return null;
+  }
+}
+
 // A refresh rotates the refresh token (strict issue stepping on the server),
 // so concurrent 401s must share a single refresh rather than racing to use
 // the same already-spent token.
