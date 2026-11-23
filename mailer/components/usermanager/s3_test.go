@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"sort"
 	"strings"
@@ -17,8 +18,12 @@ import (
 )
 
 // fakeS3 is an in-memory object store implementing the s3Client interface.
-// ListObjectsV2 honours Prefix, StartAfter (exclusive) and MaxKeys, so the
-// pagination logic under test is exercised.
+// ListObjectsV2 honours Prefix, StartAfter (exclusive), ContinuationToken and
+// MaxKeys, so the pagination logic under test is exercised. Continuation
+// tokens are deliberately opaque strings rather than object keys, as with
+// real S3, to catch code that feeds them back as StartAfter.
+const fakeS3TokenPrefix = "opaque-s3-token:"
+
 type fakeS3 struct {
 	mu   sync.Mutex
 	blob map[string][]byte
@@ -83,6 +88,16 @@ func (f *fakeS3) ListObjectsV2(_ context.Context, params *s3.ListObjectsV2Input,
 
 	prefix := aws.ToString(params.Prefix)
 	startAfter := aws.ToString(params.StartAfter)
+	if strings.HasPrefix(startAfter, fakeS3TokenPrefix) {
+		return nil, fmt.Errorf("opaque continuation token used as StartAfter: %q", startAfter)
+	}
+	if token := aws.ToString(params.ContinuationToken); token != "" {
+		key, ok := strings.CutPrefix(token, fakeS3TokenPrefix)
+		if !ok {
+			return nil, fmt.Errorf("invalid continuation token %q", token)
+		}
+		startAfter = key
+	}
 
 	keys := make([]string, 0, len(f.blob))
 	for key := range f.blob {
@@ -112,7 +127,7 @@ func (f *fakeS3) ListObjectsV2(_ context.Context, params *s3.ListObjectsV2Input,
 		IsTruncated: aws.Bool(len(page) < len(keys)),
 	}
 	if len(page) < len(keys) && len(page) > 0 {
-		output.NextContinuationToken = aws.String(page[len(page)-1])
+		output.NextContinuationToken = aws.String(fakeS3TokenPrefix + page[len(page)-1])
 	}
 	return output, nil
 }

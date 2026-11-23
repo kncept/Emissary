@@ -109,19 +109,25 @@ func (m *S3Manager) List(ctx context.Context, cursor string, pageSize int) ([]*E
 		return nil, "", err
 	}
 
-	// Each record is tracked with its object key. The cursor is the key of
-	// the last user returned, resumed with StartAfter (exclusive), so pages
-	// never skip or repeat a record even when a page holds more keys than
-	// user records (mailboxes share the users/ listing prefix).
+	// Each record is tracked with its object key. The API cursor is the key
+	// of the last user returned, resumed with StartAfter (exclusive), so
+	// pages never skip or repeat a record even when a page holds more keys
+	// than user records (mailboxes share the users/ listing prefix).
+	// S3's own continuation tokens are opaque: they must only be passed back
+	// as ContinuationToken, never as StartAfter, or S3 restarts the listing
+	// and the same user records are returned again.
 	records := make([]listRecord, 0, pageSize)
 	after := startAfter
+	var continuationToken *string
 	for {
 		input := &s3.ListObjectsV2Input{
 			Bucket:  aws.String(m.bucket),
 			Prefix:  aws.String(email.MailboxKeyRoot),
 			MaxKeys: aws.Int32(int32(maxUserPageSize)),
 		}
-		if after != "" {
+		if continuationToken != nil {
+			input.ContinuationToken = continuationToken
+		} else if after != "" {
 			input.StartAfter = aws.String(after)
 		}
 
@@ -169,7 +175,7 @@ func (m *S3Manager) List(ctx context.Context, cursor string, pageSize int) ([]*E
 		if token == "" {
 			break
 		}
-		after = token
+		continuationToken = aws.String(token)
 	}
 
 	users := make([]*EmissaryUser, 0, len(records))

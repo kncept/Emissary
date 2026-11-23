@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getUsers, createUser, updateUser, deleteUser, changeUserPassword } from '../api.ts';
 import ConfirmDialog from './ConfirmDialog.tsx';
 import MaskIcon from './MaskIcon.tsx';
@@ -12,10 +12,24 @@ interface User {
   rules: string[];
 }
 
+// Email addresses identify users, so keep one row per address even if a page
+// is retried or contains differently-cased variants of the same address.
+function uniqueUsers(list: User[]): User[] {
+  const seen = new Set<string>();
+  return list.filter((user) => {
+    const key = user.email.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export default function Users({ currentUser }: { currentUser?: string }) {
   const [users, setUsers] = useState<User[]>([]);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
@@ -53,13 +67,23 @@ export default function Users({ currentUser }: { currentUser?: string }) {
     !!currentUser && currentUser.toLowerCase() === email.toLowerCase();
 
   const load = async (cursor?: string, append = false) => {
+    if (append) {
+      // A ref guard blocks a second click before React re-renders the button.
+      if (loadingMoreRef.current) return;
+      loadingMoreRef.current = true;
+      setLoadingMore(true);
+    }
     try {
       const data = await getUsers(cursor);
-      setUsers((prev) => (append ? [...prev, ...(data.users || [])] : data.users || []));
+      setUsers((prev) => uniqueUsers(append ? [...prev, ...(data.users || [])] : data.users || []));
       setNextCursor(data.nextCursor || undefined);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load users');
     } finally {
+      if (append) {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
       setLoading(false);
     }
   };
@@ -350,7 +374,7 @@ export default function Users({ currentUser }: { currentUser?: string }) {
           </table>
           {nextCursor && (
             <div style={{ padding: '1rem' }}>
-              <button className="btn btn-secondary" onClick={() => void load(nextCursor, true)} disabled={busy || loading}>
+              <button className="btn btn-secondary" onClick={() => void load(nextCursor, true)} disabled={busy || loading || loadingMore}>
                 Load more
               </button>
             </div>
