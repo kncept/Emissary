@@ -40,8 +40,13 @@ function App() {
   };
 
   const handleLogout = async () => {
-    await apiLogout();
-    setAuth({ authenticated: false });
+    try {
+      await apiLogout();
+    } finally {
+      // Always clear auth state, even if logout request fails (e.g. network error).
+      // The server-side session is already invalidated or will be on next request.
+      setAuth({ authenticated: false });
+    }
   };
 
   const authenticated = auth.authenticated;

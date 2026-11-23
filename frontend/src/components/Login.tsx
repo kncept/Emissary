@@ -19,23 +19,29 @@ export default function Login({ onAuthenticated }: LoginProps) {
     setError('');
     setLoading(true);
 
-    const result = await login(username, password);
-    if (result.token) {
-      // Tell the app we're now authenticated, then go home. The auth state
-      // update and navigation are batched, so the home route renders the
-      // logged-in view instead of bouncing back to /login.
-      onAuthenticated({
-        authenticated: true,
-        username: result.username,
-        email: result.email,
-        systemManager: result.systemManager,
-        emissaryUserManagement: result.emissaryUserManagement,
-      });
-      navigate('/');
-    } else {
-      setError(result.error || 'Login failed');
+    try {
+      const result = await login(username, password);
+      if (result.token) {
+        // Tell the app we're now authenticated, then go home. The auth state
+        // update and navigation are batched, so the home route renders the
+        // logged-in view instead of bouncing back to /login.
+        onAuthenticated({
+          authenticated: true,
+          username: result.username,
+          email: result.email,
+          systemManager: result.systemManager,
+          emissaryUserManagement: result.emissaryUserManagement,
+        });
+        navigate('/');
+      } else {
+        setError(result.error || 'Login failed');
+      }
+    } catch {
+      // Network error or unexpected failure
+      setError('Login failed. Please check your connection and try again.');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (

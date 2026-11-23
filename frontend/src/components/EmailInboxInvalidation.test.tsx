@@ -2,15 +2,12 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getEmail, markRead, markFlagged, deleteEmail } from '../api.ts';
 import { clearEmailRefreshRequest } from '../api/email-checks.ts';
 import { resetJMAPClientCache } from '../api/jmap-client.ts';
 import { resetEmailListCache } from '../email-list-cache.ts';
 import EmailList from './EmailList.tsx';
 import EmailView from './EmailView.tsx';
 import Layout from './Layout.tsx';
-
-const FIVE_MINUTES = 5 * 60 * 1000;
 
 const jmapEmail = {
   id: 'e1',
@@ -51,9 +48,6 @@ describe('inbox invalidation after EmailView mutations (F-H1)', () => {
 
   const apiCallCount = () =>
     fetchMock.mock.calls.filter(([url]) => String(url) === '/api/').length;
-
-  const jmapSessionCallCount = () =>
-    fetchMock.mock.calls.filter(([url]) => String(url) === '/.well-known/jmap').length;
 
   const flush = async (ms = 0) => {
     await act(async () => {
@@ -136,7 +130,7 @@ describe('inbox invalidation after EmailView mutations (F-H1)', () => {
         });
       }
       if (url === '/api/') {
-        const request = JSON.parse(String(init?.body ?? '{}')) as { methodCalls?: string[][] };
+        const request = JSON.parse(String(init?.body ?? '{}')) as { methodCalls?: Array<[string, Record<string, unknown>, string]> };
         if (request.methodCalls?.some((call) => call[0] === 'Mailbox/query')) {
           return createMockResponse({
             methodResponses: [
