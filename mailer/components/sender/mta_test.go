@@ -24,6 +24,12 @@ type smtpSession struct {
 // startSMTPServer returns the client end of a pipe and a channel that receives
 // the commands and message body captured by a minimal SMTP server.
 func startSMTPServer(t *testing.T) (net.Conn, <-chan smtpSession) {
+	return startSMTPServerRejecting(t, nil)
+}
+
+// startSMTPServerRejecting behaves like startSMTPServer but answers RCPT TO for
+// the given lowercased addresses with the given SMTP status code.
+func startSMTPServerRejecting(t *testing.T, reject map[string]int) (net.Conn, <-chan smtpSession) {
 	t.Helper()
 	clientConn, serverConn := net.Pipe()
 	done := make(chan smtpSession, 1)
@@ -43,7 +49,17 @@ func startSMTPServer(t *testing.T) (net.Conn, <-chan smtpSession) {
 			switch upper := strings.ToUpper(line); {
 			case strings.HasPrefix(upper, "EHLO "), strings.HasPrefix(upper, "HELO "):
 				fmt.Fprint(serverConn, "250-test.example\r\n250 8BITMIME\r\n")
-			case strings.HasPrefix(upper, "MAIL FROM:"), strings.HasPrefix(upper, "RCPT TO:"):
+			case strings.HasPrefix(upper, "MAIL FROM:"):
+				fmt.Fprint(serverConn, "250 OK\r\n")
+			case strings.HasPrefix(upper, "RCPT TO:"):
+				address := ""
+				if start, end := strings.Index(line, "<"), strings.Index(line, ">"); start >= 0 && end > start {
+					address = strings.ToLower(line[start+1 : end])
+				}
+				if code, ok := reject[address]; ok {
+					fmt.Fprintf(serverConn, "%d rejected\r\n", code)
+					continue
+				}
 				fmt.Fprint(serverConn, "250 OK\r\n")
 			case upper == "DATA":
 				fmt.Fprint(serverConn, "354 go ahead\r\n")
@@ -199,6 +215,122 @@ func TestMtaSender_SendGroupsRecipientsByDomain(t *testing.T) {
 	orgSession := <-sessions["mx.example.org:2525"]
 	if !strings.Contains(strings.Join(orgSession.commands, "|"), "RCPT TO:<three@example.org>") {
 		t.Errorf("org session commands = %v", orgSession.commands)
+	}
+}
+
+func TestMtaSender_RejectedRecipientDoesNotDropOthers(t *testing.T) {
+	s := testMtaSender()
+	s.lookupMX = func(_ context.Context, _ string) ([]*net.MX, error) {
+		return []*net.MX{{Host: "mx.example.net.", Pref: 10}}, nil
+	}
+	var done <-chan smtpSession
+	s.dial = func(_ context.Context, _, address string) (net.Conn, error) {
+		if address != "mx.example.net:2525" {
+			t.Errorf("unexpected failover dial to %s for a permanent rejection", address)
+		}
+		var conn net.Conn
+		conn, done = startSMTPServerRejecting(t, map[string]int{"bad@example.net": 550})
+		return conn, nil
+	}
+
+	err := s.Send(context.Background(), &email.UserEmail{
+		From: email.Address{Address: "sender@example.com"},
+		To: []email.Address{
+			{Address: "one@example.net"},
+			{Address: "bad@example.net"},
+			{Address: "two@example.net"},
+		},
+		Subject: "Hello",
+		Text:    "Body",
+	})
+	if err == nil || !strings.Contains(err.Error(), "bad@example.net") {
+		t.Fatalf("Send() error = %v, want an error naming the rejected recipient", err)
+	}
+	session := <-done
+	want := []string{
+		"EHLO example.com",
+		"MAIL FROM:<sender@example.com> BODY=8BITMIME",
+		"RCPT TO:<one@example.net>",
+		"RCPT TO:<bad@example.net>",
+		"RCPT TO:<two@example.net>",
+		"DATA",
+		"QUIT",
+	}
+	if got := strings.Join(session.commands, "|"); got != strings.Join(want, "|") {
+		t.Errorf("SMTP commands = %v, want %v", session.commands, want)
+	}
+	if !strings.HasPrefix(session.data, "From: sender@example.com\r\n") {
+		t.Errorf("DATA was not sent for the accepted recipients: %q", session.data)
+	}
+}
+
+func TestMtaSender_AllRecipientsRejectedSkipsData(t *testing.T) {
+	s := testMtaSender()
+	s.lookupMX = func(_ context.Context, _ string) ([]*net.MX, error) { return nil, nil }
+	conn, done := startSMTPServerRejecting(t, map[string]int{"bad@example.net": 550})
+	s.dial = func(_ context.Context, _, _ string) (net.Conn, error) { return conn, nil }
+
+	err := s.Send(context.Background(), &email.UserEmail{
+		From: email.Address{Address: "sender@example.com"},
+		To:   []email.Address{{Address: "bad@example.net"}},
+		Text: "body",
+	})
+	if err == nil || !strings.Contains(err.Error(), "550") {
+		t.Fatalf("Send() error = %v, want the 550 rejection", err)
+	}
+	session := <-done
+	if strings.Contains(strings.Join(session.commands, "|"), "DATA") {
+		t.Errorf("DATA should not be sent with no accepted recipients: %v", session.commands)
+	}
+}
+
+func TestMtaSender_TemporaryRCPTRejectionRetriedOnNextMX(t *testing.T) {
+	s := testMtaSender()
+	s.lookupMX = func(_ context.Context, _ string) ([]*net.MX, error) {
+		return []*net.MX{{Host: "mx1.example.net.", Pref: 10}, {Host: "mx2.example.net.", Pref: 20}}, nil
+	}
+	var dialed []string
+	sessions := make(map[string]<-chan smtpSession)
+	s.dial = func(_ context.Context, _, address string) (net.Conn, error) {
+		dialed = append(dialed, address)
+		var reject map[string]int
+		if address == "mx1.example.net:2525" {
+			reject = map[string]int{"later@example.net": 450}
+		}
+		conn, done := startSMTPServerRejecting(t, reject)
+		sessions[address] = done
+		return conn, nil
+	}
+
+	err := s.Send(context.Background(), &email.UserEmail{
+		From: email.Address{Address: "sender@example.com"},
+		To:   []email.Address{{Address: "later@example.net"}},
+		Text: "body",
+	})
+	if err != nil {
+		t.Fatalf("Send() error = %v; a transient RCPT rejection should be retried at the next MX", err)
+	}
+	if strings.Join(dialed, "|") != "mx1.example.net:2525|mx2.example.net:2525" {
+		t.Errorf("dial order = %v, want both MX hosts", dialed)
+	}
+	first := <-sessions["mx1.example.net:2525"]
+	if strings.Contains(strings.Join(first.commands, "|"), "DATA") {
+		t.Errorf("first MX should not receive DATA: %v", first.commands)
+	}
+	second := <-sessions["mx2.example.net:2525"]
+	if !strings.Contains(strings.Join(second.commands, "|"), "RCPT TO:<later@example.net>") || second.data == "" {
+		t.Errorf("second MX did not deliver: commands=%v data=%q", second.commands, second.data)
+	}
+}
+
+func TestBareAddress_StripsCRLF(t *testing.T) {
+	const injected = "bad@example.net\r\nRCPT TO:<victim@example.net>"
+	got := bareAddress(injected)
+	if strings.ContainsAny(got, "\r\n") {
+		t.Errorf("bareAddress(%q) = %q, want no CRLF", injected, got)
+	}
+	if got := bareAddress("Name <user@example.net>"); got != "user@example.net" {
+		t.Errorf("bareAddress with display name = %q", got)
 	}
 }
 

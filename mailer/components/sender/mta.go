@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"sort"
 	"strings"
 	"time"
@@ -226,16 +227,59 @@ func (s *MtaSender) deliverToDomain(ctx context.Context, domain, envelopeFrom st
 	}
 	slog.Debug("mta: delivering to domain", "domain", domain, "hosts", hosts, "recipients", len(recipients))
 
-	var errs []error
+	// Only recipients that no host has accepted are passed to the next MX. A
+	// delivered recipient must never be retried, or a failover could duplicate
+	// the message. Permanent RCPT rejections are final for that recipient.
+	pending := recipients
+	var hostErrs []error
+	var recipientErrs []error
 	for _, host := range hosts {
-		if err := s.deliverToHost(ctx, host, envelopeFrom, envelopeParams, helloName, recipients, wire); err != nil {
-			errs = append(errs, fmt.Errorf("mx %s: %w", host, err))
+		if len(pending) == 0 {
+			break
+		}
+		results, err := s.deliverToHost(ctx, host, envelopeFrom, envelopeParams, helloName, pending, wire)
+		if err != nil {
+			// The transaction never got far enough to accept any recipient, so
+			// every pending recipient can safely be tried at the next MX.
+			hostErrs = append(hostErrs, fmt.Errorf("mx %s: %w", host, err))
 			continue
 		}
-		slog.Info("mta: delivered to domain", "domain", domain, "host", host, "recipients", len(recipients))
-		return nil
+		remaining := make([]smtpRecipient, 0, len(results))
+		delivered := 0
+		for _, result := range results {
+			if result.err == nil {
+				delivered++
+				continue
+			}
+			if isTemporarySMTPError(result.err) {
+				remaining = append(remaining, result.recipient)
+				continue
+			}
+			recipientErrs = append(recipientErrs, fmt.Errorf("mx %s: %w", host, result.err))
+		}
+		if delivered > 0 {
+			slog.Info("mta: delivered to domain", "domain", domain, "host", host, "recipients", delivered)
+		}
+		pending = remaining
+	}
+	if len(pending) == 0 {
+		return errors.Join(recipientErrs...)
+	}
+	// Report host-level failures only when they left recipients undelivered.
+	errs := append([]error{}, recipientErrs...)
+	errs = append(errs, hostErrs...)
+	for _, recipient := range pending {
+		errs = append(errs, fmt.Errorf("no MX accepted recipient %s", recipient.address))
 	}
 	return errors.Join(errs...)
+}
+
+// isTemporarySMTPError reports whether the SMTP reply was a 4xx transient
+// failure. Such a recipient can be retried at another MX; a 5xx rejection is
+// permanent and must not be retried there.
+func isTemporarySMTPError(err error) bool {
+	var smtpErr *textproto.Error
+	return errors.As(err, &smtpErr) && smtpErr.Code >= 400 && smtpErr.Code < 500
 }
 
 // mxHosts returns mail hosts in preference order. A domain with no usable MX
@@ -267,11 +311,11 @@ func (s *MtaSender) mxHosts(ctx context.Context, domain string) ([]string, error
 	return hosts, nil
 }
 
-func (s *MtaSender) deliverToHost(ctx context.Context, host, envelopeFrom string, envelopeParams map[string]*string, helloName string, recipients []smtpRecipient, wire []byte) error {
+func (s *MtaSender) deliverToHost(ctx context.Context, host, envelopeFrom string, envelopeParams map[string]*string, helloName string, recipients []smtpRecipient, wire []byte) ([]recipientResult, error) {
 	addr := net.JoinHostPort(host, s.port)
 	conn, err := s.dial(ctx, "tcp", addr)
 	if err != nil {
-		return fmt.Errorf("dial %s: %w", addr, err)
+		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
 	defer conn.Close()
 
@@ -283,50 +327,79 @@ func (s *MtaSender) deliverToHost(ctx context.Context, host, envelopeFrom string
 
 	client, err := smtp.NewClient(conn, host)
 	if err != nil {
-		return fmt.Errorf("smtp greeting: %w", err)
+		return nil, fmt.Errorf("smtp greeting: %w", err)
 	}
 	defer client.Close()
 
 	if err := client.Hello(helloName); err != nil {
-		return fmt.Errorf("smtp hello: %w", err)
+		return nil, fmt.Errorf("smtp hello: %w", err)
 	}
 	if ok, _ := client.Extension("STARTTLS"); ok {
 		if err := client.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
-			return fmt.Errorf("smtp starttls: %w", err)
+			return nil, fmt.Errorf("smtp starttls: %w", err)
 		}
 	}
 	if err := smtpEnvelopeCommand(client, "MAIL FROM", envelopeFrom, envelopeParams); err != nil {
-		return fmt.Errorf("smtp mail from: %w", err)
+		return nil, fmt.Errorf("smtp mail from: %w", err)
 	}
+
+	// An RCPT rejection applies only to that address. Keep issuing RCPT TO for
+	// the remaining recipients so one bad address cannot discard the whole
+	// transaction and drop otherwise deliverable mail.
+	results := make([]recipientResult, 0, len(recipients))
+	accepted := make([]smtpRecipient, 0, len(recipients))
 	for _, recipient := range recipients {
 		if err := smtpEnvelopeCommand(client, "RCPT TO", recipient.address, recipient.parameters); err != nil {
-			return fmt.Errorf("smtp rcpt to %s: %w", recipient.address, err)
+			slog.Debug("mta: recipient rejected", "host", host, "recipient", recipient.address, "err", err)
+			results = append(results, recipientResult{recipient: recipient, err: fmt.Errorf("smtp rcpt to %s: %w", recipient.address, err)})
+			continue
 		}
+		accepted = append(accepted, recipient)
+	}
+	if len(accepted) == 0 {
+		return results, nil
 	}
 
 	writer, err := client.Data()
 	if err != nil {
-		return fmt.Errorf("smtp data: %w", err)
+		return appendDataFailure(results, accepted, fmt.Errorf("smtp data: %w", err)), nil
 	}
 	if _, err := writer.Write(wire); err != nil {
 		_ = writer.Close()
-		return fmt.Errorf("smtp write: %w", err)
+		return appendDataFailure(results, accepted, fmt.Errorf("smtp write: %w", err)), nil
 	}
 	if err := writer.Close(); err != nil {
-		return fmt.Errorf("smtp finish: %w", err)
+		return appendDataFailure(results, accepted, fmt.Errorf("smtp finish: %w", err)), nil
+	}
+	for _, recipient := range accepted {
+		results = append(results, recipientResult{recipient: recipient})
 	}
 	// The message has already been accepted at this point; a broken QUIT must
 	// not turn a successful delivery into a reported failure.
 	if err := client.Quit(); err != nil {
 		slog.Warn("mta: smtp quit warning", "host", host, "err", err)
 	}
-	return nil
+	return results, nil
+}
+
+func appendDataFailure(results []recipientResult, accepted []smtpRecipient, err error) []recipientResult {
+	for _, recipient := range accepted {
+		results = append(results, recipientResult{recipient: recipient, err: err})
+	}
+	return results
 }
 
 // smtpRecipient is one RCPT TO address with its ESMTP parameters.
 type smtpRecipient struct {
 	address    string
 	parameters map[string]*string
+}
+
+// recipientResult is the outcome for one recipient at one MX host. A nil err
+// means the server accepted the message for that recipient.
+type recipientResult struct {
+	recipient smtpRecipient
+	err       error
 }
 
 // groupRecipients returns the bare envelope recipients for each domain. A JMAP
@@ -429,6 +502,10 @@ func bareAddress(value string) string {
 	if value == "" {
 		return ""
 	}
+	// Envelope addresses are written verbatim to the SMTP command line. Values
+	// that are not valid addresses are kept for compatibility, but CRLF must
+	// never survive: it would permit SMTP command injection.
+	value = strings.ReplaceAll(strings.ReplaceAll(value, "\r", ""), "\n", "")
 	if parsed, err := mail.ParseAddress(value); err == nil {
 		return parsed.Address
 	}
