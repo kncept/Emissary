@@ -64,3 +64,9 @@ func (s *S3Event) OnComplete(ctx context.Context) error {
 	slog.Debug("Receiver: deleted staging object", "bucket", s.bucket, "key", s.key)
 	return nil
 }
+
+// SESMessageID implements InboundRawEmailEvent.
+// Returns the S3 object key, which is the SES message ID for staged objects.
+func (s *S3Event) SESMessageID() string {
+	return s.key
+}

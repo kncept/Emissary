@@ -183,6 +183,10 @@ func (e *testEventWithFailingComplete) OnComplete(_ context.Context) error {
 	return errors.New("complete failed")
 }
 
+func (e *testEventWithFailingComplete) SESMessageID() string {
+	return ""
+}
+
 func TestProcessMessageRetryOnlyReprocessesFailedRecipients(t *testing.T) {
 	raw := []byte(receivedHeader("alice@example.com", "bob@example.com") +
 		"From: sender@example.com\r\nSubject: hi\r\n\r\nbody\r\n")

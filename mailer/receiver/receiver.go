@@ -135,9 +135,10 @@ func ParseRawMessage(key string, rawMessage []byte) *ParsedMessage {
 // It handles recipient resolution, dedup, delivery, bounces.
 // The caller is responsible for parsing and providing the key, recipients,
 // parsed email, and raw message bytes.
-// Returns the list of dedup IDs that were recorded, so the caller can clear them
-// after any storage-specific cleanup (e.g., deleting the staging object).
-func (r *Receiver) processMessage(ctx context.Context, key string, recipients []string, parsedEmail *email.UserEmail, rawMessage []byte, wireEmail *email.WireFormatEmail) ([]string, error) {
+// sesMessageID is the SES message ID for bounce correlation (distinct from the
+// dedup key which is a content hash). Returns the list of dedup IDs that were
+// recorded, so the caller can clear them after any storage-specific cleanup.
+func (r *Receiver) processMessage(ctx context.Context, key, sesMessageID string, recipients []string, parsedEmail *email.UserEmail, rawMessage []byte, wireEmail *email.WireFormatEmail) ([]string, error) {
 	if len(recipients) == 0 {
 		slog.Warn("Receiver: no envelope recipients found", "key", key)
 		return nil, nil
@@ -166,7 +167,7 @@ func (r *Receiver) processMessage(ctx context.Context, key string, recipients []
 			continue
 		}
 
-		if err := r.handleRecipient(ctx, key, recipient, parsedEmail, rawMessage, bounceSender, wireEmail); err != nil {
+		if err := r.handleRecipient(ctx, key, sesMessageID, recipient, parsedEmail, rawMessage, bounceSender, wireEmail); err != nil {
 			slog.Error("Receiver: failed to handle recipient", "recipient", recipient, "err", err)
 			processingErrors = append(processingErrors, err)
 			continue
@@ -196,18 +197,24 @@ func (r *Receiver) ProcessEvent(ctx context.Context, event InboundRawEmailEvent)
 		return fmt.Errorf("failed to get raw email from event: %w", err)
 	}
 
-	// We need a key for dedup and bounce purposes. Since the event doesn't
-	// provide one, we generate one from the message content.
-	// In practice, callers should use an event that carries the original SES message ID.
-	key := generateEventKey(rawMessage)
+	// Generate a content-hash key for dedup tracking (fallback for events without SES message ID)
+	dedupKey := generateEventKey(rawMessage)
 
-	slog.Info("Receiver: processing event", "key", key)
+	// Get the SES message ID from the event for bounce correlation.
+	// For S3-staged events, this is the S3 object key. If empty, we fall back
+	// to the dedup key for bounce as well (legacy behavior).
+	sesMessageID := event.SESMessageID()
+	if sesMessageID == "" {
+		sesMessageID = dedupKey
+	}
+
+	slog.Info("Receiver: processing event", "dedup_key", dedupKey, "ses_message_id", sesMessageID)
 
 	// Parse the raw message
-	parsed := ParseRawMessage(key, rawMessage)
+	parsed := ParseRawMessage(dedupKey, rawMessage)
 
-	// Delegate to the common processing function
-	dedupIDs, err := r.processMessage(ctx, key, parsed.Recipients, parsed.ParsedEmail, parsed.RawMessage, parsed.WireEmail)
+	// Delegate to the common processing function, passing the SES message ID for bounces
+	dedupIDs, err := r.processMessage(ctx, dedupKey, sesMessageID, parsed.Recipients, parsed.ParsedEmail, parsed.RawMessage, parsed.WireEmail)
 	if err != nil {
 		return err
 	}
@@ -220,7 +227,7 @@ func (r *Receiver) ProcessEvent(ctx context.Context, event InboundRawEmailEvent)
 	// Clear dedup markers on success
 	if clearer, ok := r.cfg.Dedup.(DedupClearer); ok {
 		if err := clearer.Clear(ctx, dedupIDs...); err != nil {
-			slog.Warn("Receiver: failed to clear dedup markers", "key", key, "err", err)
+			slog.Warn("Receiver: failed to clear dedup markers", "key", dedupKey, "err", err)
 		}
 	}
 
@@ -247,7 +254,10 @@ func (r *Receiver) ProcessParsedEvent(ctx context.Context, event InboundEmailEve
 	// or use a hash of the wire email's serialized form.
 	key := generateEventKeyFromWireEmail(wireEmail)
 
-	slog.Info("Receiver: processing parsed event", "key", key)
+	// For parsed events, use the same key as SES message ID (derived from Message-ID if available)
+	sesMessageID := key
+
+	slog.Info("Receiver: processing parsed event", "key", key, "ses_message_id", sesMessageID)
 
 	// Serialize the wire email to raw bytes for storage (preserves exact MIME structure)
 	rawMessage, err := wireEmail.ToWireFormat()
@@ -256,7 +266,7 @@ func (r *Receiver) ProcessParsedEvent(ctx context.Context, event InboundEmailEve
 	}
 
 	// Delegate to the common processing function
-	dedupIDs, err := r.processMessage(ctx, key, recipients, parsedEmail, rawMessage, wireEmail)
+	dedupIDs, err := r.processMessage(ctx, key, sesMessageID, recipients, parsedEmail, rawMessage, wireEmail)
 	if err != nil {
 		return err
 	}
@@ -312,12 +322,14 @@ func sha256Sum(data []byte) []byte {
 // it is passed to delivery so the stored message is byte-exact. A returned
 // error means the recipient still needs processing on a retry; callers record
 // a dedup marker only when this returns nil.
-func (r *Receiver) handleRecipient(ctx context.Context, key, recipient string, parsedEmail *email.UserEmail, rawMessage []byte, bounceSender string, wireEmail *email.WireFormatEmail) error {
+// sesMessageID is the SES message ID for bounce correlation (distinct from the
+// dedup key which is a content hash).
+func (r *Receiver) handleRecipient(ctx context.Context, key, sesMessageID, recipient string, parsedEmail *email.UserEmail, rawMessage []byte, bounceSender string, wireEmail *email.WireFormatEmail) error {
 	identity := MailIdentityForRecipient(recipient)
 	rules, err := r.cfg.IdentityConfig.GetByIdentity(identity)
 	if err != nil {
 		slog.Warn("Receiver: no routing rules; bouncing", "recipient", recipient, "identity", identity, "err", err)
-		if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
+		if err := r.sendBounce(ctx, sesMessageID, parsedEmail, recipient, bounceSender); err != nil {
 			slog.Error("Receiver: failed to send bounce", "recipient", recipient, "err", err)
 			return fmt.Errorf("bounce to %s failed: %w", recipient, err)
 		}
@@ -356,7 +368,7 @@ func (r *Receiver) handleRecipient(ctx context.Context, key, recipient string, p
 			r.maybeSendVacationReply(ctx, mailbox, parsedEmail, wireEmail)
 			applied = true
 		case Bounce:
-			if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
+			if err := r.sendBounce(ctx, sesMessageID, parsedEmail, recipient, bounceSender); err != nil {
 				slog.Error("Receiver: failed to send bounce", "recipient", recipient, "err", err)
 				return fmt.Errorf("bounce to %s failed: %w", recipient, err)
 			}
@@ -382,7 +394,7 @@ func (r *Receiver) handleRecipient(ctx context.Context, key, recipient string, p
 		// No rule applied. Bounce rather than discard: dropping is only
 		// ever the result of an explicit Drop rule.
 		slog.Warn("Receiver: no handler rule matched; bouncing", "recipient", recipient)
-		if err := r.sendBounce(ctx, key, parsedEmail, recipient, bounceSender); err != nil {
+		if err := r.sendBounce(ctx, sesMessageID, parsedEmail, recipient, bounceSender); err != nil {
 			slog.Error("Receiver: failed to send bounce", "recipient", recipient, "err", err)
 			return fmt.Errorf("bounce to %s failed: %w", recipient, err)
 		}

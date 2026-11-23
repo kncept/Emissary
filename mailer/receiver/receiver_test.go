@@ -51,6 +51,10 @@ func (e *fakeS3Event) OnComplete(_ context.Context) error {
 	return nil
 }
 
+func (e *fakeS3Event) SESMessageID() string {
+	return ""
+}
+
 type fakeUserManager struct{}
 
 func (fakeUserManager) Name() string { return "fake" }
