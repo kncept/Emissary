@@ -5,6 +5,8 @@ import { getEmail, getRawEmail, markRead, markFlagged, deleteEmail } from '../ap
 import { requestEmailRefresh } from '../api/email-checks.ts';
 import type { Email } from '../types.ts';
 import ConfirmDialog from './ConfirmDialog.tsx';
+import { createEmailHtmlDocument, MAILTO_MESSAGE_TYPE } from '../sanitize.ts';
+import { parseMailtoUrl, mailtoToComposeQuery } from '../mailto.ts';
 
 // Save the raw message as a .eml file using a temporary object URL. The JMAP
 // downloadUrl requires an Authorization header, which a normal link cannot set.
@@ -21,12 +23,6 @@ function downloadRawMime(raw: string, id: string): void {
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
-}
-
-// Render HTML mail in a sandboxed frame so message styles cannot leak into the
-// app and message scripts cannot run.
-function emailHtmlDocument(html: string): string {
-  return `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px;line-height:1.6;color:#1e293b;word-wrap:break-word}img{max-width:100%;height:auto}a{color:#2563eb}</style></head><body>${html}</body></html>`;
 }
 
 export default function EmailView() {
@@ -106,6 +102,23 @@ export default function EmailView() {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [showRaw]);
+
+  // Handle mailto link clicks from the sandboxed email iframe
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      // Verify the message type
+      if (event.data?.type !== MAILTO_MESSAGE_TYPE) return;
+
+      // Parse the mailto URL and navigate to compose with pre-filled fields
+      const mailtoData = parseMailtoUrl(event.data.href || '');
+      if (!mailtoData) return;
+
+      navigate(`/compose${mailtoToComposeQuery(mailtoData)}`);
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [navigate]);
 
   const handleMarkRead = async (read: boolean) => {
     if (!email) return;
@@ -262,8 +275,8 @@ export default function EmailView() {
           <iframe
             className="email-html-frame"
             title="Email content"
-            sandbox=""
-            srcDoc={emailHtmlDocument(email.html)}
+            sandbox="allow-scripts allow-popups"
+            srcDoc={createEmailHtmlDocument(email.html)}
           />
         ) : (
           <pre>{email.body}</pre>

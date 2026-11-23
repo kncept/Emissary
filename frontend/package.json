@@ -13,13 +13,16 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@types/dompurify": "^3.0.5",
     "date-fns": "^4.1.0",
+    "dompurify": "^3.5.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-router-dom": "^7.0.0",
     "react-simple-wysiwyg": "^3.4.1"
   },
   "devDependencies": {
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^24.19.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

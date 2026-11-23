@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { getEmail, sendEmail, MASQUERADE_AS_KEY, parseAddressList } from '../api.ts';
 import { htmlToText, isHtmlEmpty } from '../html.ts';
 import type { Email, EmailBodyFormat } from '../types.ts';
@@ -79,18 +79,35 @@ export default function Compose({ mode, currentUser }: ComposeProps) {
     }
   })();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   // The From address is locked: the masquerade target when one is set,
   // otherwise the current user. The server enforces the same value, so this
   // field is display-only.
   const from = window.localStorage.getItem(MASQUERADE_AS_KEY) || currentUser || '';
-  const [to, setTo] = useState('');
-  const [cc, setCc] = useState('');
-  const [bcc, setBcc] = useState('');
-  const [showCcBcc, setShowCcBcc] = useState(false);
-  const [subject, setSubject] = useState('');
-  const [format, setFormat] = useState<EmailBodyFormat>('html');
-  const [plainBody, setPlainBody] = useState('');
-  const [htmlBody, setHtmlBody] = useState('');
+
+  // Pre-fill fields from URL query parameters (used by mailto link handling)
+  const initialTo = searchParams.get('to') || '';
+  const initialCc = searchParams.get('cc') || '';
+  const initialBcc = searchParams.get('bcc') || '';
+  const initialSubject = searchParams.get('subject') || '';
+  const initialBody = searchParams.get('body') || '';
+
+  const [to, setTo] = useState(initialTo);
+  const [cc, setCc] = useState(initialCc);
+  const [bcc, setBcc] = useState(initialBcc);
+  const [showCcBcc, setShowCcBcc] = useState(Boolean(initialCc || initialBcc));
+  const [subject, setSubject] = useState(initialSubject);
+  const [format, setFormat] = useState<EmailBodyFormat>(initialBody ? 'plain' : 'html');
+  const [plainBody, setPlainBody] = useState(initialBody);
+  const [htmlBody, setHtmlBody] = useState(() => {
+    if (!initialBody) return '';
+    // Escape HTML special characters for safe rendering in the editor
+    return '<p>' + initialBody
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\n/g, '<br>') + '</p>';
+  });
   const [inReplyTo, setInReplyTo] = useState<string[]>([]);
   const [references, setReferences] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
