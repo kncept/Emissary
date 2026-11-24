@@ -127,13 +127,13 @@ SES identities are account-wide. The `ses:ListIdentities` permission is granted 
 {
   "rules": [
     { "domain": "_", "rules": ["DeliverToUser", "Bounce"] },
-    { "domain": "news.example.com", "rules": ["DeliverToMailIdentity", "Bounce"] },
+    { "domain": "news.example.com", "rules": ["DeliverTo:unknown@kncept.com", "Bounce"] },
     { "domain": "blocked.example.com", "rules": ["Drop"] }
   ]
 }
 ```
 
-Rules are first-match-wins: `DeliverToUser` (known users only), `DeliverToMailIdentity` (the identity's own mailbox, no account required), `Bounce` (standard bounce) and `Drop` (silent discard). `Bounce` and `Drop` are terminal, so order them after rules that should take precedence; no match bounces. The `_` fallback and a `*` key both mean the recipient's own mailbox. See [CONFIGURATION.md](CONFIGURATION.md#receiver-inbound-routing-rules) for storage and [ARCHITECTURE.md](ARCHITECTURE.md#inbound-mail-flow) for routing.
+Rules are first-match-wins: `DeliverToUser` (known users only), `DeliverTo:<address>` (a saved user address, applied when that user exists), `DeliverToMailIdentity` (the identity's own mailbox, no account required), `Bounce` (standard bounce) and `Drop` (silent discard). To set up a catchall, add `DeliverTo:unknown@kncept.com` before `Bounce`: mail for unknown recipients is filed in that account's inbox when it exists. A saved address that is not a known user falls through to the next rule. `Bounce` and `Drop` are terminal, so order them after rules that should take precedence; no match bounces. The `_` fallback and a `*` key both mean the recipient's own mailbox. See [CONFIGURATION.md](CONFIGURATION.md#receiver-inbound-routing-rules) for storage and [ARCHITECTURE.md](ARCHITECTURE.md#inbound-mail-flow) for routing.
 
 `PUT /api/support/receiver/rules` adds or replaces only the supplied identities; all others, including `_`, are left untouched, so it never deletes an entry:
 

@@ -6,21 +6,39 @@ import {
   getSupportReceiverRules,
   saveSupportReceiverRules,
 } from '../api.ts';
-import { HandlerRule } from '../api/generated/schemas/support/index.ts';
 import type {
+  HandlerRule,
   ReceiverDomainRules,
   ReceiverIdentity,
 } from '../api/generated/schemas/support/index.ts';
 import ConfirmDialog from './ConfirmDialog.tsx';
 
 const FALLBACK_IDENTITY = '_';
+const DELIVER_TO_USER: HandlerRule = 'DeliverToUser';
+const DELIVER_TO_PREFIX = 'DeliverTo:';
 
+// The generated HandlerRule is a string, not an enum: DeliverTo rules carry a
+// saved user address. The fixed choices live here; the parameterised one uses
+// an address input beside the dropdown.
 const RULE_OPTIONS: HandlerRule[] = [
-  HandlerRule.DeliverToUser,
-  HandlerRule.DeliverToMailIdentity,
-  HandlerRule.Bounce,
-  HandlerRule.Drop,
+  DELIVER_TO_USER,
+  DELIVER_TO_PREFIX,
+  'DeliverToMailIdentity',
+  'Bounce',
+  'Drop',
 ];
+
+function deliverToAddress(rule: HandlerRule): string | null {
+  return rule.startsWith(DELIVER_TO_PREFIX) ? rule.slice(DELIVER_TO_PREFIX.length) : null;
+}
+
+function validRule(rule: HandlerRule): boolean {
+  const address = deliverToAddress(rule);
+  if (address === null) {
+    return RULE_OPTIONS.includes(rule) && rule !== DELIVER_TO_PREFIX;
+  }
+  return /^[^@\s]+@[^@\s]+$/.test(address);
+}
 
 function sortRules(rules: ReceiverDomainRules[]): ReceiverDomainRules[] {
   return [...rules].sort((a, b) => {
@@ -72,6 +90,10 @@ export default function ReceiverSupport() {
   }, []);
 
   const onSave = async () => {
+    if (rules.some((entry) => entry.rules.some((rule) => !validRule(rule)))) {
+      setError('Enter a valid user address for each DeliverTo rule, for example DeliverTo:unknown@kncept.com.');
+      return;
+    }
     setSaving(true);
     setError('');
     setMessage('');
@@ -138,7 +160,7 @@ export default function ReceiverSupport() {
       const fallbackRules = current.find((rule) => rule.domain === FALLBACK_IDENTITY)?.rules;
       const rules = fallbackRules?.length
         ? [...fallbackRules]
-        : [HandlerRule.DeliverToUser, HandlerRule.Bounce];
+        : [DELIVER_TO_USER, 'Bounce'];
       return sortRules([...current, { domain, rules }]);
     });
   };
@@ -259,7 +281,7 @@ export default function ReceiverSupport() {
                     <div className="receiver-rule-row" key={index}>
                       <select
                         aria-label={`Rule ${index + 1} for ${rule.domain}`}
-                        value={ruleName}
+                        value={deliverToAddress(ruleName) === null ? ruleName : DELIVER_TO_PREFIX}
                         onChange={(event) => editRules(rule.domain, (current) => {
                           const updated = [...current];
                           updated[index] = event.target.value as HandlerRule;
@@ -267,9 +289,24 @@ export default function ReceiverSupport() {
                         })}
                       >
                         {RULE_OPTIONS.map((option) => (
-                          <option key={option} value={option}>{option}</option>
+                          <option key={option} value={option}>
+                            {option === DELIVER_TO_PREFIX ? 'DeliverTo:<user address>' : option}
+                          </option>
                         ))}
                       </select>
+                      {deliverToAddress(ruleName) !== null && (
+                        <input
+                          aria-label={`Delivery address for rule ${index + 1} for ${rule.domain}`}
+                          className="receiver-rule-address"
+                          value={deliverToAddress(ruleName) ?? ''}
+                          placeholder="user@example.com"
+                          onChange={(event) => editRules(rule.domain, (current) => {
+                            const updated = [...current];
+                            updated[index] = `${DELIVER_TO_PREFIX}${event.target.value}` as HandlerRule;
+                            return updated;
+                          })}
+                        />
+                      )}
                       <button
                         className="btn btn-secondary btn-small"
                         onClick={() => moveRule(rule.domain, index, -1)}
@@ -299,7 +336,7 @@ export default function ReceiverSupport() {
                 </div>
                 <button
                   className="btn btn-secondary btn-small"
-                  onClick={() => editRules(rule.domain, (current) => [...current, HandlerRule.DeliverToUser])}
+                  onClick={() => editRules(rule.domain, (current) => [...current, DELIVER_TO_USER])}
                 >
                   + Add rule
                 </button>

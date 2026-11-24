@@ -176,6 +176,52 @@ describe('Receiver rules editor', () => {
     expect(saved.find((rule) => rule.domain === '_')?.rules).toEqual(['DeliverToMailIdentity']);
   });
 
+  it('edits a saved DeliverTo target and validates it before saving', async () => {
+    render();
+    await settle();
+
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="Rule 1 for _"]')!;
+    act(() => {
+      select.value = 'DeliverTo:';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Delivery address for rule 1 for _"]')!;
+    expect(input).not.toBeNull();
+    expect(input.value).toBe('');
+
+    click(buttonByText(container, 'OK'));
+    await settle();
+    expect(saveSupportReceiverRules).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Enter a valid user address');
+
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    act(() => {
+      setValue.call(input, 'unknown@kncept.com');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    click(buttonByText(container, 'OK'));
+    await settle();
+    expect(saveSupportReceiverRules).toHaveBeenCalledTimes(1);
+    const saved = vi.mocked(saveSupportReceiverRules).mock.calls[0][0];
+    expect(saved.find((rule) => rule.domain === '_')?.rules)
+      .toEqual(['DeliverTo:unknown@kncept.com', 'Bounce']);
+  });
+
+  it('shows the saved address in an existing DeliverTo rule', async () => {
+    vi.mocked(getSupportReceiverRules).mockResolvedValue({
+      rules: [{ domain: '_', rules: ['DeliverTo:catchall@kncept.com', 'Bounce'] }],
+    });
+    render();
+    await settle();
+
+    expect((container.querySelector('select[aria-label="Rule 1 for _"]') as HTMLSelectElement).value)
+      .toBe('DeliverTo:');
+    expect((container.querySelector('input[aria-label="Delivery address for rule 1 for _"]') as HTMLInputElement).value)
+      .toBe('catchall@kncept.com');
+  });
+
   it('discards unsaved edits on Reload and navigates back on Cancel', async () => {
     render();
     await settle();

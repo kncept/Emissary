@@ -341,21 +341,11 @@ func (r *Receiver) handleRecipient(ctx context.Context, key, sesMessageID, recip
 		slog.Debug("Receiver: evaluating rule", "rule", rule, "mailbox", rules.MailIdentity, "recipient", recipient)
 		switch rule {
 		case DeliverToUser:
-			user, err := r.cfg.UserManager.Lookup(ctx, recipient)
-			if err != nil || user == nil {
-				// This rule does not apply: keep trying the remaining rules
-				// in order instead of deciding the recipient's fate here.
-				slog.Debug("Receiver: recipient is not a user", "recipient", recipient, "rule", rule)
-				continue
+			var err error
+			applied, err = r.deliverToKnownUser(ctx, recipient, parsedEmail, rawMessage, wireEmail)
+			if err != nil {
+				return err
 			}
-			if err := r.deliverToRecipient(ctx, recipient, parsedEmail, rawMessage); err != nil {
-				slog.Error("Receiver: failed to deliver", "recipient", recipient, "err", err)
-				return fmt.Errorf("delivery to %s failed: %w", recipient, err)
-			}
-			// RFC 8621 section 8: a vacation response is sent when a message is
-			// delivered to the user's mail store, subject to RFC 3834 rules.
-			r.maybeSendVacationReply(ctx, recipient, parsedEmail, wireEmail)
-			applied = true
 		case DeliverToMailIdentity:
 			mailbox := rules.deliveryIdentity(recipient)
 			slog.Debug("Receiver: routed to mail identity", "recipient", recipient, "mailbox", mailbox)
@@ -381,6 +371,16 @@ func (r *Receiver) handleRecipient(ctx context.Context, key, sesMessageID, recip
 			slog.Warn("Receiver: dropped message for recipient", "key", key, "recipient", recipient)
 			applied = true
 		default:
+			// DeliverTo:<address> carries its saved target in the rule itself.
+			// Like DeliverToUser it applies only when that user exists.
+			if target, ok := rule.deliverToTarget(); ok {
+				var err error
+				applied, err = r.deliverToKnownUser(ctx, target, parsedEmail, rawMessage, wireEmail)
+				if err != nil {
+					return err
+				}
+				break
+			}
 			// Validate should reject unknown rules, but never lose mail if a
 			// config was built without going through NewReceiver.
 			slog.Warn("Receiver: ignoring unknown handler rule", "rule", rule, "recipient", recipient)
@@ -400,6 +400,27 @@ func (r *Receiver) handleRecipient(ctx context.Context, key, sesMessageID, recip
 		}
 	}
 	return nil
+}
+
+// deliverToKnownUser applies a rule addressed to a user account: DeliverToUser
+// names the envelope recipient, while DeliverTo:<address> names a saved target.
+// A missing account means the rule does not apply, so the caller keeps walking
+// the ordered rule list instead of bouncing immediately.
+func (r *Receiver) deliverToKnownUser(ctx context.Context, user string, parsedEmail *email.UserEmail, rawMessage []byte, wireEmail *email.WireFormatEmail) (bool, error) {
+	account, err := r.cfg.UserManager.Lookup(ctx, user)
+	if err != nil || account == nil {
+		// This rule does not apply: keep trying the remaining rules in order.
+		slog.Debug("Receiver: recipient is not a user", "user", user, "err", err)
+		return false, nil
+	}
+	if err := r.deliverToRecipient(ctx, user, parsedEmail, rawMessage); err != nil {
+		slog.Error("Receiver: failed to deliver", "user", user, "err", err)
+		return false, fmt.Errorf("delivery to %s failed: %w", user, err)
+	}
+	// RFC 8621 section 8: a vacation response is sent when a message is
+	// delivered to the user's mail store, subject to RFC 3834 rules.
+	r.maybeSendVacationReply(ctx, user, parsedEmail, wireEmail)
+	return true, nil
 }
 
 // deliverToRecipient stores the message using the configured storage. Storage

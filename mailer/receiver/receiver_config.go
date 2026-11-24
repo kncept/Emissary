@@ -3,6 +3,7 @@ package receiver
 import (
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 )
 
@@ -18,11 +19,45 @@ const DeliverToUser HandlerRule = "DeliverToUser"
 // delivers to a special catchall mailbox, accessible by system administrators
 const DeliverToMailIdentity HandlerRule = "DeliverToMailIdentity"
 
+// DeliverTo is the prefix of a rule with a saved target address. The complete
+// rule is "DeliverTo:<address>" (for example
+// "DeliverTo:unknown@kncept.com"), so the address travels in the rules list
+// without changing the config schema. DeliverTo only applies when the target
+// is a known user; otherwise the next rule is tried.
+const DeliverTo HandlerRule = "DeliverTo:"
+
 // sends a standard bounce
 const Bounce HandlerRule = "Bounce"
 
 // discards the message without delivering it or notifying the sender
 const Drop HandlerRule = "Drop"
+
+// DeliverToRule builds the rule that delivers to address. The address is
+// normalized so a stored rule always uses the canonical lowercase form.
+func DeliverToRule(address string) HandlerRule {
+	return HandlerRule(DeliverTo) + HandlerRule(normalizeIdentity(address))
+}
+
+// deliverToTarget extracts the saved target address from a DeliverTo rule. The
+// boolean is false for every other rule and for a malformed target.
+func (r HandlerRule) deliverToTarget() (string, bool) {
+	if !strings.HasPrefix(string(r), string(DeliverTo)) {
+		return "", false
+	}
+	target := normalizeIdentity(strings.TrimPrefix(string(r), string(DeliverTo)))
+	if !validRuleAddress(target) {
+		return "", false
+	}
+	return target, true
+}
+
+// validRuleAddress reports whether target is a bare RFC 5322 address. Display
+// names and group syntax are rejected so a saved rule cannot encode anything
+// except the mailbox that receives mail.
+func validRuleAddress(target string) bool {
+	parsed, err := mail.ParseAddress(target)
+	return err == nil && parsed.Name == "" && strings.EqualFold(parsed.Address, target)
+}
 
 // ErrIdentityConfigNotFound is returned when a store has no configuration for
 // an identity. LoadMailIdentityConfig treats it as "seed the base fallback".
@@ -54,7 +89,9 @@ func (h HandlerRules) Validate() error {
 		switch rule {
 		case DeliverToUser, DeliverToMailIdentity, Bounce, Drop:
 		default:
-			return fmt.Errorf("unknown handler rule %q", rule)
+			if _, ok := rule.deliverToTarget(); !ok {
+				return fmt.Errorf("unknown handler rule %q", rule)
+			}
 		}
 	}
 	return nil

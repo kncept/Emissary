@@ -121,8 +121,8 @@ func TestSupportReceiverSaveUpdatesCacheAndStore(t *testing.T) {
 		Rules: []supportapi.ReceiverDomainRules{{
 			Domain: "save.example.com",
 			Rules: []supportapi.HandlerRule{
-				supportapi.HandlerRuleDeliverToMailIdentity,
-				supportapi.HandlerRuleBounce,
+				supportapi.HandlerRule(receiver.DeliverToMailIdentity),
+				supportapi.HandlerRule(receiver.Bounce),
 			},
 		}},
 	})
@@ -178,7 +178,7 @@ func TestSupportReceiverUsesInjectedStore(t *testing.T) {
 	if _, err := h.SaveReceiverRules(ctx, &supportapi.ReceiverRulesRequest{
 		Rules: []supportapi.ReceiverDomainRules{{
 			Domain: "saved.example.com",
-			Rules:  []supportapi.HandlerRule{supportapi.HandlerRuleBounce},
+			Rules:  []supportapi.HandlerRule{supportapi.HandlerRule(receiver.Bounce)},
 		}},
 	}); err != nil {
 		t.Fatalf("SaveReceiverRules() error = %v", err)
@@ -325,6 +325,34 @@ func TestSupportReceiverRulesAcceptsDrop(t *testing.T) {
 	}
 	if !reflect.DeepEqual(stored.Rules, []receiver.HandlerRule{receiver.Drop}) {
 		t.Errorf("stored rules = %+v, want [Drop]", stored.Rules)
+	}
+}
+
+func TestSupportReceiverRulesAcceptsDeliverToAddress(t *testing.T) {
+	lister := &fakeSESIdentityLister{}
+	h, store := newReceiverSupportTestHandler(t, lister, nil)
+	_, token, _ := login(t, h, "admin", "secret")
+
+	body := `{"rules":[{"domain":"_","rules":["DeliverTo:unknown@kncept.com","Bounce"]}]}`
+	w := request(t, h, http.MethodPut, "/api/support/receiver/rules", body, token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, want %d (body %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	stored, err := store.Get(context.Background(), "_")
+	if err != nil {
+		t.Fatalf("stored rules: %v", err)
+	}
+	want := []receiver.HandlerRule{receiver.DeliverToRule("unknown@kncept.com"), receiver.Bounce}
+	if !reflect.DeepEqual(stored.Rules, want) {
+		t.Errorf("stored rules = %v, want %v", stored.Rules, want)
+	}
+
+	// A malformed saved address is rejected before it can reach the store.
+	w = request(t, h, http.MethodPut, "/api/support/receiver/rules",
+		`{"rules":[{"domain":"_","rules":["DeliverTo:not-an-address"]}]}`, token)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("PUT malformed DeliverTo status = %d, want %d (body %s)", w.Code, http.StatusBadRequest, w.Body.String())
 	}
 }
 

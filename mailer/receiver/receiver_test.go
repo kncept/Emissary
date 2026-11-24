@@ -544,6 +544,57 @@ func TestProcessMessageFallsThroughToRecipientIdentity(t *testing.T) {
 	}
 }
 
+func TestProcessMessageDeliversToSavedDeliverToUser(t *testing.T) {
+	raw := messageTo("catchall-sender@example.com")
+	identity := BaseMailIdentityConfig()
+	identity["example.com"] = HandlerRules{
+		MailIdentity: "example.com",
+		Rules:        []HandlerRule{DeliverToRule("unknown@kncept.com"), Bounce},
+	}
+	r, emailStore, mailSender := newRoutingTestReceiver(identity, fakeUserManager{})
+
+	if err := r.ProcessEvent(context.Background(), &fakeS3Event{raw: raw}); err != nil {
+		t.Fatalf("ProcessEvent() error = %v", err)
+	}
+	// The saved target receives the message; the original recipient and the
+	// Bounce fallback are not used once the rule applies.
+	listed, err := emailStore.ListEmails(context.Background(), "unknown@kncept.com", "inbox")
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("deliver-to target emails = %v, %v; want one delivery", listed, err)
+	}
+	original, err := emailStore.ListEmails(context.Background(), "catchall-sender@example.com", "inbox")
+	if err != nil || len(original) != 0 {
+		t.Errorf("original recipient emails = %v, %v; want none", original, err)
+	}
+	if len(mailSender.Bounces) != 0 {
+		t.Errorf("bounces = %+v, want none", mailSender.Bounces)
+	}
+}
+
+func TestProcessMessageDeliverToRuleSkipsUnknownUser(t *testing.T) {
+	raw := messageTo("fallback@example.com")
+	identity := BaseMailIdentityConfig()
+	identity["example.com"] = HandlerRules{
+		MailIdentity: "fallback@example.com",
+		Rules:        []HandlerRule{DeliverToRule("missing@kncept.com"), DeliverToMailIdentity},
+	}
+	r, emailStore, mailSender := newRoutingTestReceiver(
+		identity,
+		rejectingUserManager{invalid: "missing@kncept.com"},
+	)
+
+	if err := r.ProcessEvent(context.Background(), &fakeS3Event{raw: raw}); err != nil {
+		t.Fatalf("ProcessEvent() error = %v", err)
+	}
+	listed, err := emailStore.ListEmails(context.Background(), "fallback@example.com", "inbox")
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("fallback emails = %v, %v; want one delivery", listed, err)
+	}
+	if len(mailSender.Bounces) != 0 {
+		t.Errorf("bounces = %+v, want none", mailSender.Bounces)
+	}
+}
+
 func TestProcessMessageBounceRuleOverridesUserLookup(t *testing.T) {
 	raw := messageTo("blocked@example.com")
 	identity := BaseMailIdentityConfig()

@@ -144,6 +144,9 @@ When a consumer processes a staged object, each recipient is handled independent
    back to the `_` entry. First applicable rule wins:
    - `DeliverToUser` — only when `UserManager.Lookup` returns a known user,
      including the built-in administrator.
+   - `DeliverTo:<address>` — only when the saved target address resolves to a
+     known user; the message is delivered to that account rather than the
+     envelope recipient. An unknown target falls through to the next rule.
    - `DeliverToMailIdentity` — delivers to the identity's own mailbox without
      requiring a user account.
    - `Bounce` — a standard `UserUnknown` bounce through the configured sender,

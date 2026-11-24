@@ -131,6 +131,15 @@ func TestMailIdentityConfigValidate(t *testing.T) {
 			name:   "drop rule",
 			config: MailIdentityConfig{FallbackIdentity: {Rules: []HandlerRule{Drop}}},
 		},
+		{
+			name:   "deliver to saved user",
+			config: MailIdentityConfig{FallbackIdentity: {Rules: []HandlerRule{DeliverToRule("Unknown@Kncept.com"), Bounce}}},
+		},
+		{
+			name:    "deliver to malformed address",
+			config:  MailIdentityConfig{FallbackIdentity: {Rules: []HandlerRule{"DeliverTo:not-an-address"}}},
+			wantErr: "unknown handler rule",
+		},
 		{name: "missing fallback", config: MailIdentityConfig{}, wantErr: "fallback"},
 		{
 			name:    "empty rules",
