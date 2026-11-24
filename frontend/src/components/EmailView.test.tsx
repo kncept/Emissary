@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { getEmail, getRawEmail, markRead } from '../api.ts';
+import { requestEmailRefresh } from '../api/email-checks.ts';
 import type { MailboxRole } from '../types.ts';
 import EmailView from './EmailView.tsx';
 
@@ -24,6 +25,10 @@ vi.mock('../api.ts', () => ({
   markRead: vi.fn(async () => {}),
   markFlagged: vi.fn(),
   deleteEmail: vi.fn(),
+}));
+
+vi.mock('../api/email-checks.ts', () => ({
+  requestEmailRefresh: vi.fn(),
 }));
 
 function click(element: Element) {
@@ -79,10 +84,12 @@ describe('EmailView mark as read on open', () => {
 
     expect(markRead).toHaveBeenCalledWith(emailID, true);
     expect(markRead).toHaveBeenCalledTimes(1);
+    expect(requestEmailRefresh).toHaveBeenCalledWith('inbox');
   });
 
   it('does not call markRead for an already read email', async () => {
     vi.mocked(markRead).mockClear();
+    vi.mocked(requestEmailRefresh).mockClear();
     vi.mocked(getEmail).mockResolvedValueOnce({
       id: emailID,
       from: 'alice@example.com',
@@ -97,6 +104,7 @@ describe('EmailView mark as read on open', () => {
     await settle();
 
     expect(markRead).not.toHaveBeenCalled();
+    expect(requestEmailRefresh).not.toHaveBeenCalled();
   });
 });
 

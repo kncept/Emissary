@@ -84,7 +84,10 @@ export default function EmailView() {
         if (data && !data.read) {
           try {
             await markRead(data.id, true);
-            if (active) setEmail({ ...data, read: true });
+            if (active) {
+              setEmail({ ...data, read: true });
+              requestEmailRefresh(mailboxRole);
+            }
           } catch {
             // Ignore mark-read errors, email still displayed
           }
@@ -99,7 +102,7 @@ export default function EmailView() {
     return () => {
       active = false;
     };
-  }, [emailID]);
+  }, [emailID, mailboxRole]);
 
   useEffect(() => {
     if (!showRaw) return;
