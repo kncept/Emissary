@@ -1150,7 +1150,9 @@ func (s *GetConfigurationUnauthorized) UnmarshalJSON(data []byte) error {
 
 // Encode encodes HandlerRule as json.
 func (s HandlerRule) Encode(e *jx.Encoder) {
-	e.Str(string(s))
+	unwrapped := string(s)
+
+	e.Str(unwrapped)
 }
 
 // Decode decodes HandlerRule from json.
@@ -1158,24 +1160,18 @@ func (s *HandlerRule) Decode(d *jx.Decoder) error {
 	if s == nil {
 		return errors.New("invalid: unable to decode HandlerRule to nil")
 	}
-	v, err := d.StrBytes()
-	if err != nil {
-		return err
+	var unwrapped string
+	if err := func() error {
+		v, err := d.Str()
+		unwrapped = string(v)
+		if err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		return errors.Wrap(err, "alias")
 	}
-	// Try to use constant string.
-	switch HandlerRule(v) {
-	case HandlerRuleDeliverToUser:
-		*s = HandlerRuleDeliverToUser
-	case HandlerRuleDeliverToMailIdentity:
-		*s = HandlerRuleDeliverToMailIdentity
-	case HandlerRuleBounce:
-		*s = HandlerRuleBounce
-	case HandlerRuleDrop:
-		*s = HandlerRuleDrop
-	default:
-		*s = HandlerRule(v)
-	}
-
+	*s = HandlerRule(unwrapped)
 	return nil
 }
 

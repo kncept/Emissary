@@ -114,10 +114,11 @@ type Invoker interface {
 	// request (in particular the `_` fallback) are left untouched. Use `DELETE` on
 	// `/api/support/receiver/rules/{identity}` to remove an entry.
 	//
-	// Each identity must have at least one rule, and every rule must be a known `HandlerRule`. The `_`
-	// fallback must remain valid, otherwise the request is rejected with `400 Bad Request`. Submitted
-	// entries are persisted in the configured receiver config store and published to the active receiver
-	// cache. The updated rules are returned in the response.
+	// Each identity must have at least one rule, and every rule must be a known `HandlerRule` (including
+	// `DeliverTo:<address>` for a saved delivery target). The `_` fallback must remain valid, otherwise
+	// the request is rejected with `400 Bad Request`. Submitted entries are persisted in the configured
+	// receiver config store and published to the active receiver cache. The updated rules are returned in
+	// the response.
 	//
 	// PUT /api/support/receiver/rules
 	SaveReceiverRules(ctx context.Context, request *ReceiverRulesRequest) (SaveReceiverRulesRes, error)
@@ -1037,10 +1038,11 @@ func (c *Client) sendProcessEmail(ctx context.Context, request *ProcessEmailRequ
 // request (in particular the `_` fallback) are left untouched. Use `DELETE` on
 // `/api/support/receiver/rules/{identity}` to remove an entry.
 //
-// Each identity must have at least one rule, and every rule must be a known `HandlerRule`. The `_`
-// fallback must remain valid, otherwise the request is rejected with `400 Bad Request`. Submitted
-// entries are persisted in the configured receiver config store and published to the active receiver
-// cache. The updated rules are returned in the response.
+// Each identity must have at least one rule, and every rule must be a known `HandlerRule` (including
+// `DeliverTo:<address>` for a saved delivery target). The `_` fallback must remain valid, otherwise
+// the request is rejected with `400 Bad Request`. Submitted entries are persisted in the configured
+// receiver config store and published to the active receiver cache. The updated rules are returned in
+// the response.
 //
 // PUT /api/support/receiver/rules
 func (c *Client) SaveReceiverRules(ctx context.Context, request *ReceiverRulesRequest) (SaveReceiverRulesRes, error) {

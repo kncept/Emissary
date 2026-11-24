@@ -117,18 +117,23 @@ func (s *ConfigurationsResponse) Validate() error {
 }
 
 func (s HandlerRule) Validate() error {
-	switch s {
-	case "DeliverToUser":
-		return nil
-	case "DeliverToMailIdentity":
-		return nil
-	case "Bounce":
-		return nil
-	case "Drop":
-		return nil
-	default:
-		return errors.Errorf("invalid value: %v", s)
+	alias := (string)(s)
+	if err := (validate.String{
+		MinLength:     0,
+		MinLengthSet:  false,
+		MaxLength:     0,
+		MaxLengthSet:  false,
+		Email:         false,
+		Hostname:      false,
+		Regex:         regexMap["^(DeliverToUser|DeliverToMailIdentity|Bounce|Drop|DeliverTo:[^@\\s]+@[^@\\s]+)$"],
+		MinNumeric:    0,
+		MinNumericSet: false,
+		MaxNumeric:    0,
+		MaxNumericSet: false,
+	}).Validate(string(alias)); err != nil {
+		return errors.Wrap(err, "string")
 	}
+	return nil
 }
 
 func (s *ProcessEmailRequest) Validate() error {

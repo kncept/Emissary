@@ -4,8 +4,6 @@ package api
 
 import (
 	"time"
-
-	"github.com/go-faster/errors"
 )
 
 type BearerAuth struct {
@@ -304,63 +302,7 @@ type GetConfigurationUnauthorized Error
 
 func (*GetConfigurationUnauthorized) getConfigurationRes() {}
 
-// One receiver rule. `DeliverToUser` falls through when the user does not exist; `Drop` discards the
-// message without a bounce.
-// Ref: #/components/schemas/HandlerRule
 type HandlerRule string
-
-const (
-	HandlerRuleDeliverToUser         HandlerRule = "DeliverToUser"
-	HandlerRuleDeliverToMailIdentity HandlerRule = "DeliverToMailIdentity"
-	HandlerRuleBounce                HandlerRule = "Bounce"
-	HandlerRuleDrop                  HandlerRule = "Drop"
-)
-
-// AllValues returns all HandlerRule values.
-func (HandlerRule) AllValues() []HandlerRule {
-	return []HandlerRule{
-		HandlerRuleDeliverToUser,
-		HandlerRuleDeliverToMailIdentity,
-		HandlerRuleBounce,
-		HandlerRuleDrop,
-	}
-}
-
-// MarshalText implements encoding.TextMarshaler.
-func (s HandlerRule) MarshalText() ([]byte, error) {
-	switch s {
-	case HandlerRuleDeliverToUser:
-		return []byte(s), nil
-	case HandlerRuleDeliverToMailIdentity:
-		return []byte(s), nil
-	case HandlerRuleBounce:
-		return []byte(s), nil
-	case HandlerRuleDrop:
-		return []byte(s), nil
-	default:
-		return nil, errors.Errorf("invalid value: %q", s)
-	}
-}
-
-// UnmarshalText implements encoding.TextUnmarshaler.
-func (s *HandlerRule) UnmarshalText(data []byte) error {
-	switch HandlerRule(data) {
-	case HandlerRuleDeliverToUser:
-		*s = HandlerRuleDeliverToUser
-		return nil
-	case HandlerRuleDeliverToMailIdentity:
-		*s = HandlerRuleDeliverToMailIdentity
-		return nil
-	case HandlerRuleBounce:
-		*s = HandlerRuleBounce
-		return nil
-	case HandlerRuleDrop:
-		*s = HandlerRuleDrop
-		return nil
-	default:
-		return errors.Errorf("invalid value: %q", data)
-	}
-}
 
 type ListBucketRootBadGateway Error
 
