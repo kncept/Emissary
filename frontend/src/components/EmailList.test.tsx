@@ -255,6 +255,47 @@ describe('mailbox selection and message open zone', () => {
     expect(container.textContent).toContain('1 selected');
   });
 
+  it('keeps the selection bar visible with its actions disabled when nothing is selected', async () => {
+    await mount();
+    const bar = container.querySelector('.selection-bar')!;
+    expect(bar).not.toBeNull();
+    expect(bar.textContent).toContain('0 selected');
+    expect((bar.querySelector('.select-all-checkbox') as HTMLInputElement).checked).toBe(false);
+    expect(Array.from(bar.querySelectorAll('button')).every((button) => button.disabled)).toBe(true);
+  });
+
+  it('checks and unchecks every visible email from the selection bar', async () => {
+    await mount();
+    const selectAll = container.querySelector('.select-all-checkbox') as HTMLInputElement;
+    const rowBoxes = () =>
+      Array.from(container.querySelectorAll('input.row-checkbox')) as HTMLInputElement[];
+
+    await clickCheckbox(selectAll);
+    expect(selectAll.checked).toBe(true);
+    expect(rowBoxes().every((box) => box.checked)).toBe(true);
+    expect(container.textContent).toContain('2 selected');
+
+    await clickCheckbox(selectAll);
+    expect(selectAll.checked).toBe(false);
+    expect(rowBoxes().every((box) => !box.checked)).toBe(true);
+    expect(container.textContent).toContain('0 selected');
+  });
+
+  it('shows an indeterminate select-all checkbox for a partial selection', async () => {
+    await mount();
+    const rowBoxes = Array.from(container.querySelectorAll('input.row-checkbox')) as HTMLInputElement[];
+    const selectAll = container.querySelector('.select-all-checkbox') as HTMLInputElement;
+
+    await clickCheckbox(rowBoxes[0]);
+    expect(selectAll.indeterminate).toBe(true);
+    expect(selectAll.checked).toBe(false);
+
+    await clickCheckbox(selectAll);
+    expect(selectAll.indeterminate).toBe(false);
+    expect(selectAll.checked).toBe(true);
+    expect(rowBoxes.every((box) => box.checked)).toBe(true);
+  });
+
   it('opens the message from the avatar/content zone', async () => {
     await mount();
     const avatar = container.querySelector('.email-row .sender-avatar')!;

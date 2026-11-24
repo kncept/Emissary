@@ -56,6 +56,7 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const checkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selectAllRef = useRef<HTMLInputElement | null>(null);
 
   // React Router may reuse this component when moving between folder routes.
   // Reset to the new folder's cached list during render, before its effect runs.
@@ -86,6 +87,19 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
       else next.add(id);
       return next;
     });
+  };
+
+  const allSelected = emails.length > 0 && emails.every((email) => selectedIds.has(email.id));
+  const someSelected = selectedIds.size > 0 && !allSelected;
+
+  // React does not support the indeterminate attribute declaratively.
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someSelected;
+  }, [someSelected]);
+
+  const toggleSelectAll = () => {
+    setSelectedIds(allSelected ? new Set() : new Set(emails.map((email) => email.id)));
+    setBulkConfirmOpen(false);
   };
 
   const loadEmails = useCallback(async (background = false) => {
@@ -321,31 +335,45 @@ export default function EmailList({ role = 'inbox' }: { role?: MailboxRole }) {
       {actionError && (
         <div className="error-message" role="alert">{actionError}</div>
       )}
-      {selectedCount > 0 && (
-        <div className="selection-bar" role="status">
-          <span>{selectedCount} selected</span>
-          <div className="selection-actions">
-            <button
-              type="button"
-              className="btn btn-secondary btn-small"
-              onClick={() => setBulkConfirmOpen(true)}
-            >
-              <span aria-hidden="true">🗑️</span>
-              {bulkLabel}
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-small"
-              onClick={() => {
-                setSelectedIds(new Set());
-                setBulkConfirmOpen(false);
-              }}
-            >
-              Clear selection
-            </button>
-          </div>
+      <div className={`selection-bar${selectedCount === 0 ? ' idle' : ''}`}>
+        <div className="selection-summary">
+          <label className="select-all-control">
+            <input
+              ref={selectAllRef}
+              type="checkbox"
+              className="select-all-checkbox"
+              checked={allSelected}
+              disabled={emails.length === 0}
+              onChange={toggleSelectAll}
+              aria-label={allSelected ? 'Uncheck all emails' : 'Check all emails'}
+            />
+            <span>{allSelected ? 'Uncheck all' : 'Check all'}</span>
+          </label>
+          <span className="selection-count" role="status">{selectedCount} selected</span>
         </div>
-      )}
+        <div className="selection-actions">
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            disabled={selectedCount === 0}
+            onClick={() => setBulkConfirmOpen(true)}
+          >
+            <span aria-hidden="true">🗑️</span>
+            {bulkLabel}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            disabled={selectedCount === 0}
+            onClick={() => {
+              setSelectedIds(new Set());
+              setBulkConfirmOpen(false);
+            }}
+          >
+            Clear selection
+          </button>
+        </div>
+      </div>
       {emails.length === 0 ? (
         <div className="empty-state">
           <p>{mailbox.emptyMessage}</p>
