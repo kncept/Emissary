@@ -30,10 +30,11 @@
 /**
  * One receiver rule. `DeliverToUser` delivers to the envelope recipient if
  * that user exists; `DeliverTo:<address>` delivers to a saved user address
- * (for example `DeliverTo:unknown@kncept.com`) if that user exists;
- * `DeliverToMailIdentity` delivers to the identity's own mailbox; `Bounce`
- * sends a standard bounce; `Drop` discards the message without a bounce.
- * Rules are evaluated in order and the first applicable one wins.
+ * (for example `DeliverTo:catchall@example.com`) that must resolve to a
+ * known user when saved; `DeliverToMailIdentity` delivers to the identity's
+ * own mailbox; `Bounce` sends a standard bounce; `Drop` discards the
+ * message without a bounce. Rules are evaluated in order and the first
+ * applicable one wins.
  * @pattern ^(DeliverToUser|DeliverToMailIdentity|Bounce|Drop|DeliverTo:[^@\s]+@[^@\s]+)$
  */
 export type HandlerRule = string;

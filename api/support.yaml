@@ -275,6 +275,60 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/support/receiver/users:
+    get:
+      tags:
+      - Support
+      summary: Search users for DeliverTo receiver rules
+      description: |-
+        Returns up to ten user addresses whose email contains `q`, using the
+        same case-insensitive substring search as the masquerade user picker.
+        `q` must contain at least three characters. System Managers can use
+        this endpoint without needing the separate user-management claim;
+        saving a `DeliverTo:<address>` rule still checks that the target
+        resolves to a known user.
+      operationId: autocompleteReceiverUsers
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: q
+        in: query
+        required: true
+        description: Case-insensitive substring to match against user addresses
+        schema:
+          type: string
+          minLength: 3
+      responses:
+        '200':
+          description: Matching user addresses (possibly empty)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiverUserSuggestions'
+        '400':
+          description: The query is shorter than three characters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: The user search failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/support/receiver/rules:
     get:
       tags:
@@ -327,8 +381,10 @@ paths:
 
         Each identity must have at least one rule, and every rule must be a
         known `HandlerRule` (including `DeliverTo:<address>` for a saved
-        delivery target). The `_` fallback must remain valid, otherwise the
-        request is rejected with `400 Bad Request`. Submitted entries are
+        delivery target). The saved target of a `DeliverTo` rule must resolve
+        to a known user when the rule is saved; otherwise the request is
+        rejected with `400 Bad Request`. The `_` fallback must remain valid.
+        Submitted entries are
         persisted in the configured receiver config store and published to the
         active receiver cache. The updated rules are returned in the response.
       operationId: saveReceiverRules
@@ -636,11 +692,24 @@ components:
       description: |-
         One receiver rule. `DeliverToUser` delivers to the envelope recipient if
         that user exists; `DeliverTo:<address>` delivers to a saved user address
-        (for example `DeliverTo:unknown@kncept.com`) if that user exists;
-        `DeliverToMailIdentity` delivers to the identity's own mailbox; `Bounce`
-        sends a standard bounce; `Drop` discards the message without a bounce.
-        Rules are evaluated in order and the first applicable one wins.
+        (for example `DeliverTo:catchall@example.com`) that must resolve to a
+        known user when saved; `DeliverToMailIdentity` delivers to the identity's
+        own mailbox; `Bounce` sends a standard bounce; `Drop` discards the
+        message without a bounce. Rules are evaluated in order and the first
+        applicable one wins.
       pattern: '^(DeliverToUser|DeliverToMailIdentity|Bounce|Drop|DeliverTo:[^@\s]+@[^@\s]+)$'
+    ReceiverUserSuggestions:
+      type: object
+      description: User addresses matching a receiver-rule delivery target search
+      required:
+      - users
+      properties:
+        users:
+          type: array
+          description: Matching user addresses, up to ten
+          items:
+            type: string
+      additionalProperties: false
     Error:
       type: object
       required:

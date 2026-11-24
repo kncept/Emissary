@@ -373,7 +373,7 @@ func (r *Receiver) handleRecipient(ctx context.Context, key, sesMessageID, recip
 		default:
 			// DeliverTo:<address> carries its saved target in the rule itself.
 			// Like DeliverToUser it applies only when that user exists.
-			if target, ok := rule.deliverToTarget(); ok {
+			if target, ok := rule.DeliverToTarget(); ok {
 				var err error
 				applied, err = r.deliverToKnownUser(ctx, target, parsedEmail, rawMessage, wireEmail)
 				if err != nil {

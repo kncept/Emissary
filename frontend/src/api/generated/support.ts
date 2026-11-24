@@ -27,6 +27,7 @@
  * OpenAPI spec version: 1.0.0
  */
 import type {
+  AutocompleteReceiverUsersParams,
   BucketRootResponse,
   ConfigurationDetail,
   ConfigurationsResponse,
@@ -35,7 +36,8 @@ import type {
   ProcessEmailResponse,
   ReceiverIdentitiesResponse,
   ReceiverRulesRequest,
-  ReceiverRulesResponse
+  ReceiverRulesResponse,
+  ReceiverUserSuggestions
 } from './schemas/support';
 
 const getHeaders = (...sources: (RequestInit['headers'] | Record<string, string | undefined>)[]) => {
@@ -411,6 +413,84 @@ export const listReceiverIdentities = async ( options?: RequestInit): Promise<li
 
 
 
+export type autocompleteReceiverUsersResponse200 = {
+  data: ReceiverUserSuggestions
+  status: 200
+}
+
+export type autocompleteReceiverUsersResponse400 = {
+  data: Error
+  status: 400
+}
+
+export type autocompleteReceiverUsersResponse401 = {
+  data: Error
+  status: 401
+}
+
+export type autocompleteReceiverUsersResponse403 = {
+  data: Error
+  status: 403
+}
+
+export type autocompleteReceiverUsersResponse500 = {
+  data: Error
+  status: 500
+}
+
+export type autocompleteReceiverUsersResponseSuccess = (autocompleteReceiverUsersResponse200) & {
+  headers: Headers;
+};
+export type autocompleteReceiverUsersResponseError = (autocompleteReceiverUsersResponse400 | autocompleteReceiverUsersResponse401 | autocompleteReceiverUsersResponse403 | autocompleteReceiverUsersResponse500) & {
+  headers: Headers;
+};
+
+export type autocompleteReceiverUsersResponse = (autocompleteReceiverUsersResponseSuccess | autocompleteReceiverUsersResponseError)
+
+export const getAutocompleteReceiverUsersUrl = (params: AutocompleteReceiverUsersParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/support/receiver/users?${stringifiedParams}` : `/api/support/receiver/users`
+}
+
+/**
+ * Returns up to ten user addresses whose email contains `q`, using the
+ * same case-insensitive substring search as the masquerade user picker.
+ * `q` must contain at least three characters. System Managers can use
+ * this endpoint without needing the separate user-management claim;
+ * saving a `DeliverTo:<address>` rule still checks that the target
+ * resolves to a known user.
+ * @summary Search users for DeliverTo receiver rules
+ */
+export const autocompleteReceiverUsers = async (params: AutocompleteReceiverUsersParams, options?: RequestInit): Promise<autocompleteReceiverUsersResponse> => {
+
+  const res = await fetch(getAutocompleteReceiverUsersUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: autocompleteReceiverUsersResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as autocompleteReceiverUsersResponse
+}
+
+
+
 export type listReceiverRulesResponse200 = {
   data: ReceiverRulesResponse
   status: 200
@@ -527,8 +607,10 @@ export const getSaveReceiverRulesUrl = () => {
  *
  * Each identity must have at least one rule, and every rule must be a
  * known `HandlerRule` (including `DeliverTo:<address>` for a saved
- * delivery target). The `_` fallback must remain valid, otherwise the
- * request is rejected with `400 Bad Request`. Submitted entries are
+ * delivery target). The saved target of a `DeliverTo` rule must resolve
+ * to a known user when the rule is saved; otherwise the request is
+ * rejected with `400 Bad Request`. The `_` fallback must remain valid.
+ * Submitted entries are
  * persisted in the configured receiver config store and published to the
  * active receiver cache. The updated rules are returned in the response.
  * @summary Add or update receiver rules

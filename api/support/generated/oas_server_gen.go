@@ -8,6 +8,15 @@ import (
 
 // Handler handles operations described by OpenAPI v3 specification.
 type Handler interface {
+	// AutocompleteReceiverUsers implements autocompleteReceiverUsers operation.
+	//
+	// Returns up to ten user addresses whose email contains `q`, using the same case-insensitive substring
+	// search as the masquerade user picker. `q` must contain at least three characters. System Managers
+	// can use this endpoint without needing the separate user-management claim; saving a
+	// `DeliverTo:<address>` rule still checks that the target resolves to a known user.
+	//
+	// GET /api/support/receiver/users
+	AutocompleteReceiverUsers(ctx context.Context, params AutocompleteReceiverUsersParams) (AutocompleteReceiverUsersRes, error)
 	// DeleteReceiverRules implements deleteReceiverRules operation.
 	//
 	// Deletes the rules entry for `identity` from the receiver config store. The identity then appears
@@ -94,10 +103,11 @@ type Handler interface {
 	// `/api/support/receiver/rules/{identity}` to remove an entry.
 	//
 	// Each identity must have at least one rule, and every rule must be a known `HandlerRule` (including
-	// `DeliverTo:<address>` for a saved delivery target). The `_` fallback must remain valid, otherwise
-	// the request is rejected with `400 Bad Request`. Submitted entries are persisted in the configured
-	// receiver config store and published to the active receiver cache. The updated rules are returned in
-	// the response.
+	// `DeliverTo:<address>` for a saved delivery target). The saved target of a `DeliverTo` rule must
+	// resolve to a known user when the rule is saved; otherwise the request is rejected with
+	// `400 Bad Request`. The `_` fallback must remain valid. Submitted entries are persisted in the
+	// configured receiver config store and published to the active receiver cache. The updated rules are
+	// returned in the response.
 	//
 	// PUT /api/support/receiver/rules
 	SaveReceiverRules(ctx context.Context, req *ReceiverRulesRequest) (SaveReceiverRulesRes, error)

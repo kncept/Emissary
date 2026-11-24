@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   deleteSupportReceiverRule,
   getSupportReceiverIdentities,
   getSupportReceiverRules,
   saveSupportReceiverRules,
+  searchSupportDeliveryUsers,
 } from '../api.ts';
 import type {
   HandlerRule,
@@ -46,6 +47,120 @@ function sortRules(rules: ReceiverDomainRules[]): ReceiverDomainRules[] {
     if (b.domain === FALLBACK_IDENTITY) return 1;
     return a.domain.localeCompare(b.domain);
   });
+}
+
+// Delivery targets use the same search semantics as the masquerade picker:
+// wait for three characters, debounce, and show the user manager's
+// case-insensitive substring matches. Selecting a suggestion writes the full
+// address back into the rule.
+interface DeliveryTargetInputProps {
+  value: string;
+  ariaLabel: string;
+  onChange: (value: string) => void;
+}
+
+function DeliveryTargetInput({ value, ariaLabel, onChange }: DeliveryTargetInputProps) {
+  const [results, setResults] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [error, setError] = useState('');
+  const debounceTimer = useRef<number | null>(null);
+  const cache = useRef(new Map<string, string[]>());
+  const requestSeq = useRef(0);
+
+  useEffect(() => () => {
+    if (debounceTimer.current !== null) {
+      window.clearTimeout(debounceTimer.current);
+    }
+  }, []);
+
+  const updateValue = (next: string) => {
+    onChange(next);
+    if (debounceTimer.current !== null) {
+      window.clearTimeout(debounceTimer.current);
+      debounceTimer.current = null;
+    }
+    const q = next.trim();
+    const seq = ++requestSeq.current;
+
+    if (q.length < 3) {
+      setLoading(false);
+      setResults([]);
+      setHasSearched(false);
+      setError('');
+      return;
+    }
+
+    const cached = cache.current.get(q.toLowerCase());
+    if (cached) {
+      setLoading(false);
+      setResults(cached);
+      setHasSearched(true);
+      setError('');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    debounceTimer.current = window.setTimeout(() => {
+      debounceTimer.current = null;
+      void (async () => {
+        try {
+          const data = await searchSupportDeliveryUsers(q);
+          const users = Array.isArray(data.users) ? data.users.slice(0, 10) : [];
+          cache.current.set(q.toLowerCase(), users);
+          if (seq === requestSeq.current) {
+            setResults(users);
+            setHasSearched(true);
+            setError('');
+          }
+        } catch (e) {
+          if (seq === requestSeq.current) {
+            setResults([]);
+            setHasSearched(true);
+            setError(e instanceof Error ? e.message : 'Failed to search users');
+          }
+        } finally {
+          if (seq === requestSeq.current) setLoading(false);
+        }
+      })();
+    }, 100);
+  };
+
+  const showEmpty = !loading && !error && hasSearched && results.length === 0;
+
+  return (
+    <div className="receiver-delivery-input">
+      <input
+        aria-label={ariaLabel}
+        className="receiver-rule-address"
+        value={value}
+        placeholder="user@example.com"
+        onChange={(event) => updateValue(event.target.value)}
+      />
+      {loading && <span className="spinner small" aria-label="Searching users" />}
+      {showEmpty && <div className="receiver-user-empty">No matching users</div>}
+      {error && <div className="receiver-user-error">{error}</div>}
+      {!loading && results.length > 0 && (
+        <div className="receiver-user-suggestions" role="listbox" aria-label={`Matching users for ${ariaLabel}`}>
+          {results.map((user) => (
+            <button
+              key={user}
+              type="button"
+              className="receiver-user-suggestion"
+              onClick={() => {
+                onChange(user);
+                setResults([]);
+                setHasSearched(false);
+              }}
+            >
+              {user}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function ReceiverSupport() {
@@ -91,13 +206,26 @@ export default function ReceiverSupport() {
 
   const onSave = async () => {
     if (rules.some((entry) => entry.rules.some((rule) => !validRule(rule)))) {
-      setError('Enter a valid user address for each DeliverTo rule, for example DeliverTo:unknown@kncept.com.');
+      setError('Enter a valid user address for each DeliverTo rule, for example DeliverTo:catchall@example.com.');
       return;
     }
+    const targets = new Set(
+      rules.flatMap((entry) => entry.rules.map(deliverToAddress).filter((address): address is string => address !== null)),
+    );
     setSaving(true);
     setError('');
     setMessage('');
     try {
+      // The backend also checks every target on save. Doing the same search
+      // here gives immediate feedback using the masquerade picker's semantics.
+      for (const target of targets) {
+        if (target.trim().length < 3) continue;
+        const data = await searchSupportDeliveryUsers(target);
+        const known = (data.users || []).some((user) => user.trim().toLowerCase() === target.trim().toLowerCase());
+        if (!known) {
+          throw new Error(`Delivery user "${target}" was not found. Choose a matching user.`);
+        }
+      }
       const saved = await saveSupportReceiverRules(rules);
       setRules(sortRules(saved.rules || []));
       const identityData = await getSupportReceiverIdentities();
@@ -295,14 +423,12 @@ export default function ReceiverSupport() {
                         ))}
                       </select>
                       {deliverToAddress(ruleName) !== null && (
-                        <input
-                          aria-label={`Delivery address for rule ${index + 1} for ${rule.domain}`}
-                          className="receiver-rule-address"
+                        <DeliveryTargetInput
+                          ariaLabel={`Delivery address for rule ${index + 1} for ${rule.domain}`}
                           value={deliverToAddress(ruleName) ?? ''}
-                          placeholder="user@example.com"
-                          onChange={(event) => editRules(rule.domain, (current) => {
+                          onChange={(address) => editRules(rule.domain, (current) => {
                             const updated = [...current];
-                            updated[index] = `${DELIVER_TO_PREFIX}${event.target.value}` as HandlerRule;
+                            updated[index] = `${DELIVER_TO_PREFIX}${address}` as HandlerRule;
                             return updated;
                           })}
                         />

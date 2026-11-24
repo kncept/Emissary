@@ -27,6 +27,7 @@
  * OpenAPI spec version: 1.0.0
  */
 
+export * from './autocompleteReceiverUsersParams';
 export * from './bucketObject';
 export * from './bucketRootResponse';
 export * from './configurationDetail';
@@ -42,3 +43,4 @@ export * from './receiverIdentitiesResponse';
 export * from './receiverIdentity';
 export * from './receiverRulesRequest';
 export * from './receiverRulesResponse';
+export * from './receiverUserSuggestions';

@@ -61,6 +61,7 @@ A document never defines operations outside its prefix, and no other document ma
 | `GET` | `/api/support/configurations/{name}` | Bearer‡ | Settings for one section (secrets redacted). |
 | `GET` | `/api/support/bucket/root` | Bearer‡ | List unprocessed staging objects. |
 | `POST` | `/api/support/process-email` | Bearer‡ | Run the inbound pipeline on a staging object. |
+| `GET` | `/api/support/receiver/users` | Bearer‡ | Search users for a `DeliverTo:` rule target. |
 | `GET` / `PUT` | `/api/support/receiver/rules` | Bearer‡ | List / replace receiver rules. |
 | `DELETE` | `/api/support/receiver/rules/{identity}` | Bearer‡ | Remove an identity's rules (not `_`). |
 | `GET` | `/api/support/receiver/identities` | Bearer‡ | Verified SES identities and rule coverage. |

@@ -233,6 +233,16 @@ export async function deleteSupportReceiverRule(identity: string): Promise<Recei
   return data as ReceiverRulesResponse;
 }
 
+export async function searchSupportDeliveryUsers(q: string): Promise<{ users: string[] }> {
+  const params = new URLSearchParams({ q });
+  const response = await authenticatedFetch(`${API_BASE}/support/receiver/users?${params.toString()}`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error((data as { error?: string }).error || 'Failed to search users');
+  }
+  return data as { users: string[] };
+}
+
 export async function checkAuth(): Promise<AuthState> {
   const token = getToken();
   if (!token) {

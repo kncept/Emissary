@@ -21,6 +21,7 @@ See [AUTH.md](AUTH.md#the-token-pair) for the token pair and its claims.
 | `GET` | `/api/support/bucket/root` | List the immediate contents of the mail bucket. |
 | `POST` | `/api/support/process-email` | Run the standard inbound pipeline on a staging object. |
 | `GET` | `/api/support/receiver/identities` | List verified SES identities and whether each has rules. |
+| `GET` | `/api/support/receiver/users?q=` | Search users for a `DeliverTo:` address (same semantics as masquerade). |
 | `GET` | `/api/support/receiver/rules` | List receiver rules (identity → ordered rules). |
 | `PUT` | `/api/support/receiver/rules` | Add or replace receiver rules entries. |
 | `DELETE` | `/api/support/receiver/rules/{identity}` | Remove one identity's rules; `_` is rejected. |
@@ -127,13 +128,13 @@ SES identities are account-wide. The `ses:ListIdentities` permission is granted 
 {
   "rules": [
     { "domain": "_", "rules": ["DeliverToUser", "Bounce"] },
-    { "domain": "news.example.com", "rules": ["DeliverTo:unknown@kncept.com", "Bounce"] },
+    { "domain": "news.example.com", "rules": ["DeliverTo:catchall@example.com", "Bounce"] },
     { "domain": "blocked.example.com", "rules": ["Drop"] }
   ]
 }
 ```
 
-Rules are first-match-wins: `DeliverToUser` (known users only), `DeliverTo:<address>` (a saved user address, applied when that user exists), `DeliverToMailIdentity` (the identity's own mailbox, no account required), `Bounce` (standard bounce) and `Drop` (silent discard). To set up a catchall, add `DeliverTo:unknown@kncept.com` before `Bounce`: mail for unknown recipients is filed in that account's inbox when it exists. A saved address that is not a known user falls through to the next rule. `Bounce` and `Drop` are terminal, so order them after rules that should take precedence; no match bounces. The `_` fallback and a `*` key both mean the recipient's own mailbox. See [CONFIGURATION.md](CONFIGURATION.md#receiver-inbound-routing-rules) for storage and [ARCHITECTURE.md](ARCHITECTURE.md#inbound-mail-flow) for routing.
+Rules are first-match-wins: `DeliverToUser` (known users only), `DeliverTo:<address>` (a saved user address, applied when that user exists), `DeliverToMailIdentity` (the identity's own mailbox, no account required), `Bounce` (standard bounce) and `Drop` (silent discard). To set up a catchall, add `DeliverTo:catchall@example.com` before `Bounce`: mail for unknown recipients is filed in that account's inbox when it exists. The saved address must resolve to an existing user when the rule is saved; the GUI searches with `GET /api/support/receiver/users?q=`, which uses the same case-insensitive substring autocomplete as the masquerade picker (`q` needs at least three characters, at most ten addresses are returned). `PUT` validates the target again with `UserManager.Lookup` and returns `400` for an unknown user. At delivery time a target that has since been removed falls through to the next rule. `Bounce` and `Drop` are terminal, so order them after rules that should take precedence; no match bounces. The `_` fallback and a `*` key both mean the recipient's own mailbox. See [CONFIGURATION.md](CONFIGURATION.md#receiver-inbound-routing-rules) for storage and [ARCHITECTURE.md](ARCHITECTURE.md#inbound-mail-flow) for routing.
 
 `PUT /api/support/receiver/rules` adds or replaces only the supplied identities; all others, including `_`, are left untouched, so it never deletes an entry:
 
@@ -145,7 +146,7 @@ Rules are first-match-wins: `DeliverToUser` (known users only), `DeliverTo:<addr
 }
 ```
 
-Each identity needs at least one known rule and a valid config key, and the resulting config must keep a valid `_` fallback. Errors are `400 invalid receiver rules`, `400 invalid handler rules`, `400 invalid receiving domain` and `400 no rules supplied`; store failures are `500 failed to save receiver rules`. The response is the full saved list in the same shape as `GET`.
+Each identity needs at least one known rule and a valid config key, and the resulting config must keep a valid `_` fallback. A `DeliverTo:` target must be an existing user, for example `DeliverTo:catchall@example.com`. Errors are `400 invalid receiver rules`, `400 invalid handler rules`, `400 invalid receiving domain`, `400 no rules supplied` and `400 delivery user "…" is not a known user`; store failures are `500 failed to save receiver rules`. The response is the full saved list in the same shape as `GET`.
 
 `DELETE /api/support/receiver/rules/{identity}` removes one entry and returns the remaining list. The identity then shows a plus and is routed by `_` until rules are added again. Unknown identities give `404 receiver rules not found`, invalid keys `400 invalid receiving identity`, and `_` gives `400 the fallback receiving identity cannot be removed`. The config stores enforce that rule independently of the API.
 

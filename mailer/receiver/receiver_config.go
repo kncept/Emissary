@@ -38,9 +38,9 @@ func DeliverToRule(address string) HandlerRule {
 	return HandlerRule(DeliverTo) + HandlerRule(normalizeIdentity(address))
 }
 
-// deliverToTarget extracts the saved target address from a DeliverTo rule. The
+// DeliverToTarget extracts the saved target address from a DeliverTo rule. The
 // boolean is false for every other rule and for a malformed target.
-func (r HandlerRule) deliverToTarget() (string, bool) {
+func (r HandlerRule) DeliverToTarget() (string, bool) {
 	if !strings.HasPrefix(string(r), string(DeliverTo)) {
 		return "", false
 	}
@@ -89,7 +89,7 @@ func (h HandlerRules) Validate() error {
 		switch rule {
 		case DeliverToUser, DeliverToMailIdentity, Bounce, Drop:
 		default:
-			if _, ok := rule.deliverToTarget(); !ok {
+			if _, ok := rule.DeliverToTarget(); !ok {
 				return fmt.Errorf("unknown handler rule %q", rule)
 			}
 		}

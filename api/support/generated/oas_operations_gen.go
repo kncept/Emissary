@@ -6,12 +6,13 @@ package api
 type OperationName = string
 
 const (
-	DeleteReceiverRulesOperation    OperationName = "DeleteReceiverRules"
-	GetConfigurationOperation       OperationName = "GetConfiguration"
-	ListBucketRootOperation         OperationName = "ListBucketRoot"
-	ListConfigurationsOperation     OperationName = "ListConfigurations"
-	ListReceiverIdentitiesOperation OperationName = "ListReceiverIdentities"
-	ListReceiverRulesOperation      OperationName = "ListReceiverRules"
-	ProcessEmailOperation           OperationName = "ProcessEmail"
-	SaveReceiverRulesOperation      OperationName = "SaveReceiverRules"
+	AutocompleteReceiverUsersOperation OperationName = "AutocompleteReceiverUsers"
+	DeleteReceiverRulesOperation       OperationName = "DeleteReceiverRules"
+	GetConfigurationOperation          OperationName = "GetConfiguration"
+	ListBucketRootOperation            OperationName = "ListBucketRoot"
+	ListConfigurationsOperation        OperationName = "ListConfigurations"
+	ListReceiverIdentitiesOperation    OperationName = "ListReceiverIdentities"
+	ListReceiverRulesOperation         OperationName = "ListReceiverRules"
+	ProcessEmailOperation              OperationName = "ProcessEmail"
+	SaveReceiverRulesOperation         OperationName = "SaveReceiverRules"
 )

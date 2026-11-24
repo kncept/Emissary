@@ -7,6 +7,7 @@ import {
   getSupportReceiverIdentities,
   getSupportReceiverRules,
   saveSupportReceiverRules,
+  searchSupportDeliveryUsers,
 } from '../api.ts';
 import type { ReceiverRulesRequest } from '../api/generated/schemas/support/index.ts';
 import ReceiverSupport from './ReceiverSupport.tsx';
@@ -16,6 +17,7 @@ vi.mock('../api.ts', () => ({
   getSupportReceiverIdentities: vi.fn(),
   getSupportReceiverRules: vi.fn(),
   saveSupportReceiverRules: vi.fn(),
+  searchSupportDeliveryUsers: vi.fn(),
 }));
 
 const baseRules: ReceiverRulesRequest['rules'] = [
@@ -66,6 +68,7 @@ describe('Receiver rules editor', () => {
     vi.mocked(getSupportReceiverRules).mockResolvedValue({ rules: baseRules });
     vi.mocked(saveSupportReceiverRules).mockImplementation(async (rules) => ({ rules }));
     vi.mocked(deleteSupportReceiverRule).mockImplementation(async () => ({ rules: baseRules }));
+    vi.mocked(searchSupportDeliveryUsers).mockImplementation(async (q) => ({ users: [q] }));
 
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -207,6 +210,65 @@ describe('Receiver rules editor', () => {
     const saved = vi.mocked(saveSupportReceiverRules).mock.calls[0][0];
     expect(saved.find((rule) => rule.domain === '_')?.rules)
       .toEqual(['DeliverTo:unknown@kncept.com', 'Bounce']);
+  });
+
+  it('offers matching users and fills the address from a suggestion', async () => {
+    vi.mocked(searchSupportDeliveryUsers).mockResolvedValue({ users: ['bob@example.com'] });
+    render();
+    await settle();
+
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="Rule 1 for _"]')!;
+    act(() => {
+      select.value = 'DeliverTo:';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Delivery address for rule 1 for _"]')!;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    act(() => {
+      setValue.call(input, 'bob@');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    });
+
+    const suggestion = container.querySelector<HTMLButtonElement>('button.receiver-user-suggestion');
+    expect(suggestion?.textContent).toBe('bob@example.com');
+    click(suggestion!);
+    expect((container.querySelector('input[aria-label="Delivery address for rule 1 for _"]') as HTMLInputElement).value)
+      .toBe('bob@example.com');
+
+    click(buttonByText(container, 'OK'));
+    await settle();
+    expect(saveSupportReceiverRules).toHaveBeenCalledWith([
+      { domain: '_', rules: ['DeliverTo:bob@example.com', 'Bounce'] },
+    ]);
+  });
+
+  it('blocks saving when the delivery target is not a known user', async () => {
+    vi.mocked(searchSupportDeliveryUsers).mockResolvedValue({ users: [] });
+    render();
+    await settle();
+
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="Rule 1 for _"]')!;
+    act(() => {
+      select.value = 'DeliverTo:';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Delivery address for rule 1 for _"]')!;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    act(() => {
+      setValue.call(input, 'unknown@kncept.com');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    click(buttonByText(container, 'OK'));
+    await settle();
+
+    expect(saveSupportReceiverRules).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Delivery user "unknown@kncept.com" was not found');
   });
 
   it('shows the saved address in an existing DeliverTo rule', async () => {

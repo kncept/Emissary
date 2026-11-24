@@ -29,6 +29,15 @@ func trimTrailingSlashes(u *url.URL) {
 
 // Invoker invokes operations described by OpenAPI v3 specification.
 type Invoker interface {
+	// AutocompleteReceiverUsers invokes autocompleteReceiverUsers operation.
+	//
+	// Returns up to ten user addresses whose email contains `q`, using the same case-insensitive substring
+	// search as the masquerade user picker. `q` must contain at least three characters. System Managers
+	// can use this endpoint without needing the separate user-management claim; saving a
+	// `DeliverTo:<address>` rule still checks that the target resolves to a known user.
+	//
+	// GET /api/support/receiver/users
+	AutocompleteReceiverUsers(ctx context.Context, params AutocompleteReceiverUsersParams) (AutocompleteReceiverUsersRes, error)
 	// DeleteReceiverRules invokes deleteReceiverRules operation.
 	//
 	// Deletes the rules entry for `identity` from the receiver config store. The identity then appears
@@ -115,10 +124,11 @@ type Invoker interface {
 	// `/api/support/receiver/rules/{identity}` to remove an entry.
 	//
 	// Each identity must have at least one rule, and every rule must be a known `HandlerRule` (including
-	// `DeliverTo:<address>` for a saved delivery target). The `_` fallback must remain valid, otherwise
-	// the request is rejected with `400 Bad Request`. Submitted entries are persisted in the configured
-	// receiver config store and published to the active receiver cache. The updated rules are returned in
-	// the response.
+	// `DeliverTo:<address>` for a saved delivery target). The saved target of a `DeliverTo` rule must
+	// resolve to a known user when the rule is saved; otherwise the request is rejected with
+	// `400 Bad Request`. The `_` fallback must remain valid. Submitted entries are persisted in the
+	// configured receiver config store and published to the active receiver cache. The updated rules are
+	// returned in the response.
 	//
 	// PUT /api/support/receiver/rules
 	SaveReceiverRules(ctx context.Context, request *ReceiverRulesRequest) (SaveReceiverRulesRes, error)
@@ -163,6 +173,140 @@ func (c *Client) requestURL(ctx context.Context) *url.URL {
 		return c.serverURL
 	}
 	return u
+}
+
+// AutocompleteReceiverUsers invokes autocompleteReceiverUsers operation.
+//
+// Returns up to ten user addresses whose email contains `q`, using the same case-insensitive substring
+// search as the masquerade user picker. `q` must contain at least three characters. System Managers
+// can use this endpoint without needing the separate user-management claim; saving a
+// `DeliverTo:<address>` rule still checks that the target resolves to a known user.
+//
+// GET /api/support/receiver/users
+func (c *Client) AutocompleteReceiverUsers(ctx context.Context, params AutocompleteReceiverUsersParams) (AutocompleteReceiverUsersRes, error) {
+	res, err := c.sendAutocompleteReceiverUsers(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendAutocompleteReceiverUsers(ctx context.Context, params AutocompleteReceiverUsersParams) (res AutocompleteReceiverUsersRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("autocompleteReceiverUsers"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/support/receiver/users"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, AutocompleteReceiverUsersOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/support/receiver/users"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "q" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "q",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			return e.EncodeValue(conv.StringToString(params.Q))
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+			stage = "Security:BearerAuth"
+			switch err := c.securityBearerAuth(ctx, AutocompleteReceiverUsersOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"BearerAuth\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	stage = "DecodeResponse"
+	result, err := decodeAutocompleteReceiverUsersResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
 }
 
 // DeleteReceiverRules invokes deleteReceiverRules operation.
@@ -1039,10 +1183,11 @@ func (c *Client) sendProcessEmail(ctx context.Context, request *ProcessEmailRequ
 // `/api/support/receiver/rules/{identity}` to remove an entry.
 //
 // Each identity must have at least one rule, and every rule must be a known `HandlerRule` (including
-// `DeliverTo:<address>` for a saved delivery target). The `_` fallback must remain valid, otherwise
-// the request is rejected with `400 Bad Request`. Submitted entries are persisted in the configured
-// receiver config store and published to the active receiver cache. The updated rules are returned in
-// the response.
+// `DeliverTo:<address>` for a saved delivery target). The saved target of a `DeliverTo` rule must
+// resolve to a known user when the rule is saved; otherwise the request is rejected with
+// `400 Bad Request`. The `_` fallback must remain valid. Submitted entries are persisted in the
+// configured receiver config store and published to the active receiver cache. The updated rules are
+// returned in the response.
 //
 // PUT /api/support/receiver/rules
 func (c *Client) SaveReceiverRules(ctx context.Context, request *ReceiverRulesRequest) (SaveReceiverRulesRes, error) {

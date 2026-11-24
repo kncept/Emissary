@@ -154,6 +154,7 @@ When a consumer processes a staged object, each recipient is handled independent
    - `Drop` — silent discard for that recipient; the only path that discards
      without notice.
    With no applicable rule, or no loadable rules, the receiver bounces rather than discards; place terminal rules last.
+   The support API rejects a new `DeliverTo:` target whose saved address does not resolve to a user at save time, so the GUI cannot persist a rule that can never apply. A target deleted later still falls through as described above.
 3. **Deliver to selected recipients** — Call `Storage.AddEmail` with the
    original staging bytes, initialize metadata from the returned id, and give each target their own copy in their
    `inbox`. Delivery, bouncing and dropping are decided per recipient, so one message can have mixed outcomes.

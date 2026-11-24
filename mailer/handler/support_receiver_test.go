@@ -193,6 +193,34 @@ func TestSupportReceiverUsesInjectedStore(t *testing.T) {
 	}
 }
 
+func TestSupportReceiverUserAutocomplete(t *testing.T) {
+	lister := &fakeSESIdentityLister{}
+	h, _ := newReceiverSupportTestHandler(t, lister, nil)
+	_, token, _ := login(t, h, "admin", "secret")
+	_, userToken, _ := login(t, h, "bob@example.com", "anything")
+
+	w := request(t, h, http.MethodGet, "/api/support/receiver/users?q=%20alice%40example.com%20", "", token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("autocomplete status = %d, want %d (body %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	var response struct {
+		Users []string `json:"users"`
+	}
+	decodeJSONBody(t, w.Body.Bytes(), &response)
+	if !reflect.DeepEqual(response.Users, []string{"alice@example.com"}) {
+		t.Errorf("autocomplete users = %v", response.Users)
+	}
+
+	w = request(t, h, http.MethodGet, "/api/support/receiver/users?q=al", "", token)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("short query status = %d, want %d (body %s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	w = request(t, h, http.MethodGet, "/api/support/receiver/users?q=alice", "", userToken)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("non-manager autocomplete status = %d, want %d", w.Code, http.StatusForbidden)
+	}
+}
+
 func TestSupportReceiverIdentitiesMarksRuleCoverage(t *testing.T) {
 	lister := &fakeSESIdentityLister{pages: []*ses.ListIdentitiesOutput{
 		{Identities: []string{"example.com", "alias.example.com"}, NextToken: strPtr("next")},
@@ -333,7 +361,7 @@ func TestSupportReceiverRulesAcceptsDeliverToAddress(t *testing.T) {
 	h, store := newReceiverSupportTestHandler(t, lister, nil)
 	_, token, _ := login(t, h, "admin", "secret")
 
-	body := `{"rules":[{"domain":"_","rules":["DeliverTo:unknown@kncept.com","Bounce"]}]}`
+	body := `{"rules":[{"domain":"_","rules":["DeliverTo:bob@example.com","Bounce"]}]}`
 	w := request(t, h, http.MethodPut, "/api/support/receiver/rules", body, token)
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d, want %d (body %s)", w.Code, http.StatusOK, w.Body.String())
@@ -343,7 +371,7 @@ func TestSupportReceiverRulesAcceptsDeliverToAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stored rules: %v", err)
 	}
-	want := []receiver.HandlerRule{receiver.DeliverToRule("unknown@kncept.com"), receiver.Bounce}
+	want := []receiver.HandlerRule{receiver.DeliverToRule("bob@example.com"), receiver.Bounce}
 	if !reflect.DeepEqual(stored.Rules, want) {
 		t.Errorf("stored rules = %v, want %v", stored.Rules, want)
 	}
@@ -353,6 +381,24 @@ func TestSupportReceiverRulesAcceptsDeliverToAddress(t *testing.T) {
 		`{"rules":[{"domain":"_","rules":["DeliverTo:not-an-address"]}]}`, token)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("PUT malformed DeliverTo status = %d, want %d (body %s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+
+	// An address that is syntactically valid but not a known user is also
+	// rejected before it can reach the store.
+	w = request(t, h, http.MethodPut, "/api/support/receiver/rules",
+		`{"rules":[{"domain":"_","rules":["DeliverTo:unknown@kncept.com","Bounce"]}]}`, token)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("PUT unknown DeliverTo user status = %d, want %d (body %s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if _, err := store.Get(context.Background(), "unknown.example.com"); err == nil {
+		t.Error("rejected save wrote a new rules entry")
+	}
+	stored, err = store.Get(context.Background(), "_")
+	if err != nil {
+		t.Fatalf("stored rules after rejection: %v", err)
+	}
+	if !reflect.DeepEqual(stored.Rules, want) {
+		t.Errorf("stored rules after rejection = %v, want %v", stored.Rules, want)
 	}
 }
 

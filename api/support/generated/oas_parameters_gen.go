@@ -14,6 +14,84 @@ import (
 	"github.com/ogen-go/ogen/validate"
 )
 
+// AutocompleteReceiverUsersParams is parameters of autocompleteReceiverUsers operation.
+type AutocompleteReceiverUsersParams struct {
+	// Case-insensitive substring to match against user addresses.
+	Q string
+}
+
+func unpackAutocompleteReceiverUsersParams(packed middleware.Parameters) (params AutocompleteReceiverUsersParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "q",
+			In:   "query",
+		}
+		params.Q = packed[key].(string)
+	}
+	return params
+}
+
+func decodeAutocompleteReceiverUsersParams(args [0]string, argsEscaped bool, r *http.Request) (params AutocompleteReceiverUsersParams, _ error) {
+	q := uri.NewQueryDecoder(r.URL.Query())
+	// Decode query: q.
+	if err := func() error {
+		cfg := uri.QueryParameterDecodingConfig{
+			Name:    "q",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.HasParam(cfg); err == nil {
+			if err := q.DecodeParam(cfg, func(d uri.Decoder) error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToString(val)
+				if err != nil {
+					return err
+				}
+
+				params.Q = c
+				return nil
+			}); err != nil {
+				return err
+			}
+			if err := func() error {
+				if err := (validate.String{
+					MinLength:     3,
+					MinLengthSet:  true,
+					MaxLength:     0,
+					MaxLengthSet:  false,
+					Email:         false,
+					Hostname:      false,
+					Regex:         nil,
+					MinNumeric:    0,
+					MinNumericSet: false,
+					MaxNumeric:    0,
+					MaxNumericSet: false,
+				}).Validate(string(params.Q)); err != nil {
+					return errors.Wrap(err, "string")
+				}
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "q",
+			In:   "query",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // DeleteReceiverRulesParams is parameters of deleteReceiverRules operation.
 type DeleteReceiverRulesParams struct {
 	// The receiving identity whose rules entry should be removed.

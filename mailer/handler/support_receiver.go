@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -22,6 +23,38 @@ func (h *supportHandler) identityLister(context.Context) (SESIdentityLister, err
 		h.sesIdentities = identity.NewLazyLister()
 	}
 	return h.sesIdentities, nil
+}
+
+// AutocompleteReceiverUsers searches users for the receiver rules editor. It
+// deliberately mirrors the masquerade picker's autocomplete: a three-character
+// minimum and the configured user manager's case-insensitive substring search,
+// capped at ten suggestions. System Managers can use it without also holding
+// the user-management claim.
+func (h *supportHandler) AutocompleteReceiverUsers(ctx context.Context, params supportapi.AutocompleteReceiverUsersParams) (supportapi.AutocompleteReceiverUsersRes, error) {
+	if !isSystemManager(ctx) {
+		return &supportapi.AutocompleteReceiverUsersForbidden{Error: forbiddenError().Error}, nil
+	}
+	q := strings.TrimSpace(params.Q)
+	if len(q) < 3 {
+		return &supportapi.AutocompleteReceiverUsersBadRequest{Error: "q must be at least 3 characters"}, nil
+	}
+	if h.users == nil {
+		slog.Error("Support: user search requested without a user manager")
+		return &supportapi.AutocompleteReceiverUsersInternalServerError{Error: "user manager is not configured"}, nil
+	}
+
+	matches, err := h.users.Autocomplete(ctx, q)
+	if err != nil {
+		slog.Error("Support: failed to search users for receiver rules", "err", err)
+		return &supportapi.AutocompleteReceiverUsersInternalServerError{Error: "failed to search users"}, nil
+	}
+	if matches == nil {
+		matches = []string{}
+	}
+	if len(matches) > 10 {
+		matches = matches[:10]
+	}
+	return &supportapi.ReceiverUserSuggestions{Users: matches}, nil
 }
 
 // ListReceiverIdentities returns the verified SES identities with a flag for
@@ -123,6 +156,26 @@ func (h *supportHandler) SaveReceiverRules(ctx context.Context, req *supportapi.
 		entry := receiver.HandlerRules{MailIdentity: domain, Rules: rules}
 		if err := entry.Validate(); err != nil {
 			return &supportapi.SaveReceiverRulesBadRequest{Error: "invalid handler rules"}, nil
+		}
+		// A DeliverTo target is only useful when it names a user the runtime
+		// can resolve. Reject unknown targets at save time so the GUI cannot
+		// leave a rule in place that would silently fall through on delivery.
+		for _, rule := range rules {
+			target, ok := rule.DeliverToTarget()
+			if !ok {
+				continue
+			}
+			if h.users == nil {
+				slog.Error("Support: cannot validate DeliverTo rule without a user manager", "target", target)
+				return &supportapi.SaveReceiverRulesInternalServerError{Error: "user manager is not configured"}, nil
+			}
+			user, err := h.users.Lookup(ctx, target)
+			if err != nil || user == nil {
+				slog.Info("Support: rejected DeliverTo rule for unknown user", "target", target, "err", err)
+				return &supportapi.SaveReceiverRulesBadRequest{
+					Error: fmt.Sprintf("delivery user %q is not a known user", target),
+				}, nil
+			}
 		}
 		entries = append(entries, rulesEntry{domain: domain, rules: entry})
 	}

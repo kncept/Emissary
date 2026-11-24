@@ -6,6 +6,22 @@ import (
 	"time"
 )
 
+type AutocompleteReceiverUsersBadRequest Error
+
+func (*AutocompleteReceiverUsersBadRequest) autocompleteReceiverUsersRes() {}
+
+type AutocompleteReceiverUsersForbidden Error
+
+func (*AutocompleteReceiverUsersForbidden) autocompleteReceiverUsersRes() {}
+
+type AutocompleteReceiverUsersInternalServerError Error
+
+func (*AutocompleteReceiverUsersInternalServerError) autocompleteReceiverUsersRes() {}
+
+type AutocompleteReceiverUsersUnauthorized Error
+
+func (*AutocompleteReceiverUsersUnauthorized) autocompleteReceiverUsersRes() {}
+
 type BearerAuth struct {
 	Token string
 	Roles []string
@@ -592,6 +608,25 @@ func (s *ReceiverRulesResponse) SetRules(val []ReceiverDomainRules) {
 func (*ReceiverRulesResponse) deleteReceiverRulesRes() {}
 func (*ReceiverRulesResponse) listReceiverRulesRes()   {}
 func (*ReceiverRulesResponse) saveReceiverRulesRes()   {}
+
+// User addresses matching a receiver-rule delivery target search.
+// Ref: #/components/schemas/ReceiverUserSuggestions
+type ReceiverUserSuggestions struct {
+	// Matching user addresses, up to ten.
+	Users []string `json:"users"`
+}
+
+// GetUsers returns the value of Users.
+func (s *ReceiverUserSuggestions) GetUsers() []string {
+	return s.Users
+}
+
+// SetUsers sets the value of Users.
+func (s *ReceiverUserSuggestions) SetUsers(val []string) {
+	s.Users = val
+}
+
+func (*ReceiverUserSuggestions) autocompleteReceiverUsersRes() {}
 
 type SaveReceiverRulesBadRequest Error
 
