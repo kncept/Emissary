@@ -408,13 +408,18 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 			}
 
 			// mailboxIds patch/move: accept full replacement and/or "mailboxIds/<id>" patches.
-			targetMailbox := currentMailbox
-			mailboxChanged := false
+			// For maxMailboxesPerEmail=1, we must end up with exactly one mailbox.
+			// Track both additions and removals from patch syntax.
+			addMailbox := ""
+			removeMailboxes := make(map[string]bool)
+			hasFullReplacement := false
+
 			if v, ok := updateMap["mailboxIds"]; ok {
 				mbMap, ok := v.(map[string]interface{})
 				if !ok {
 					return fail(base.NewSetError("invalidProperties", "Invalid mailboxIds"))
 				}
+				hasFullReplacement = true
 				targets := make([]string, 0, len(mbMap))
 				for k, mv := range mbMap {
 					b, ok := mv.(bool)
@@ -426,25 +431,59 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 				if len(targets) != 1 {
 					return fail(base.NewSetError("invalidProperties", "Exactly one mailbox is required"))
 				}
-				targetMailbox = targets[0]
-				mailboxChanged = !strings.EqualFold(targetMailbox, currentMailbox)
+				addMailbox = targets[0]
 			}
+
 			for prop, v := range updateMap {
 				if !strings.HasPrefix(prop, "mailboxIds/") {
 					continue
 				}
 				mbID := storage.NormalizeMailboxID(strings.TrimPrefix(prop, "mailboxIds/"))
+				if v == nil {
+					// null means remove this mailbox
+					removeMailboxes[mbID] = true
+					continue
+				}
 				b, ok := v.(bool)
 				if !ok {
 					return fail(base.NewSetError("invalidProperties", "Invalid mailboxIds patch"))
 				}
 				if b {
-					targetMailbox = mbID
-					mailboxChanged = !strings.EqualFold(targetMailbox, currentMailbox)
-				} else if strings.EqualFold(mbID, targetMailbox) {
-					// removing current/target without adding another is invalid here
+					addMailbox = mbID
+				} else {
+					removeMailboxes[mbID] = true
+				}
+			}
+
+			// Determine the target mailbox and whether we're moving.
+			// With maxMailboxesPerEmail=1, we must have exactly one mailbox at the end.
+			targetMailbox := currentMailbox
+			mailboxChanged := false
+
+			if hasFullReplacement {
+				// Full replacement: the addMailbox is the only mailbox.
+				if addMailbox == "" {
+					return fail(base.NewSetError("invalidProperties", "Exactly one mailbox is required"))
+				}
+				targetMailbox = addMailbox
+				mailboxChanged = !strings.EqualFold(targetMailbox, currentMailbox)
+			} else if addMailbox != "" {
+				// Patch syntax with an addition: the added mailbox becomes the target.
+				// The email will be moved to addMailbox.
+				targetMailbox = addMailbox
+				mailboxChanged = !strings.EqualFold(targetMailbox, currentMailbox)
+				// If we're moving away from currentMailbox, it's implicitly removed.
+				if mailboxChanged {
+					removeMailboxes[currentMailbox] = true
+				}
+			} else if len(removeMailboxes) > 0 {
+				// Patch syntax with only removals (no addition).
+				// This is only valid if we're removing a mailbox other than the current one,
+				// or if there's another mailbox to fall back to (not applicable for maxMailboxesPerEmail=1).
+				if removeMailboxes[currentMailbox] {
 					return fail(base.NewSetError("invalidProperties", "Email must remain in a mailbox"))
 				}
+				// Removing a non-current mailbox is a no-op for single-mailbox servers.
 			}
 
 			// Validate the move and the keyword patch before mutating anything.
