@@ -144,6 +144,10 @@ The default `accountId` is `acct_` + base64url(SHA-256(lowercased JWT `sub`)); t
 
 `Email/receivedAt` is server-owned, stored in the per-message metadata record as RFC 3339 UTC. It is stamped when the record is created — at inbound delivery or `Email/set.create` — and is never assignable, editable or updatable by clients; a `receivedAt` property in a create or update patch is ignored. `Email/query` sorts by it; messages with no stored value (delivered before the field existed) fall back to the RFC 5322 `Date` header, which is also reported separately as `sentAt`. Clients needing chronological order should sort by `receivedAt` rather than the `Date` header.
 
+### Stored mailbox and subject
+
+The per-message metadata record also holds the `mailbox` id currently holding the message and its decoded `subject`. Both are captured when the record is created (inbound delivery, `Email/set.create`, import/copy or the Sent copy) and the mailbox is rewritten whenever an `Email/set` update moves the message with `mailboxIds`. These are stored copies: storage remains authoritative for placement and the parsed message for the subject, so a legacy record without them is backfilled on the next update. See [CONFIGURATION.md](CONFIGURATION.md#metadata-jmap-keywords-received-time-mailbox-and-subject) for backend details.
+
 ### Keywords (message state)
 
 JMAP models message state as a `String[Boolean]` map of **keywords** (RFC 8621 §4.1.1). They are stored in the metadata service alongside `receivedAt` and stitched into every `Email/get` response; only keywords that are set are returned, with value `true`. Supported system keywords:

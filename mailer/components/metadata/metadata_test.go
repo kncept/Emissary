@@ -76,11 +76,29 @@ func TestNewEmailMetadataFromMap(t *testing.T) {
 	}
 }
 
+func TestNewEmailMetadataForMessage(t *testing.T) {
+	m := NewEmailMetadataForMessage("alice@example.com", "email-1", "  INBOX ", "A café subject", KeywordSeen)
+	if m.Mailbox != "inbox" {
+		t.Errorf("mailbox = %q, want normalized inbox", m.Mailbox)
+	}
+	if m.Subject != "A café subject" {
+		t.Errorf("subject = %q, want the decoded subject", m.Subject)
+	}
+	if !m.HasKeyword(KeywordSeen) {
+		t.Errorf("keywords = %+v, want $seen", m.Keywords)
+	}
+	if m.ReceivedAt == "" {
+		t.Error("new metadata should stamp receivedAt")
+	}
+}
+
 func TestCloneIsIndependent(t *testing.T) {
-	m := NewEmailMetadata("alice@example.com", "email-1", KeywordSeen)
+	m := NewEmailMetadataForMessage("alice@example.com", "email-1", "inbox", "subject", KeywordSeen)
 	clone := m.Clone()
 	clone.UserID = "bob@example.com"
 	clone.ID = "email-2"
+	clone.Mailbox = "sent"
+	clone.Subject = "other"
 	clone.Keywords[KeywordFlagged] = true
 	delete(clone.Keywords, KeywordSeen)
 	if m.UserID != "alice@example.com" || m.ID != "email-1" {
@@ -88,6 +106,9 @@ func TestCloneIsIndependent(t *testing.T) {
 	}
 	if !m.HasKeyword(KeywordSeen) || m.HasKeyword(KeywordFlagged) {
 		t.Errorf("mutating a clone changed the original: %+v", m.Keywords)
+	}
+	if m.Mailbox != "inbox" || m.Subject != "subject" {
+		t.Errorf("mutating a clone changed mailbox/subject: %q/%q", m.Mailbox, m.Subject)
 	}
 	if clone.ReceivedAt != m.ReceivedAt {
 		t.Errorf("clone receivedAt = %q, want %q", clone.ReceivedAt, m.ReceivedAt)

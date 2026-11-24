@@ -415,10 +415,11 @@ func (r *Receiver) deliverToRecipient(ctx context.Context, recipient string, mes
 
 	// JMAP metadata is created alongside the stored message. The id must be
 	// the one returned by Storage.AddEmail, not a key we construct here, so
-	// metadata stays aligned with the stored message. NewEmailMetadata stamps
-	// the server-owned receivedAt at delivery time; a new delivery has no
-	// keywords and is unread and unflagged until a JMAP client changes it.
-	if err := r.cfg.Metadata.Save(ctx, metadata.NewEmailMetadata(recipient, id)); err != nil {
+	// metadata stays aligned with the stored message. NewEmailMetadataForMessage
+	// stamps the server-owned receivedAt and records the inbox and subject; a
+	// new delivery has no keywords and is unread and unflagged until a JMAP
+	// client changes it.
+	if err := r.cfg.Metadata.Save(ctx, metadata.NewEmailMetadataForMessage(recipient, id, "inbox", message.Subject)); err != nil {
 		return fmt.Errorf("failed to save metadata for %s: %w", id, err)
 	}
 

@@ -1,8 +1,9 @@
 // Package metadata stores the JMAP-mappable state of an email that is not
-// derived from the message itself: its keywords and the server-owned receive
-// time. JMAP represents read, flagged, answered, draft and spam state as
-// keywords rather than as separate boolean fields (RFC 8621 section 4.1.1), so
-// Emissary stores them that way too.
+// derived from the message itself: its keywords, the server-owned receive
+// time, the mailbox currently holding it and the message subject. JMAP
+// represents read, flagged, answered, draft and spam state as keywords rather
+// than as separate boolean fields (RFC 8621 section 4.1.1), so Emissary stores
+// them that way too.
 package metadata
 
 import (
@@ -28,7 +29,7 @@ const (
 )
 
 // EmailMetadata is the per-email state tracked by a MetadataStore. It holds
-// two kinds of server-owned state:
+// server-owned state plus a copy of two message properties:
 //
 //   - ReceivedAt is the time Emissary received the message. It is stamped when
 //     the record is created and is never assignable or editable by JMAP
@@ -36,6 +37,11 @@ const (
 //     Email/receivedAt property.
 //   - Keywords use the JMAP "String[Boolean]" shape: every present key has the
 //     value true.
+//   - Mailbox is the id of the mailbox currently holding the message. It is
+//     set when the record is created and rewritten whenever the message moves
+//     between mailboxes.
+//   - Subject is the decoded RFC 5322 subject line of the message. It is
+//     captured at creation; clients cannot edit it through metadata.
 //   - Version is used for optimistic locking to prevent concurrent updates from
 //     overwriting each other. It is incremented on every successful save.
 //
@@ -45,6 +51,8 @@ type EmailMetadata struct {
 	UserID     string          `json:"userId,omitempty" dynamodbav:"userId"`
 	ID         string          `json:"id" dynamodbav:"id"`
 	ReceivedAt string          `json:"receivedAt,omitempty" dynamodbav:"receivedAt,omitempty"`
+	Mailbox    string          `json:"mailbox,omitempty" dynamodbav:"mailbox,omitempty"`
+	Subject    string          `json:"subject,omitempty" dynamodbav:"subject,omitempty"`
 	Keywords   map[string]bool `json:"keywords,omitempty" dynamodbav:"keywords,omitempty"`
 	Version    int             `json:"version,omitempty" dynamodbav:"version,omitempty"`
 }
@@ -86,7 +94,8 @@ func NormalizeKeyword(keyword string) (string, bool) {
 // NewEmailMetadata creates a metadata record for a newly stored email with the
 // given keywords. It stamps receivedAt with the current UTC time; callers must
 // not use it as a fallback for missing records (use EmptyEmailMetadata).
-// Invalid keyword names are ignored.
+// Invalid keyword names are ignored. Callers with a stored message should use
+// NewEmailMetadataForMessage so mailbox and subject are populated too.
 func NewEmailMetadata(userID, mailID string, keywords ...string) EmailMetadata {
 	m := EmailMetadata{
 		UserID:     userID,
@@ -99,6 +108,18 @@ func NewEmailMetadata(userID, mailID string, keywords ...string) EmailMetadata {
 			m.Keywords[normalized] = true
 		}
 	}
+	return m
+}
+
+// NewEmailMetadataForMessage creates a metadata record for a newly stored
+// message, recording the mailbox that currently holds it and its (already
+// decoded) subject alongside the server-owned receive time. Delivery, JMAP
+// create/import/copy and the Sent copy all use it so every new record carries
+// the same fields. Invalid keyword names are ignored.
+func NewEmailMetadataForMessage(userID, mailID, mailboxID, subject string, keywords ...string) EmailMetadata {
+	m := NewEmailMetadata(userID, mailID, keywords...)
+	m.Mailbox = strings.ToLower(strings.TrimSpace(mailboxID))
+	m.Subject = subject
 	return m
 }
 
@@ -134,7 +155,7 @@ func (m EmailMetadata) IsFlagged() bool { return m.HasKeyword(KeywordFlagged) }
 // Clone returns an independent copy, so callers can patch keywords without
 // mutating a value held by a store implementation.
 func (m EmailMetadata) Clone() EmailMetadata {
-	copy := EmailMetadata{UserID: m.UserID, ID: m.ID, ReceivedAt: m.ReceivedAt, Version: m.Version, Keywords: make(map[string]bool, len(m.Keywords))}
+	copy := EmailMetadata{UserID: m.UserID, ID: m.ID, ReceivedAt: m.ReceivedAt, Mailbox: m.Mailbox, Subject: m.Subject, Version: m.Version, Keywords: make(map[string]bool, len(m.Keywords))}
 	for keyword, enabled := range m.Keywords {
 		if enabled {
 			copy.Keywords[keyword] = true

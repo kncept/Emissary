@@ -47,7 +47,7 @@ Emissary is the web application. See [ARCHITECTURE.md](ARCHITECTURE.md#system-ov
 | Mailbox | JMAP mailbox inside an account (`inbox`, `sent`, `drafts`, ...); `filter.inMailbox` narrows a query. |
 | Administrator | The built-in `USERNAME`/`PASSWORD` user; with `EmissaryUserManagement` it can masquerade as another account and send as that account. |
 | Ordinary user | A user accepted by the configured user manager; reads only their own account and sends as themselves. |
-| Metadata | JMAP keywords and the server-owned `receivedAt` timestamp, stored separately from the message ([`mailer/components/metadata/`](../mailer/components/metadata/)). |
+| Metadata | JMAP keywords, the server-owned `receivedAt` timestamp, the current mailbox id and the message subject, stored separately from the message ([`mailer/components/metadata/`](../mailer/components/metadata/)). |
 
 Authorization is enforced in the JMAP dispatcher and at the storage boundary; users cannot discover other accounts'
 mail. See [ARCHITECTURE.md](ARCHITECTURE.md#authentication-and-visibility) for enforcement and

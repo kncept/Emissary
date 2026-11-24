@@ -450,6 +450,43 @@ func TestEmailSetAndGetRoundTripOpaqueID(t *testing.T) {
 	}
 }
 
+func TestEmailSetCreatePopulatesMetadataMailboxAndSubject(t *testing.T) {
+	ctx := context.Background()
+	const accountID = "alice@example.com"
+	metaStore := metadata.NewMemoryMetadata()
+	handler := NewHandler(storage.NewMemoryStorage(), metaStore,
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+
+	args := json.RawMessage(`{"accountId":"alice@example.com","create":{"c1":{
+		"mailboxIds":{"drafts":true},
+		"from":[{"email":"alice@example.com"}],
+		"subject":"a new draft"}}}`)
+	result, err := handler.EmailSet(ctx, accountID, args)
+	if err != nil {
+		t.Fatalf("EmailSet(create) error = %v", err)
+	}
+	var resp struct {
+		Created map[string]struct {
+			ID string `json:"id"`
+		} `json:"created"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	id := resp.Created["c1"].ID
+	if id == "" {
+		t.Fatal("EmailSet(create) returned no id")
+	}
+	meta, err := metaStore.Get(ctx, accountID, id)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if meta.Mailbox != "drafts" || meta.Subject != "a new draft" {
+		t.Errorf("created metadata mailbox/subject = %q/%q, want drafts/a new draft", meta.Mailbox, meta.Subject)
+	}
+}
+
 func TestEmailSetCreateIgnoresClientReceivedAt(t *testing.T) {
 	ctx := context.Background()
 	metaStore := metadata.NewMemoryMetadata()
@@ -1372,6 +1409,99 @@ func TestApplyKeywordPatch(t *testing.T) {
 				t.Error("original metadata was mutated")
 			}
 		})
+	}
+}
+
+func TestEmailSetMoveUpdatesMetadataMailbox(t *testing.T) {
+	ctx := context.Background()
+	const accountID = "alice@example.com"
+	const id = "users/alice@example.com/inbox/20261117T120000_move.eml"
+	store := storage.NewMemoryStorage()
+	addTestEmail(store, id, accountID, "inbox", &email.UserEmail{Subject: "move me"})
+	metaStore := metadata.NewMemoryMetadata()
+	initial := metadata.NewEmailMetadataForMessage(accountID, id, "inbox", "move me", metadata.KeywordSeen)
+	if err := metaStore.Save(ctx, initial); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	handler := NewHandler(store, metaStore,
+		usermanager.NewNone(usermanager.Config{AdminUsername: "admin", AdminPassword: "password"}),
+		sender.NewLogSender())
+
+	setMailbox := func(patch map[string]interface{}) {
+		t.Helper()
+		args, err := json.Marshal(map[string]interface{}{
+			"accountId": accountID,
+			"update":    map[string]interface{}{id: patch},
+		})
+		if err != nil {
+			t.Fatalf("marshal args: %v", err)
+		}
+		result, err := handler.EmailSet(ctx, accountID, args)
+		if err != nil {
+			t.Fatalf("EmailSet() error = %v", err)
+		}
+		var resp struct {
+			Updated    map[string]interface{} `json:"updated"`
+			NotUpdated map[string]interface{} `json:"notUpdated"`
+		}
+		if err := json.Unmarshal(result, &resp); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		if len(resp.Updated) != 1 || len(resp.NotUpdated) != 0 {
+			t.Fatalf("updated = %+v, notUpdated = %+v", resp.Updated, resp.NotUpdated)
+		}
+	}
+
+	// Full replacement moves the message and rewrites the stored mailbox.
+	setMailbox(map[string]interface{}{"mailboxIds": map[string]interface{}{"archive": true}})
+	meta, err := metaStore.Get(ctx, accountID, id)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if meta.Mailbox != "archive" {
+		t.Errorf("metadata mailbox = %q, want archive", meta.Mailbox)
+	}
+	if meta.Subject != "move me" || !meta.HasKeyword(metadata.KeywordSeen) {
+		t.Errorf("move lost subject/keywords: %+v", meta)
+	}
+	listed, err := store.GetEmail(ctx, accountID, id)
+	if err != nil || listed == nil || listed.Ref.MailboxID != "archive" {
+		t.Fatalf("message not moved to archive: listed = %+v, err = %v", listed, err)
+	}
+
+	// Patch syntax also keeps the stored mailbox in step.
+	setMailbox(map[string]interface{}{"mailboxIds/trash": true})
+	meta, err = metaStore.Get(ctx, accountID, id)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if meta.Mailbox != "trash" {
+		t.Errorf("metadata mailbox = %q, want trash", meta.Mailbox)
+	}
+
+	// A keyword-only update backfills a legacy record that has no mailbox.
+	legacyID := "users/alice@example.com/inbox/20261117T120001_legacy.eml"
+	addTestEmail(store, legacyID, accountID, "inbox", &email.UserEmail{Subject: "legacy"})
+	legacy := metadata.NewEmailMetadata(accountID, legacyID)
+	if err := metaStore.Save(ctx, legacy); err != nil {
+		t.Fatalf("Save(legacy) error = %v", err)
+	}
+	args, err := json.Marshal(map[string]interface{}{
+		"accountId": accountID,
+		"update":    map[string]interface{}{legacyID: map[string]interface{}{"keywords/$flagged": true}},
+	})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+	if _, err := handler.EmailSet(ctx, accountID, args); err != nil {
+		t.Fatalf("EmailSet(keyword only) error = %v", err)
+	}
+	meta, err = metaStore.Get(ctx, accountID, legacyID)
+	if err != nil {
+		t.Fatalf("Get(legacy) error = %v", err)
+	}
+	if meta.Mailbox != "inbox" {
+		t.Errorf("legacy metadata mailbox = %q, want inbox", meta.Mailbox)
 	}
 }
 

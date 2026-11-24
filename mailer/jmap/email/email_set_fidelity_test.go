@@ -141,6 +141,38 @@ func TestEmailDuplicateDetectionUsesMessageID(t *testing.T) {
 	})
 }
 
+func TestEmailImportStoresMailboxAndSubjectInMetadata(t *testing.T) {
+	h, store, metaStore, ctx := newSetFidelityFixture(t)
+	blobID, err := store.PutBlob(ctx, setFidelityAccount, "message/rfc822", rawWithMessageID("<import@example.com>", "imported subject"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := fmt.Sprintf(`{"emails":{"c1":{"blobId":%q,"mailboxIds":{"archive":true}}}}`, blobID.ID)
+	result, err := h.EmailImport(ctx, setFidelityAccount, json.RawMessage(args))
+	if err != nil {
+		t.Fatalf("EmailImport() error = %v", err)
+	}
+	var resp struct {
+		Created map[string]struct {
+			ID string `json:"id"`
+		} `json:"created"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	id := resp.Created["c1"].ID
+	if id == "" {
+		t.Fatalf("created = %+v, want c1 (raw %s)", resp.Created, result)
+	}
+	meta, err := metaStore.Get(ctx, setFidelityAccount, id)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if meta.Mailbox != "archive" || meta.Subject != "imported subject" {
+		t.Errorf("imported metadata mailbox/subject = %q/%q, want archive/imported subject", meta.Mailbox, meta.Subject)
+	}
+}
+
 func rawWithMessageID(messageID, subject string) []byte {
 	return []byte("From: sender@example.net\r\nTo: alice@example.com\r\nMessage-ID: " + messageID +
 		"\r\nSubject: " + subject + "\r\nDate: Thu, 01 Jan 2026 09:00:00 +0000\r\n\r\nbody\r\n")

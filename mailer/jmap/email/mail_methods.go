@@ -145,7 +145,7 @@ func (h *Handler) storeRawEmail(ctx context.Context, accountID, mailboxID string
 		}
 		return nil, err
 	}
-	meta := metadata.NewEmailMetadata(accountID, newID)
+	meta := metadata.NewEmailMetadataForMessage(accountID, newID, mailboxID, parsed.Subject)
 	meta.ReceivedAt = receivedAt
 	for keyword, keep := range keywords {
 		if keep {

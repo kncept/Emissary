@@ -103,7 +103,7 @@ func TestProcessMessageDeliversThroughConfiguredStorage(t *testing.T) {
 	raw := []byte(receivedHeader("alice@example.com") +
 		"From: sender@example.com\r\nTo: alice@example.com\r\n" +
 		"Date: Fri, 08 Mar 2024 15:30:00 +0100\r\nSubject: hi\r\n\r\nbody\r\n")
-	r, emailStore, _ := newTestReceiver()
+	r, emailStore, metaStore := newTestReceiver()
 
 	event := &fakeS3Event{raw: raw}
 	if err := r.ProcessEvent(context.Background(), event); err != nil {
@@ -126,6 +126,13 @@ func TestProcessMessageDeliversThroughConfiguredStorage(t *testing.T) {
 	}
 	if listed[0].Email.Subject != "hi" {
 		t.Errorf("subject = %q, want hi", listed[0].Email.Subject)
+	}
+	meta, err := metaStore.Get(context.Background(), "alice@example.com", listed[0].Ref.ID)
+	if err != nil {
+		t.Fatalf("Get() metadata error = %v", err)
+	}
+	if meta.Mailbox != "inbox" || meta.Subject != "hi" {
+		t.Errorf("delivered metadata mailbox/subject = %q/%q, want inbox/hi", meta.Mailbox, meta.Subject)
 	}
 }
 
@@ -346,9 +353,9 @@ func TestProcessMessageSendsBounceThroughSender(t *testing.T) {
 // fakeS3EventWithSESID is a test implementation of InboundRawEmailEvent that carries
 // the SES message ID (the S3 object key for staged objects).
 type fakeS3EventWithSESID struct {
-	raw           []byte
-	completed     bool
-	sesMessageID  string
+	raw          []byte
+	completed    bool
+	sesMessageID string
 }
 
 func (e *fakeS3EventWithSESID) RawEmail(_ context.Context) ([]byte, error) {

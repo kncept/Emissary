@@ -67,7 +67,7 @@ func (h *Handler) fileInSent(ctx context.Context, accountID string, message *mai
 		rollback()
 		return "", fmt.Errorf("register sent email blobs: %w", err)
 	}
-	meta := metadata.NewEmailMetadata(accountID, id, metadata.KeywordSeen, keywordSent)
+	meta := metadata.NewEmailMetadataForMessage(accountID, id, mailboxID, sent.Subject, metadata.KeywordSeen, keywordSent)
 	if !sent.Date.IsZero() {
 		meta.ReceivedAt = metadata.FormatReceivedAt(sent.Date)
 	}

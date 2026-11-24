@@ -97,7 +97,7 @@ Skipped (with a warning) unless `mailer/cmd/frontend/bootstrap` exists.
 - DynamoDB tables for application state (pay-per-request), named as `TABLE_PREFIX` plus a fixed suffix (`metadata`, `sessions`, `users`,
   `receiver`). There is no default prefix: the deployment fails if a DDB backend is selected without one. Each table below is created only when
   its backend is selected and is granted read/write to that shared role:
-  - `metadata`: per-message metadata (JMAP keywords and `receivedAt`; partition key `id`, sort key `userId`, plus the `userId-index` global
+  - `metadata`: per-message metadata (JMAP keywords, `receivedAt`, current `mailbox` and `subject`; partition key `id`, sort key `userId`, plus the `userId-index` global
     secondary index for per-user listing; `METADATA=ddb`).
   - `sessions`: refresh tokens (partition key `id`, sort key `userEmail`; `SESSION=ddb`).
   - `users`: the `ddb` user manager (partition key `id`; `USER_MANAGER=ddb`).

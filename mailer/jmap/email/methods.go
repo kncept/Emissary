@@ -340,7 +340,7 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 				}
 				return fail(storeSetError(err, "Failed to register created email blob"))
 			}
-			meta := metadata.NewEmailMetadata(accountID, newID)
+			meta := metadata.NewEmailMetadataForMessage(accountID, newID, targetMailbox, subject)
 			meta.ReceivedAt = now.UTC().Format(time.RFC3339)
 			// Apply requested keywords if provided.
 			if kw, ok := createMap["keywords"].(map[string]interface{}); ok {
@@ -508,15 +508,25 @@ func (h *Handler) setSpec(accountID string) base.SetSpec {
 				return fail(base.NewSetError(errType, "Invalid keyword update"))
 			}
 
+			// The stored mailbox is metadata too: keep it in step with the
+			// message even on a keyword-only update, which also backfills
+			// records created before mailbox was tracked.
+			patched.Mailbox = targetMailbox
 			// Apply the validated move and metadata write. A failed metadata
 			// write is rolled back by moving the message back.
 			if mailboxChanged {
-				if _, err := h.deps.Storage.MoveEmail(ctx, accountID, id, targetMailbox); err != nil {
+				moved, err := h.deps.Storage.MoveEmail(ctx, accountID, id, targetMailbox)
+				if err != nil {
 					if errors.Is(err, storage.ErrNotFound) {
 						return fail(base.NewSetError("notFound", "Email not found"))
 					}
 					slog.Error("JMAP: failed to move email", "account", accountID, "id", id, "from", currentMailbox, "to", targetMailbox, "err", err)
 					return fail(base.NewSetError("serverFail", "Failed to move email"))
+				}
+				// Storage is authoritative for placement; prefer the mailbox
+				// it reports over the requested target.
+				if moved != nil && moved.Ref != nil && moved.Ref.MailboxID != "" {
+					patched.Mailbox = moved.Ref.MailboxID
 				}
 			}
 			if err := h.deps.Metadata.Save(ctx, patched); err != nil {

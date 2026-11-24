@@ -65,7 +65,7 @@ func TestMetadataContractListOrderingAndReadNormalization(t *testing.T) {
 		t.Run(backend.name, func(t *testing.T) {
 			store := backend.open(t)
 			for _, id := range ids {
-				if err := store.Save(ctx, NewEmailMetadata(userID, id, KeywordSeen)); err != nil {
+				if err := store.Save(ctx, NewEmailMetadataForMessage(userID, id, "INBOX", "hello "+id, KeywordSeen)); err != nil {
 					t.Fatalf("Save(%q) error = %v", id, err)
 				}
 			}
@@ -90,6 +90,9 @@ func TestMetadataContractListOrderingAndReadNormalization(t *testing.T) {
 					if !got[i].HasKeyword(KeywordSeen) {
 						t.Errorf("List()[%d] lost $seen: %+v", i, got[i])
 					}
+					if got[i].Mailbox != "inbox" || got[i].Subject != "hello "+id {
+						t.Errorf("List()[%d] mailbox/subject = %q/%q, want inbox/hello %s", i, got[i].Mailbox, got[i].Subject, id)
+					}
 				}
 			}
 
@@ -103,6 +106,9 @@ func TestMetadataContractListOrderingAndReadNormalization(t *testing.T) {
 				}
 				if got.ReceivedAt == "" {
 					t.Errorf("Get(%q) has empty receivedAt", id)
+				}
+				if got.Mailbox != "inbox" || got.Subject != "hello "+id {
+					t.Errorf("Get(%q) mailbox/subject = %q/%q, want inbox/hello %s", id, got.Mailbox, got.Subject, id)
 				}
 			}
 

@@ -153,7 +153,7 @@ The `_` identity holds the base fallback rules (deliver to an existing user, oth
 
 Allowed rules are `DeliverToUser` (known users only), `DeliverToMailIdentity` (the identity's own mailbox), `Bounce` (standard bounce) and `Drop` (silent discard). Rules are tried in order until one applies; `Bounce` and `Drop` are terminal, so place them after rules that should take precedence. No match bounces rather than discarding. See [ARCHITECTURE.md](ARCHITECTURE.md#inbound-mail-flow) for routing and [SUPPORT.md](SUPPORT.md#receiver-rules-editor) for the editor.
 
-## Metadata (JMAP keywords and received time)
+## Metadata (JMAP keywords, received time, mailbox and subject)
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -161,7 +161,7 @@ Allowed rules are `DeliverToUser` (known users only), `DeliverToMailIdentity` (t
 | `METADATA_FILE` | `<FILESYSTEM_DIR>/metadata` | For `file`: one `<email id>.json` record per message; an explicit path ending in `.json` keeps the older single-file layout. |
 | `METADATA_REGION` | AWS region | Region for `<TABLE_PREFIX>metadata` (partition key `id`, sort key `userId`, `userId-index` GSI). |
 
-These settings are shared by the frontend API and the `s3-receiver` delivery consumer: delivery creates a record for each delivered message with a server-stamped `receivedAt` (RFC 3339 UTC) and no keywords, and JMAP reads and updates keywords. `receivedAt` is never accepted from clients. Use `file` or `ddb` in production so both processes see the same state; a message with no record means empty keywords and `receivedAt` falling back to the message `Date` header. See [API.md](API.md#received-time) for the JMAP view.
+These settings are shared by the frontend API and the `s3-receiver` delivery consumer: delivery creates a record for each delivered message with a server-stamped `receivedAt` (RFC 3339 UTC), the destination mailbox (`inbox`) and the decoded subject, with no keywords. JMAP reads and updates keywords and rewrites `mailbox` whenever an Email/set moves the message. `receivedAt` is never accepted from clients. Use `file` or `ddb` in production so both processes see the same state; a message with no record means empty keywords and `receivedAt` falling back to the message `Date` header. See [API.md](API.md#received-time) for the JMAP view.
 
 ## Sessions (refresh tokens)
 
